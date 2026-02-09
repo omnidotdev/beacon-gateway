@@ -1,0 +1,135 @@
+[package]
+name = "beacon-gateway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+authors = ["Omni <team@omni.dev>"]
+description = "Voice and messaging gateway for AI assistants"
+license = "MIT"
+repository = "https://github.com/omnidotdev/beacon-gateway"
+homepage = "https://beacon.omni.dev"
+keywords = ["voice", "messaging", "gateway", "ai", "assistant"]
+categories = ["command-line-utilities", "multimedia::audio"]
+readme = "README.md"
+
+[[bin]]
+name = "beacon"
+path = "src/main.rs"
+
+[lib]
+name = "beacon_gateway"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client (for STT/TTS APIs)
+reqwest = { version = "0.12", features = ["json", "stream", "multipart", "blocking"] }
+
+# HTTP server
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+
+# Audio
+cpal = "0.15"
+hound = "3.5"
+rubato = "0.15"
+minimp3 = "0.5"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Config
+directories = "6"
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+tokio-stream = "0.1"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Vector search
+sqlite-vec = "0.1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Cryptography (device identity)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+
+# mDNS discovery
+mdns-sd = "0.11"
+hostname = "0.4"
+
+# IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# JWT (Google Chat service account)
+jsonwebtoken = "9"
+
+# URL encoding
+urlencoding = "2"
+
+# Discord
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "rustls_backend"] }
+
+# Browser automation (CDP)
+chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
+
+# Omni CLI (agent core)
+omni_cli = { git = "https://github.com/omnidotdev/cli", package = "omnidotdev-cli" }
+
+# HTML parsing and readability extraction
+readability = "0.3"
+url = "2"
+lru = "0.16.3"
+scraper = "0.25.0"
+regex = "1.12.3"
+which = "8.0.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+# Deny by default, but allow in specific audited locations (e.g., sqlite-vec FFI)
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+multiple_crate_versions = "allow"
+cargo_common_metadata = "allow"

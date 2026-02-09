@@ -1,0 +1,333 @@
+//! Database schema and migrations
+
+use rusqlite::Connection;
+
+use crate::Result;
+
+/// Current schema version
+pub const SCHEMA_VERSION: i32 = 8;
+
+/// Initialize the database schema
+///
+/// # Errors
+///
+/// Returns error if migration fails
+pub fn init(conn: &Connection) -> Result<()> {
+    let version: i32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    if version < 1 {
+        migrate_v1(conn)?;
+    }
+    if version < 2 {
+        migrate_v2(conn)?;
+    }
+    if version < 3 {
+        migrate_v3(conn)?;
+    }
+    if version < 4 {
+        migrate_v4(conn)?;
+    }
+    if version < 5 {
+        migrate_v5(conn)?;
+    }
+    if version < 6 {
+        migrate_v6(conn)?;
+    }
+    if version < 7 {
+        migrate_v7(conn)?;
+    }
+    if version < 8 {
+        migrate_v8(conn)?;
+    }
+
+    Ok(())
+}
+
+fn migrate_v1(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Users table
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            life_json_path TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Sessions table
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            channel TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            persona_id TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel, channel_id);
+
+        -- Messages table
+        CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id),
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+
+        -- User context (learned preferences)
+        CREATE TABLE IF NOT EXISTS user_context (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'learned',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_context_user ON user_context(user_id);
+
+        PRAGMA user_version = 1;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v1");
+    Ok(())
+}
+
+fn migrate_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Memories table for long-term memory storage
+        CREATE TABLE IF NOT EXISTS memories (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            category TEXT NOT NULL CHECK(category IN ('preference', 'fact', 'correction', 'general')),
+            content TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '[]',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            access_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            accessed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+        CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+        CREATE INDEX IF NOT EXISTS idx_memories_pinned ON memories(pinned);
+
+        PRAGMA user_version = 2;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v2");
+    Ok(())
+}
+
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Installed skills table
+        CREATE TABLE IF NOT EXISTS installed_skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            version TEXT,
+            author TEXT,
+            tags TEXT NOT NULL DEFAULT '[]',
+            permissions TEXT NOT NULL DEFAULT '[]',
+            content TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK(source_type IN ('local', 'manifold', 'bundled')),
+            source_namespace TEXT,
+            source_repository TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_skills_name ON installed_skills(name);
+        CREATE INDEX IF NOT EXISTS idx_skills_enabled ON installed_skills(enabled);
+        CREATE INDEX IF NOT EXISTS idx_skills_source ON installed_skills(source_type);
+
+        PRAGMA user_version = 3;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v3");
+    Ok(())
+}
+
+fn migrate_v4(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Installed personas table (from marketplace)
+        CREATE TABLE IF NOT EXISTS installed_personas (
+            id TEXT PRIMARY KEY,
+            persona_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            tagline TEXT,
+            avatar TEXT,
+            accent_color TEXT,
+            content TEXT NOT NULL,
+            source_namespace TEXT NOT NULL,
+            installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_personas_persona_id ON installed_personas(persona_id);
+        CREATE INDEX IF NOT EXISTS idx_personas_namespace ON installed_personas(source_namespace);
+
+        PRAGMA user_version = 4;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v4");
+    Ok(())
+}
+
+fn migrate_v5(conn: &Connection) -> Result<()> {
+    // Note: sqlite-vec extension is registered globally in db::init()
+    // before any connections are created
+
+    conn.execute_batch(
+        r"
+        -- Add embedding column to memories
+        ALTER TABLE memories ADD COLUMN embedding BLOB;
+
+        -- Add source metadata columns
+        ALTER TABLE memories ADD COLUMN source_session_id TEXT;
+        ALTER TABLE memories ADD COLUMN source_channel TEXT;
+
+        -- Create virtual table for vector search
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+            memory_id TEXT PRIMARY KEY,
+            embedding FLOAT[1536]
+        );
+
+        PRAGMA user_version = 5;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v5 (vector search)");
+    Ok(())
+}
+
+fn migrate_v6(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Paired users table for DM security
+        CREATE TABLE IF NOT EXISTS paired_users (
+            id TEXT PRIMARY KEY,
+            sender_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            paired_at TEXT NOT NULL,
+            pairing_code TEXT,
+            code_expires_at TEXT,
+            UNIQUE(sender_id, channel)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_paired_users_sender ON paired_users(sender_id, channel);
+        CREATE INDEX IF NOT EXISTS idx_paired_users_channel ON paired_users(channel);
+
+        PRAGMA user_version = 6;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v6 (DM pairing)");
+    Ok(())
+}
+
+fn migrate_v7(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Paired devices table for device identity system
+        CREATE TABLE IF NOT EXISTS devices (
+            id TEXT PRIMARY KEY,
+            public_key BLOB NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            platform TEXT,
+            trust_level TEXT NOT NULL DEFAULT 'paired',
+            paired_at TEXT NOT NULL,
+            last_seen TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_devices_public_key ON devices(public_key);
+        CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen);
+
+        PRAGMA user_version = 7;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v7 (device identity)");
+    Ok(())
+}
+
+fn migrate_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Add thread_id to messages for conversation threading
+        ALTER TABLE messages ADD COLUMN thread_id TEXT;
+
+        -- Index for efficient thread queries
+        CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(session_id, thread_id);
+
+        PRAGMA user_version = 8;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v8 (message threading)");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_test_conn() -> Connection {
+        // Must register sqlite-vec before opening connections
+        crate::db::register_sqlite_vec();
+        Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn test_schema_init() {
+        let conn = setup_test_conn();
+        init(&conn).unwrap();
+
+        // Verify tables exist
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_schema_idempotent() {
+        let conn = setup_test_conn();
+        init(&conn).unwrap();
+        init(&conn).unwrap(); // Should not fail
+    }
+
+    #[test]
+    fn test_sqlite_vec_loaded() {
+        let conn = setup_test_conn();
+        init(&conn).unwrap();
+
+        // Verify sqlite-vec is loaded
+        let version: String = conn
+            .query_row("SELECT vec_version()", [], |row| row.get(0))
+            .unwrap();
+        assert!(version.starts_with('v'));
+    }
+}
