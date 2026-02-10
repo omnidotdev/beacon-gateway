@@ -460,7 +460,7 @@ impl Config {
 
         // 2. Manifold fetch (cache on success)
         let manifold_url = std::env::var("MANIFOLD_URL")
-            .unwrap_or_else(|_| "https://manifold.omni.dev".to_string());
+            .unwrap_or_else(|_| "https://api.manifold.omni.dev".to_string());
         let manifold_namespace = std::env::var("MANIFOLD_NAMESPACE")
             .unwrap_or_else(|_| "community".to_string());
 
@@ -587,146 +587,41 @@ impl Config {
         Self::load_persona(&cache_dir, persona_id)
     }
 
-    /// Fetch a persona from Manifold registry via GraphQL (blocking)
+    /// Fetch a persona from Manifold registry via web router (blocking)
     fn fetch_persona_from_manifold(
         base_url: &str,
         namespace: &str,
         persona_id: &str,
     ) -> Result<Persona> {
-        let graphql_url = format!("{}/graphql", base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/@{}/personas/{}",
+            base_url.trim_end_matches('/'),
+            namespace,
+            persona_id
+        );
 
-        // GraphQL query to fetch persona by namespace/repo/tag
-        let query = r#"
-            query GetPersona($namespace: String!, $tagName: String!) {
-                namespaces(condition: { name: $namespace }) {
-                    nodes {
-                        repositories(condition: { name: "personas" }) {
-                            nodes {
-                                tags(condition: { name: $tagName }) {
-                                    nodes {
-                                        artifact {
-                                            content
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        "#;
-
-        #[derive(serde::Serialize)]
-        struct GraphQLRequest {
-            query: &'static str,
-            variables: Variables,
-        }
-
-        #[derive(serde::Serialize)]
-        struct Variables {
-            namespace: String,
-            #[serde(rename = "tagName")]
-            tag_name: String,
-        }
-
-        let request_body = GraphQLRequest {
-            query,
-            variables: Variables {
-                namespace: namespace.to_string(),
-                tag_name: persona_id.to_string(),
-            },
-        };
-
-        // Use blocking reqwest client for startup
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Config(format!("failed to create HTTP client: {e}")))?;
 
         let response = client
-            .post(&graphql_url)
-            .header("Content-Type", "application/json")
-            .json(&request_body)
+            .get(&url)
             .send()
             .map_err(|e| Error::Config(format!("failed to fetch persona from Manifold: {e}")))?;
 
         if !response.status().is_success() {
             return Err(Error::Config(format!(
-                "Manifold returned {}: failed to query persona",
+                "persona '{}' not found in namespace '{}' ({})",
+                persona_id,
+                namespace,
                 response.status()
             )));
         }
 
-        // Parse GraphQL response
-        #[derive(serde::Deserialize)]
-        struct GraphQLResponse {
-            data: Option<ResponseData>,
-            errors: Option<Vec<GraphQLError>>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct GraphQLError {
-            message: String,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct ResponseData {
-            namespaces: Connection<NamespaceNode>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct Connection<T> {
-            nodes: Vec<T>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct NamespaceNode {
-            repositories: Connection<RepositoryNode>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct RepositoryNode {
-            tags: Connection<TagNode>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct TagNode {
-            artifact: Option<ArtifactNode>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct ArtifactNode {
-            content: Option<String>,
-        }
-
-        let gql_response: GraphQLResponse = response
-            .json()
-            .map_err(|e| Error::Config(format!("failed to parse Manifold response: {e}")))?;
-
-        // Check for GraphQL errors
-        if let Some(errors) = gql_response.errors {
-            if !errors.is_empty() {
-                return Err(Error::Config(format!(
-                    "Manifold GraphQL error: {}",
-                    errors[0].message
-                )));
-            }
-        }
-
-        // Navigate the response to find the artifact content
-        let content = gql_response
-            .data
-            .and_then(|d| d.namespaces.nodes.into_iter().next())
-            .and_then(|ns| ns.repositories.nodes.into_iter().next())
-            .and_then(|repo| repo.tags.nodes.into_iter().next())
-            .and_then(|tag| tag.artifact)
-            .and_then(|artifact| artifact.content)
-            .ok_or_else(|| {
-                Error::Config(format!(
-                    "persona '{}' not found in namespace '{}' (no matching tag in personas repository)",
-                    persona_id, namespace
-                ))
-            })?;
+        let content = response
+            .text()
+            .map_err(|e| Error::Config(format!("failed to read Manifold response: {e}")))?;
 
         let persona: Persona = serde_json::from_str(&content)
             .map_err(|e| Error::Config(format!("failed to parse persona JSON: {e}")))?;

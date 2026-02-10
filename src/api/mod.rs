@@ -231,7 +231,7 @@ impl ApiServerBuilder {
         let skill_repo = SkillRepo::new(self.db.clone());
         let manifold_url = self
             .manifold_url
-            .unwrap_or_else(|| "https://manifold.omni.dev".to_string());
+            .unwrap_or_else(|| "https://api.manifold.omni.dev".to_string());
 
         let canvas = Arc::new(Mutex::new(Canvas::new()));
 
