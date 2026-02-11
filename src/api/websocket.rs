@@ -12,9 +12,9 @@ use axum::{
     Router,
 };
 use futures::{SinkExt, StreamExt};
-use omni_cli::Agent;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, mpsc};
+use synapse_client::{ChatEvent, SynapseClient};
+use tokio::sync::mpsc;
 
 use super::ApiState;
 use crate::context::ContextBuilder;
@@ -266,20 +266,19 @@ async fn handle_chat_message(
         .as_ref()
         .map_or_else(|_| content.to_string(), |ctx| ctx.format_prompt(content));
 
-    // Resolve provider for this user
-    let agent_to_use = if let (Some(gk_user_id), Some(resolver)) =
+    // Resolve Synapse client for this user (BYOK or default)
+    let (synapse_to_use, model_override) = if let (Some(gk_user_id), Some(resolver)) =
         (&gatekeeper_user_id, &state.key_resolver)
     {
-        // Try per-user key resolution
-        match resolve_user_agent(resolver, gk_user_id, state).await {
-            Some(agent) => Some(agent),
-            None => state.agent.clone(), // Fall back to default agent
+        match resolve_user_synapse(resolver, gk_user_id, state).await {
+            Some((client, model)) => (Some(client), Some(model)),
+            None => (state.synapse.clone(), None),
         }
     } else {
-        state.agent.clone()
+        (state.synapse.clone(), None)
     };
 
-    let Some(agent) = agent_to_use else {
+    let Some(synapse) = synapse_to_use else {
         let error = WsOutgoing::Error {
             code: "no_agent".to_string(),
             message: "No LLM provider configured. Add your API key in settings".to_string(),
@@ -290,27 +289,39 @@ async fn handle_chat_message(
         return Ok(());
     };
 
-    // Process with agent (stream chunks)
-    let response = {
-        let mut agent_guard = agent.lock().await;
-        agent_guard.clear();
+    let model = model_override.unwrap_or_else(|| state.llm_model.clone());
 
-        // Apply tool filter based on web channel policy
-        let allowed_tools = state.tool_policy.allowed_tools("web");
-        agent_guard.set_tool_filter(Some(allowed_tools));
+    // Fetch MCP tools from Synapse if available
+    let tools = if let Some(ref synapse) = state.synapse {
+        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse));
+        executor.list_tools().await.ok()
+    } else {
+        None
+    };
 
-        let tx_clone = tx.clone();
-        match agent_guard
-            .chat(&augmented_prompt, move |chunk| {
-                let msg = WsOutgoing::ChatChunk {
-                    content: chunk.to_string(),
-                };
-                // Use try_send to maintain chunk order (sync, non-blocking)
-                let _ = tx_clone.try_send(msg);
-            })
-            .await
-        {
-            Ok(response) => response,
+    // Build initial messages
+    let mut messages = vec![
+        synapse_client::Message::system(&state.system_prompt),
+        synapse_client::Message::user(&augmented_prompt),
+    ];
+
+    // Multi-turn tool loop (max 10 rounds to prevent runaway)
+    let mut full_response = String::new();
+    for _turn in 0..10 {
+        let request = synapse_client::ChatRequest {
+            model: model.clone(),
+            messages: messages.clone(),
+            stream: true,
+            temperature: None,
+            top_p: None,
+            max_tokens: Some(state.llm_max_tokens),
+            stop: None,
+            tools: tools.clone(),
+            tool_choice: None,
+        };
+
+        let mut stream = match synapse.chat_completion_stream(&request).await {
+            Ok(s) => s,
             Err(e) => {
                 let error = WsOutgoing::Error {
                     code: "agent_error".to_string(),
@@ -321,13 +332,111 @@ async fn handle_chat_message(
                     .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
                 return Ok(());
             }
+        };
+
+        // Accumulate tool calls from the stream
+        let mut turn_text = String::new();
+        let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+        let mut finish_reason = None;
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(ChatEvent::ContentDelta(text)) => {
+                    turn_text.push_str(&text);
+                    let msg = WsOutgoing::ChatChunk { content: text };
+                    let _ = tx.try_send(msg);
+                }
+                Ok(ChatEvent::ToolCallStart { index, id, name }) => {
+                    let idx = index as usize;
+                    if idx >= pending_tool_calls.len() {
+                        pending_tool_calls.resize_with(idx + 1, PendingToolCall::default);
+                    }
+                    pending_tool_calls[idx].id = id;
+                    pending_tool_calls[idx].name = name;
+                }
+                Ok(ChatEvent::ToolCallDelta { index, arguments }) => {
+                    let idx = index as usize;
+                    if idx < pending_tool_calls.len() {
+                        pending_tool_calls[idx].arguments.push_str(&arguments);
+                    }
+                }
+                Ok(ChatEvent::Done { finish_reason: fr, .. }) => {
+                    finish_reason = fr;
+                    break;
+                }
+                Ok(ChatEvent::Error(e)) => {
+                    let error = WsOutgoing::Error {
+                        code: "agent_error".to_string(),
+                        message: e,
+                    };
+                    tx.send(error)
+                        .await
+                        .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    let error = WsOutgoing::Error {
+                        code: "stream_error".to_string(),
+                        message: e.to_string(),
+                    };
+                    tx.send(error)
+                        .await
+                        .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+                    return Ok(());
+                }
+            }
         }
-    };
+
+        full_response.push_str(&turn_text);
+
+        // If the model requested tool calls, execute them and loop
+        if finish_reason.as_deref() == Some("tool_calls") && !pending_tool_calls.is_empty() {
+            // Add assistant message with tool calls to conversation
+            let tool_calls: Vec<synapse_client::ToolCall> = pending_tool_calls
+                .iter()
+                .map(|tc| synapse_client::ToolCall {
+                    id: tc.id.clone(),
+                    function: synapse_client::FunctionCall {
+                        name: tc.name.clone(),
+                        arguments: tc.arguments.clone(),
+                    },
+                })
+                .collect();
+
+            let assistant_content = if turn_text.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(turn_text)
+            };
+
+            messages.push(synapse_client::Message {
+                role: "assistant".to_owned(),
+                content: assistant_content,
+                tool_calls: Some(tool_calls),
+                tool_call_id: None,
+            });
+
+            // Execute each tool call
+            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse));
+            for tc in &pending_tool_calls {
+                let result = executor
+                    .execute(&tc.name, &tc.arguments)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
+
+                messages.push(synapse_client::Message::tool(&tc.id, &result));
+            }
+
+            continue; // Next turn
+        }
+
+        break; // No tool calls, done
+    }
 
     // Store assistant response
     let message = state
         .session_repo
-        .add_message(&session.id, MessageRole::Assistant, &response)?;
+        .add_message(&session.id, MessageRole::Assistant, &full_response)?;
 
     // Send completion message
     let complete = WsOutgoing::ChatComplete {
@@ -340,55 +449,49 @@ async fn handle_chat_message(
     Ok(())
 }
 
-/// Resolve or create an agent for a specific user based on their BYOK key
-async fn resolve_user_agent(
+/// In-progress tool call being assembled from streaming events
+#[derive(Default, Clone)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// Resolve a per-user Synapse client based on their BYOK key
+///
+/// Returns (client, model_id) if the user has a personal API key configured.
+/// The key is passed as Bearer auth to Synapse for provider routing.
+async fn resolve_user_synapse(
     resolver: &crate::providers::KeyResolver,
     user_id: &str,
     state: &Arc<ApiState>,
-) -> Option<Arc<Mutex<Agent>>> {
+) -> Option<(Arc<SynapseClient>, String)> {
     // Try Anthropic first, then OpenAI, then OpenRouter
     for provider_name in &["anthropic", "openai", "openrouter"] {
         if let Ok(Some(resolved)) = resolver.resolve(user_id, provider_name).await {
             if !resolved.is_user_key {
-                continue; // Skip env fallbacks here, handled by state.agent
+                continue; // Skip env fallbacks, handled by state.synapse
             }
 
-            let model = resolved.model_override.as_deref().unwrap_or(
+            let model = resolved.model_override.unwrap_or_else(|| {
                 match *provider_name {
-                    "anthropic" => crate::daemon::DEFAULT_ANTHROPIC_MODEL,
-                    _ => crate::daemon::DEFAULT_OPENAI_MODEL,
-                },
-            );
+                    "anthropic" => crate::daemon::DEFAULT_MODEL.to_string(),
+                    _ => "gpt-4o".to_string(),
+                }
+            });
 
-            let provider_box: Option<Box<dyn omni_cli::core::agent::LlmProvider>> =
-                match *provider_name {
-                    "anthropic" => {
-                        omni_cli::core::agent::providers::AnthropicProvider::new(resolved.api_key)
-                            .ok()
-                            .map(|p| Box::new(p) as _)
-                    }
-                    "openai" | "openrouter" => {
-                        omni_cli::core::agent::providers::OpenAiProvider::new(resolved.api_key)
-                            .ok()
-                            .map(|p| Box::new(p) as _)
-                    }
-                    _ => None,
-                };
+            // Create per-user SynapseClient with user's API key
+            let base_url = state
+                .synapse
+                .as_ref()
+                .map_or_else(
+                    || "http://localhost:6000".to_string(),
+                    |c| c.base_url().to_string(),
+                );
 
-            if let Some(provider) = provider_box {
-                let system_prompt = {
-                    let active = state.active_persona.read().await;
-                    active.system_prompt.clone()
-                };
-
-                let agent = Arc::new(Mutex::new(Agent::with_system(
-                    provider,
-                    model,
-                    1024,
-                    system_prompt.unwrap_or_default(),
-                )));
-
-                return Some(agent);
+            if let Ok(client) = SynapseClient::new(&base_url) {
+                let client = client.with_api_key(resolved.api_key);
+                return Some((Arc::new(client), model));
             }
         }
     }

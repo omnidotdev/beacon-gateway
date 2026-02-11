@@ -115,4 +115,8 @@ pub enum Error {
     /// Link processing error
     #[error("link error: {0}")]
     Link(String),
+
+    /// Tool execution error
+    #[error("tool error: {0}")]
+    Tool(String),
 }

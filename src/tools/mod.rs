@@ -2,6 +2,7 @@
 
 mod browser;
 mod cron;
+pub mod executor;
 mod policy;
 mod sessions;
 mod web;
