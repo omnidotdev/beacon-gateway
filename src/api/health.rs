@@ -116,7 +116,7 @@ fn check_database(state: &ApiState) -> CheckResult {
 
 /// Check agent availability
 fn check_agent(state: &ApiState) -> CheckResult {
-    match &state.agent {
+    match &state.synapse {
         Some(_) => CheckResult::ok(),
         None => CheckResult::unavailable(),
     }
@@ -174,7 +174,7 @@ async fn status(State(state): State<Arc<ApiState>>) -> Json<StatusResponse> {
         version: env!("CARGO_PKG_VERSION"),
         persona_id: state.persona_id.clone(),
         model,
-        voice_available: state.stt.is_some() && state.tts.is_some(),
+        voice_available: state.synapse.is_some(),
     })
 }
 
@@ -256,7 +256,7 @@ fn load_persona_file(personas_dir: &std::path::Path, persona_id: &str) -> Option
 }
 
 /// Load a persona with its system prompt
-fn load_full_persona(
+pub(crate) fn load_full_persona(
     personas_dir: &std::path::Path,
     persona_id: &str,
 ) -> Option<(PersonaInfo, Option<String>)> {
@@ -298,7 +298,7 @@ fn load_all_personas(personas_dir: &std::path::Path) -> Vec<PersonaInfo> {
 }
 
 /// Convert a Persona to `PersonaInfo` for the API
-fn persona_to_info(persona: &Persona) -> PersonaInfo {
+pub(crate) fn persona_to_info(persona: &Persona) -> PersonaInfo {
     let avatar = persona
         .branding
         .as_ref()
@@ -346,7 +346,7 @@ async fn get_gateway_info(State(state): State<Arc<ApiState>>) -> Json<GatewayInf
         name: "Beacon Gateway".to_string(),
         version: env!("CARGO_PKG_VERSION"),
         persona: state.persona_id.clone(),
-        voice: state.stt.is_some() && state.tts.is_some(),
+        voice: state.synapse.is_some(),
     })
 }
 

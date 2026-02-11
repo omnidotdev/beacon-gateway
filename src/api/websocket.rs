@@ -31,7 +31,12 @@ struct WsQuery {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsIncoming {
     /// Send a chat message
-    Chat { content: String },
+    Chat {
+        content: String,
+        /// Override the active persona for this message
+        #[serde(default)]
+        persona_id: Option<String>,
+    },
     /// Ping to keep connection alive
     Ping,
 }
@@ -181,8 +186,8 @@ async fn handle_message(
                 .await
                 .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
         }
-        WsIncoming::Chat { content } => {
-            handle_chat_message(&content, state, session_id, tx, gatekeeper_user_id).await?;
+        WsIncoming::Chat { content, persona_id } => {
+            handle_chat_message(&content, persona_id, state, session_id, tx, gatekeeper_user_id).await?;
         }
     }
 
@@ -193,6 +198,7 @@ async fn handle_message(
 #[allow(clippy::too_many_lines)]
 async fn handle_chat_message(
     content: &str,
+    persona_id_override: Option<String>,
     state: &Arc<ApiState>,
     session_id: &str,
     tx: mpsc::Sender<WsOutgoing>,
@@ -213,11 +219,33 @@ async fn handle_chat_message(
         .find_or_create(&user_id)
         .map_err(|e| crate::Error::Database(e.to_string()))?;
 
-    // Build context with memory (use active persona for dynamic switching)
-    let active = state.active_persona.read().await;
-    let active_persona_id = active.id.clone();
-    let active_system_prompt = active.system_prompt.clone();
-    drop(active); // Release lock before database operations
+    // Resolve persona: prefer per-message override, fall back to active persona
+    let (active_persona_id, active_system_prompt) = if let Some(ref override_id) = persona_id_override {
+        // Load the requested persona from cache or embedded defaults
+        if let Some((_info, system_prompt)) = super::health::load_full_persona(&state.persona_cache_dir, override_id)
+            .or_else(|| {
+                crate::Config::load_embedded_persona(override_id).ok().map(|p| {
+                    let prompt = p.system_prompt().map(String::from);
+                    (super::health::persona_to_info(&p), prompt)
+                })
+            })
+        {
+            (override_id.clone(), system_prompt)
+        } else {
+            tracing::warn!(persona_id = %override_id, "requested persona not found, using active");
+            let active = state.active_persona.read().await;
+            let id = active.id.clone();
+            let prompt = active.system_prompt.clone();
+            drop(active);
+            (id, prompt)
+        }
+    } else {
+        let active = state.active_persona.read().await;
+        let id = active.id.clone();
+        let prompt = active.system_prompt.clone();
+        drop(active);
+        (id, prompt)
+    };
 
     // Ensure session exists (creates if not found)
     // For web clients, use session_id as channel_id
