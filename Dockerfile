@@ -41,6 +41,6 @@ COPY personas /etc/beacon/personas
 ENV RUST_LOG=info
 ENV BEACON_PERSONAS_DIR=/etc/beacon/personas
 
-EXPOSE 3030
+EXPOSE 18789 18790
 
 CMD ["beacon"]

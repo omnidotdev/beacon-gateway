@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use beacon_gateway::db::{self, UserRepo};
-use beacon_gateway::voice::{AudioCapture, AudioPlayback, TextToSpeech};
+use beacon_gateway::voice::{AudioCapture, AudioPlayback};
 use beacon_gateway::{Config, Daemon};
 
 /// Beacon - Voice and messaging gateway for AI assistants
@@ -240,27 +240,29 @@ async fn test_speaker() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test TTS output
+/// Test TTS output via Synapse
 async fn test_tts(persona: &str, text: &str) -> anyhow::Result<()> {
     println!("Testing TTS with text: \"{text}\"\n");
 
     let config = Config::load(persona)?;
 
-    let openai_key = config
-        .api_keys
-        .openai
-        .ok_or_else(|| anyhow::anyhow!("OPENAI_API_KEY required"))?;
+    let synapse = synapse_client::SynapseClient::new(&config.synapse_url)
+        .map_err(|e| anyhow::anyhow!("failed to create Synapse client: {e}"))?;
 
-    let tts_voice = config
-        .persona
-        .tts_voice()
-        .ok_or_else(|| anyhow::anyhow!("voice.tts.voice not configured in persona"))?;
+    let request = synapse_client::SpeechRequest {
+        model: config.voice.tts_model.clone(),
+        input: text.to_string(),
+        voice: config.voice.tts_voice.clone(),
+        response_format: None,
+        speed: Some(config.voice.tts_speed),
+    };
 
-    let tts = TextToSpeech::new_openai(openai_key, tts_voice.to_string(), config.persona.tts_speed())?;
-
-    println!("Synthesizing speech...");
-    let mp3_data = tts.synthesize(text).await?;
-    println!("Got {} bytes of MP3 data", mp3_data.len());
+    println!("Synthesizing speech via Synapse ({})...", config.synapse_url);
+    let mp3_data = synapse
+        .synthesize(&request)
+        .await
+        .map_err(|e| anyhow::anyhow!("TTS synthesis failed: {e}"))?;
+    println!("Got {} bytes of audio data", mp3_data.len());
 
     // Check MP3 header
     if mp3_data.len() > 3 {

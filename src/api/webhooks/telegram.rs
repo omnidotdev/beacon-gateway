@@ -204,9 +204,9 @@ pub async fn handle_update(
         "Telegram message received"
     );
 
-    // Check if we have an agent configured
-    let Some(agent) = &state.agent else {
-        tracing::warn!("no agent configured for Telegram webhook");
+    // Check if we have Synapse configured
+    let Some(synapse) = &state.synapse else {
+        tracing::warn!("no Synapse client configured for Telegram webhook");
         return (StatusCode::OK, Json(WebhookResponse { ok: true }));
     };
 
@@ -275,21 +275,31 @@ pub async fn handle_update(
         .as_ref()
         .map_or_else(|_| content.clone(), |ctx| ctx.format_prompt(&content));
 
-    // Process with agent (apply tool policy for telegram channel)
-    let response = {
-        let mut agent_guard = agent.lock().await;
-        agent_guard.clear();
+    // Process with Synapse
+    let request = synapse_client::ChatRequest {
+        model: state.llm_model.clone(),
+        messages: vec![
+            synapse_client::Message::system(&state.system_prompt),
+            synapse_client::Message::user(&augmented_prompt),
+        ],
+        stream: false,
+        temperature: None,
+        top_p: None,
+        max_tokens: Some(state.llm_max_tokens),
+        stop: None,
+        tools: None,
+        tool_choice: None,
+    };
 
-        // Apply tool filter based on channel policy
-        let allowed_tools = state.tool_policy.allowed_tools("telegram");
-        agent_guard.set_tool_filter(Some(allowed_tools));
-
-        match agent_guard.chat(&augmented_prompt, |_| {}).await {
-            Ok(response) => response,
-            Err(e) => {
-                tracing::error!(error = %e, "agent error");
-                "Sorry, I encountered an error processing your message.".to_string()
-            }
+    let response = match synapse.chat_completion(&request).await {
+        Ok(resp) => resp
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default(),
+        Err(e) => {
+            tracing::error!(error = %e, "synapse error");
+            "Sorry, I encountered an error processing your message.".to_string()
         }
     };
 

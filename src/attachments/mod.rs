@@ -6,8 +6,9 @@ mod vision;
 
 use std::sync::Arc;
 
+use synapse_client::SynapseClient;
+
 use crate::channels::{Attachment, AttachmentKind};
-use crate::voice::SpeechToText;
 use crate::Result;
 
 pub use vision::VisionClient;
@@ -16,8 +17,10 @@ pub use vision::VisionClient;
 pub struct AttachmentProcessor {
     /// Vision client for image analysis
     vision: Option<Arc<VisionClient>>,
-    /// STT client for audio transcription
-    stt: Option<Arc<SpeechToText>>,
+    /// Synapse client for audio transcription
+    synapse: Option<Arc<SynapseClient>>,
+    /// STT model identifier for Synapse transcription
+    stt_model: String,
     /// HTTP client for downloading attachments
     client: reqwest::Client,
 }
@@ -25,10 +28,15 @@ pub struct AttachmentProcessor {
 impl AttachmentProcessor {
     /// Create a new attachment processor
     #[must_use]
-    pub fn new(vision: Option<Arc<VisionClient>>, stt: Option<Arc<SpeechToText>>) -> Self {
+    pub fn new(
+        vision: Option<Arc<VisionClient>>,
+        synapse: Option<Arc<SynapseClient>>,
+        stt_model: String,
+    ) -> Self {
         Self {
             vision,
-            stt,
+            synapse,
+            stt_model,
             client: reqwest::Client::new(),
         }
     }
@@ -103,9 +111,9 @@ impl AttachmentProcessor {
         }
     }
 
-    /// Process an audio attachment using STT
+    /// Process an audio attachment using Synapse STT
     async fn process_audio(&self, attachment: &Attachment) -> String {
-        let Some(stt) = &self.stt else {
+        let Some(synapse) = &self.synapse else {
             return format!(
                 "[Audio: {}]",
                 attachment.filename.as_deref().unwrap_or("audio")
@@ -136,12 +144,13 @@ impl AttachmentProcessor {
             }
         };
 
-        match stt.transcribe(&wav_data).await {
-            Ok(transcript) => {
+        let filename = attachment.filename.as_deref().unwrap_or("audio.wav");
+        match synapse.transcribe(wav_data.into(), filename, &self.stt_model).await {
+            Ok(result) => {
                 format!(
                     "[Audio transcription: {}]\n\"{}\"",
                     attachment.filename.as_deref().unwrap_or("audio"),
-                    transcript
+                    result.text
                 )
             }
             Err(e) => {

@@ -154,8 +154,8 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
     // Get user for context building
     let user = state.user_repo.find_or_create(user_id)?;
 
-    // Generate check-in message via agent if available
-    let check_in_message = if let Some(agent) = &state.agent {
+    // Generate check-in message via Synapse if available
+    let check_in_message = if let Some(synapse) = &state.synapse {
         // Find or create session for this channel
         let channel_id_str = channel_id.unwrap_or(user_id);
         let session = state.session_repo.find_or_create(
@@ -184,16 +184,29 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
             .as_ref()
             .map_or_else(|_| prompt.to_string(), |ctx| ctx.format_prompt(prompt));
 
-        let mut agent_guard = agent.lock().await;
-        agent_guard.clear();
+        let request = synapse_client::ChatRequest {
+            model: state.llm_model.clone(),
+            messages: vec![
+                synapse_client::Message::system(&state.system_prompt),
+                synapse_client::Message::user(&augmented_prompt),
+            ],
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: Some(state.llm_max_tokens),
+            stop: None,
+            tools: None,
+            tool_choice: None,
+        };
 
-        // Apply tool filter based on channel policy
-        let allowed_tools = state.tool_policy.allowed_tools(channel);
-        agent_guard.set_tool_filter(Some(allowed_tools));
-
-        match agent_guard.chat(&augmented_prompt, |_| {}).await {
-            Ok(response) => {
-                // Store agent response
+        match synapse.chat_completion(&request).await {
+            Ok(resp) => {
+                let response = resp
+                    .choices
+                    .first()
+                    .and_then(|c| c.message.content.clone())
+                    .unwrap_or_default();
+                // Store assistant response
                 if let Err(e) = state
                     .session_repo
                     .add_message(&session.id, MessageRole::Assistant, &response)
@@ -203,7 +216,7 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
                 response
             }
             Err(e) => {
-                tracing::error!(error = %e, "agent error during check-in");
+                tracing::error!(error = %e, "synapse error during check-in");
                 prompt.to_string()
             }
         }

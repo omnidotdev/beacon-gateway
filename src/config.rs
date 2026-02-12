@@ -58,6 +58,12 @@ pub struct Config {
 
     /// Service-to-service key for authenticating to identity service
     pub service_key: Option<String>,
+
+    /// Synapse AI router URL
+    pub synapse_url: String,
+
+    /// LLM model identifier for chat completions
+    pub llm_model: String,
 }
 
 /// HTTP API server configuration
@@ -85,11 +91,17 @@ pub struct VoiceConfig {
     /// Enable voice input
     pub enabled: bool,
 
-    /// STT provider (whisper, deepgram)
-    pub stt_provider: String,
+    /// STT model for Synapse (e.g. "whisper-1", "deepgram/nova-2")
+    pub stt_model: String,
 
-    /// TTS provider (openai, elevenlabs)
-    pub tts_provider: String,
+    /// TTS model for Synapse (e.g. "tts-1", "elevenlabs/eleven_monolingual_v1")
+    pub tts_model: String,
+
+    /// TTS voice identifier
+    pub tts_voice: String,
+
+    /// TTS speed multiplier (0.25 to 4.0)
+    pub tts_speed: f64,
 }
 
 /// iMessage channel configuration (macOS only)
@@ -255,19 +267,17 @@ impl Config {
             static_dir: std::env::var("BEACON_STATIC_DIR").ok().map(PathBuf::from),
         };
 
-        // Voice config (disabled if explicitly requested or no API keys)
+        // Voice config (routes through Synapse for STT/TTS)
+        let tts_voice = persona.tts_voice().unwrap_or("alloy").to_string();
+        let tts_speed = f64::from(persona.tts_speed());
         let voice = VoiceConfig {
-            enabled: !disable_voice && (api_keys.openai.is_some() || api_keys.deepgram.is_some()),
-            stt_provider: if api_keys.deepgram.is_some() {
-                "deepgram".to_string()
-            } else {
-                "whisper".to_string()
-            },
-            tts_provider: if api_keys.elevenlabs.is_some() {
-                "elevenlabs".to_string()
-            } else {
-                "openai".to_string()
-            },
+            enabled: !disable_voice,
+            stt_model: std::env::var("BEACON_STT_MODEL")
+                .unwrap_or_else(|_| "whisper-1".to_string()),
+            tts_model: std::env::var("BEACON_TTS_MODEL")
+                .unwrap_or_else(|_| "tts-1".to_string()),
+            tts_voice,
+            tts_speed,
         };
 
         if disable_voice {
@@ -326,6 +336,12 @@ impl Config {
         let auth_base_url = std::env::var("AUTH_BASE_URL").ok();
         let service_key = std::env::var("BEACON_SERVICE_KEY").ok();
 
+        // Synapse AI router
+        let synapse_url = std::env::var("SYNAPSE_URL")
+            .unwrap_or_else(|_| "http://localhost:6000".to_string());
+        let llm_model = std::env::var("BEACON_LLM_MODEL")
+            .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
+
         Ok(Self {
             persona,
             persona_cache_dir: cache_dir,
@@ -343,6 +359,8 @@ impl Config {
             hooks,
             auth_base_url,
             service_key,
+            synapse_url,
+            llm_model,
         })
     }
 

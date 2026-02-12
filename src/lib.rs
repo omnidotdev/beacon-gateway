@@ -4,7 +4,7 @@
 //! - Voice processing (wake word detection, STT, TTS)
 //! - Messaging channel adapters
 //! - Persona management
-//! - Agent integration via Omni CLI
+//! - LLM routing via Synapse AI router
 //!
 //! # Architecture
 //!
@@ -20,7 +20,8 @@
 //! └────────────────────┬────────────────────────────────┘
 //!                      │
 //! ┌────────────────────▼────────────────────────────────┐
-//! │              Omni CLI (Agent Core)                   │
+//! │            Synapse (AI Router)                       │
+//! │   LLM  │  MCP  │  STT  │  TTS                      │
 //! └─────────────────────────────────────────────────────┘
 //! ```
 

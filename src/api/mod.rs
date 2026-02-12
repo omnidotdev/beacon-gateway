@@ -17,9 +17,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use omni_cli::Agent;
+use synapse_client::SynapseClient;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock}; // Mutex still used for Canvas
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -29,7 +29,6 @@ use crate::channels::{TeamsChannel, TelegramChannel};
 use crate::context::ContextConfig;
 use crate::db::{DbPool, MemoryRepo, SessionRepo, SkillRepo, UserRepo};
 use crate::tools::ToolPolicy;
-use crate::voice::{SpeechToText, TextToSpeech};
 use crate::Result;
 
 /// Information about the current LLM model
@@ -55,7 +54,10 @@ pub struct ApiState {
     pub persona_system_prompt: Option<String>,
     pub active_persona: Arc<RwLock<ActivePersona>>,
     pub persona_cache_dir: PathBuf,
-    pub agent: Option<Arc<Mutex<Agent>>>,
+    pub synapse: Option<Arc<SynapseClient>>,
+    pub llm_model: String,
+    pub llm_max_tokens: u32,
+    pub system_prompt: String,
     pub telegram: Option<TelegramChannel>,
     pub teams: Option<TeamsChannel>,
     pub session_repo: SessionRepo,
@@ -64,8 +66,10 @@ pub struct ApiState {
     pub skill_repo: SkillRepo,
     pub tool_policy: Arc<ToolPolicy>,
     pub manifold_url: String,
-    pub stt: Option<Arc<SpeechToText>>,
-    pub tts: Option<Arc<TextToSpeech>>,
+    pub stt_model: String,
+    pub tts_model: String,
+    pub tts_voice: String,
+    pub tts_speed: f64,
     pub model_info: Option<ModelInfo>,
     pub canvas: Arc<Mutex<Canvas>>,
     pub key_resolver: Option<Arc<crate::providers::KeyResolver>>,
@@ -82,14 +86,19 @@ pub struct ApiServerBuilder {
     persona_system_prompt: Option<String>,
     persona_cache_dir: PathBuf,
     port: u16,
-    agent: Option<Arc<Mutex<Agent>>>,
+    synapse: Option<Arc<SynapseClient>>,
+    llm_model: String,
+    llm_max_tokens: u32,
+    system_prompt: String,
     telegram: Option<TelegramChannel>,
     teams: Option<TeamsChannel>,
     tool_policy: Arc<ToolPolicy>,
     manifold_url: Option<String>,
     static_dir: Option<PathBuf>,
-    stt: Option<Arc<SpeechToText>>,
-    tts: Option<Arc<TextToSpeech>>,
+    stt_model: String,
+    tts_model: String,
+    tts_voice: String,
+    tts_speed: f64,
     model_info: Option<ModelInfo>,
     key_resolver: Option<Arc<crate::providers::KeyResolver>>,
     jwt_cache: Option<Arc<jwt::JwksCache>>,
@@ -115,14 +124,19 @@ impl ApiServerBuilder {
             persona_system_prompt,
             persona_cache_dir,
             port,
-            agent: None,
+            synapse: None,
+            llm_model: crate::daemon::DEFAULT_MODEL.to_string(),
+            llm_max_tokens: 1024,
+            system_prompt: String::new(),
             telegram: None,
             teams: None,
             tool_policy,
             manifold_url: None,
             static_dir: None,
-            stt: None,
-            tts: None,
+            stt_model: "whisper-1".to_string(),
+            tts_model: "tts-1".to_string(),
+            tts_voice: "alloy".to_string(),
+            tts_speed: 1.0,
             model_info: None,
             key_resolver: None,
             jwt_cache: None,
@@ -138,10 +152,31 @@ impl ApiServerBuilder {
         self
     }
 
-    /// Set the agent for chat
+    /// Set the Synapse client for chat
     #[must_use]
-    pub fn agent(mut self, agent: Arc<Mutex<Agent>>) -> Self {
-        self.agent = Some(agent);
+    pub fn synapse(mut self, client: Arc<SynapseClient>) -> Self {
+        self.synapse = Some(client);
+        self
+    }
+
+    /// Set the LLM model identifier
+    #[must_use]
+    pub fn llm_model(mut self, model: String) -> Self {
+        self.llm_model = model;
+        self
+    }
+
+    /// Set the max tokens for LLM responses
+    #[must_use]
+    pub fn llm_max_tokens(mut self, tokens: u32) -> Self {
+        self.llm_max_tokens = tokens;
+        self
+    }
+
+    /// Set the system prompt for chat
+    #[must_use]
+    pub fn system_prompt(mut self, prompt: String) -> Self {
+        self.system_prompt = prompt;
         self
     }
 
@@ -173,17 +208,13 @@ impl ApiServerBuilder {
         self
     }
 
-    /// Set the speech-to-text engine
+    /// Set voice configuration from `VoiceConfig`
     #[must_use]
-    pub fn stt(mut self, stt: Arc<SpeechToText>) -> Self {
-        self.stt = Some(stt);
-        self
-    }
-
-    /// Set the text-to-speech engine
-    #[must_use]
-    pub fn tts(mut self, tts: Arc<TextToSpeech>) -> Self {
-        self.tts = Some(tts);
+    pub fn voice_config(mut self, config: &crate::config::VoiceConfig) -> Self {
+        self.stt_model = config.stt_model.clone();
+        self.tts_model = config.tts_model.clone();
+        self.tts_voice = config.tts_voice.clone();
+        self.tts_speed = config.tts_speed;
         self
     }
 
@@ -247,7 +278,10 @@ impl ApiServerBuilder {
             persona_system_prompt: self.persona_system_prompt,
             active_persona,
             persona_cache_dir: self.persona_cache_dir,
-            agent: self.agent,
+            synapse: self.synapse,
+            llm_model: self.llm_model,
+            llm_max_tokens: self.llm_max_tokens,
+            system_prompt: self.system_prompt,
             telegram: self.telegram,
             teams: self.teams,
             session_repo,
@@ -256,8 +290,10 @@ impl ApiServerBuilder {
             skill_repo,
             tool_policy: self.tool_policy,
             manifold_url,
-            stt: self.stt,
-            tts: self.tts,
+            stt_model: self.stt_model,
+            tts_model: self.tts_model,
+            tts_voice: self.tts_voice,
+            tts_speed: self.tts_speed,
             model_info: self.model_info,
             canvas,
             key_resolver: self.key_resolver,

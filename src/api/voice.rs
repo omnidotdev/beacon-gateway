@@ -32,9 +32,10 @@ pub struct VoiceCapabilities {
 
 /// Get voice capabilities
 async fn capabilities(State(state): State<Arc<ApiState>>) -> Json<VoiceCapabilities> {
+    let has_synapse = state.synapse.is_some();
     Json(VoiceCapabilities {
-        stt_available: state.stt.is_some(),
-        tts_available: state.tts.is_some(),
+        stt_available: has_synapse,
+        tts_available: has_synapse,
     })
 }
 
@@ -51,23 +52,21 @@ async fn transcribe(
     State(state): State<Arc<ApiState>>,
     body: Bytes,
 ) -> Result<Json<TranscribeResponse>, VoiceError> {
-    let stt = state
-        .stt
+    let synapse = state
+        .synapse
         .as_ref()
-        .ok_or(VoiceError::NotConfigured("STT not configured"))?;
+        .ok_or(VoiceError::NotConfigured("STT not configured (no Synapse client)"))?;
 
     if body.is_empty() {
         return Err(VoiceError::BadRequest("Empty audio data"));
     }
 
-    // TODO: Support WebM/Opus input and convert to WAV
-    // For now, expect WAV format directly
-    let text = stt
-        .transcribe(&body)
+    let transcription = synapse
+        .transcribe(body, "audio.wav", &state.stt_model)
         .await
         .map_err(|e| VoiceError::TranscriptionFailed(e.to_string()))?;
 
-    Ok(Json(TranscribeResponse { text }))
+    Ok(Json(TranscribeResponse { text: transcription.text }))
 }
 
 /// Synthesis request
@@ -83,18 +82,25 @@ async fn synthesize(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<SynthesizeRequest>,
 ) -> Result<Response, VoiceError> {
-    let tts = state
-        .tts
+    let synapse = state
+        .synapse
         .as_ref()
-        .ok_or(VoiceError::NotConfigured("TTS not configured"))?;
+        .ok_or(VoiceError::NotConfigured("TTS not configured (no Synapse client)"))?;
 
     if request.text.is_empty() {
         return Err(VoiceError::BadRequest("Empty text"));
     }
 
-    // TODO: Add text length limit to prevent abuse
-    let audio = tts
-        .synthesize(&request.text)
+    let speech_request = synapse_client::SpeechRequest {
+        model: state.tts_model.clone(),
+        input: request.text,
+        voice: state.tts_voice.clone(),
+        response_format: None,
+        speed: Some(state.tts_speed),
+    };
+
+    let audio = synapse
+        .synthesize(&speech_request)
         .await
         .map_err(|e| VoiceError::SynthesisFailed(e.to_string()))?;
 

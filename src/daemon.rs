@@ -5,9 +5,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use omni_cli::Agent;
-use omni_cli::core::agent::providers::{AnthropicProvider, OpenAiProvider};
-use tokio::sync::{Mutex, mpsc};
+use synapse_client::SynapseClient;
+use tokio::sync::mpsc;
 
 use crate::api::{ApiServerBuilder, ModelInfo};
 use crate::attachments::{AttachmentProcessor, VisionClient};
@@ -21,7 +20,7 @@ use crate::context::{ContextBuilder, ContextConfig};
 use crate::db::{self, DbPool, MessageRole, SessionRepo, UserRepo};
 use crate::security::{DmPolicy, PairingManager};
 use crate::voice::{
-    AudioCapture, AudioPlayback, SAMPLE_RATE, SpeechToText, TextToSpeech, WakeWordDetector,
+    AudioCapture, AudioPlayback, SAMPLE_RATE, WakeWordDetector,
     samples_to_wav,
 };
 use crate::hooks::{HookAction, HookEvent, HookManager};
@@ -30,11 +29,8 @@ use crate::{Config, Error, Result};
 /// Audio processing chunk size (100ms at 16kHz)
 const CHUNK_SIZE: usize = 1600;
 
-/// Default Anthropic model
-pub(crate) const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-20250514";
-
-/// Default `OpenAI` model (fallback)
-pub(crate) const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
+/// Default LLM model
+pub(crate) const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
 
 /// Max tokens for responses
 const MAX_TOKENS: u32 = 1024;
@@ -68,116 +64,32 @@ impl Daemon {
         self.config.persona.wake_word()
     }
 
-    /// Initialize the LLM agent if API keys are available
+    /// Initialize the Synapse AI router client
     ///
-    /// Returns (agent, model_info) - both None if no API keys are configured.
-    /// The gateway can still run in "unconfigured" mode for provider setup.
-    fn init_agent(&self) -> (Option<Arc<Mutex<Agent>>>, Option<ModelInfo>) {
-        let preferred_provider = self.config.llm_provider.as_deref();
-
-        let provider_result: Option<(Box<dyn omni_cli::core::agent::LlmProvider>, &str)> =
-            match preferred_provider {
-                // Force OpenAI
-                Some("openai") => {
-                    if let Some(openai_key) = self.config.api_keys.openai.as_ref() {
-                        match OpenAiProvider::new(openai_key.clone()) {
-                            Ok(p) => {
-                                tracing::info!(model = DEFAULT_OPENAI_MODEL, provider = "openai", "using OpenAI (configured)");
-                                Some((Box::new(p), DEFAULT_OPENAI_MODEL))
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "failed to initialize OpenAI provider");
-                                None
-                            }
-                        }
-                    } else {
-                        tracing::warn!("BEACON_LLM_PROVIDER=openai but OPENAI_API_KEY not set");
-                        None
-                    }
-                }
-                // Force Anthropic
-                Some("anthropic") => {
-                    if let Some(anthropic_key) = self.config.api_keys.anthropic.as_ref() {
-                        match AnthropicProvider::new(anthropic_key.clone()) {
-                            Ok(p) => {
-                                tracing::info!(model = DEFAULT_ANTHROPIC_MODEL, provider = "anthropic", "using Anthropic (configured)");
-                                Some((Box::new(p), DEFAULT_ANTHROPIC_MODEL))
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "failed to initialize Anthropic provider");
-                                None
-                            }
-                        }
-                    } else {
-                        tracing::warn!("BEACON_LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY not set");
-                        None
-                    }
-                }
-                // Auto-detect: prefer Anthropic, fall back to OpenAI
-                _ => {
-                    if let Some(anthropic_key) = &self.config.api_keys.anthropic {
-                        match AnthropicProvider::new(anthropic_key.clone()) {
-                            Ok(p) => {
-                                tracing::info!(model = DEFAULT_ANTHROPIC_MODEL, provider = "anthropic", "using Anthropic");
-                                Some((Box::new(p), DEFAULT_ANTHROPIC_MODEL))
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Anthropic provider failed, trying OpenAI");
-                                // Try OpenAI as fallback
-                                if let Some(openai_key) = &self.config.api_keys.openai {
-                                    match OpenAiProvider::new(openai_key.clone()) {
-                                        Ok(p) => {
-                                            tracing::info!(model = DEFAULT_OPENAI_MODEL, provider = "openai", "using OpenAI (fallback)");
-                                            Some((Box::new(p), DEFAULT_OPENAI_MODEL))
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(error = %e, "failed to initialize OpenAI provider");
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    None
-                                }
-                            }
-                        }
-                    } else if let Some(openai_key) = &self.config.api_keys.openai {
-                        match OpenAiProvider::new(openai_key.clone()) {
-                            Ok(p) => {
-                                tracing::info!(model = DEFAULT_OPENAI_MODEL, provider = "openai", "using OpenAI (no Anthropic key)");
-                                Some((Box::new(p), DEFAULT_OPENAI_MODEL))
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "failed to initialize OpenAI provider");
-                                None
-                            }
-                        }
-                    } else {
-                        tracing::warn!("no LLM provider configured - gateway running in setup mode");
-                        tracing::info!("configure a provider via the API or set ANTHROPIC_API_KEY / OPENAI_API_KEY");
-                        None
-                    }
-                }
-            };
-
-        match provider_result {
-            Some((provider, model_id)) => {
-                let system_prompt = build_system_prompt(&self.config);
-                let agent = Arc::new(Mutex::new(Agent::with_system(
-                    provider,
-                    model_id,
-                    MAX_TOKENS,
-                    system_prompt,
-                )));
+    /// Returns (client, model_info) - client is None only if the URL is invalid.
+    /// Synapse handles provider routing internally.
+    fn init_synapse(&self) -> (Option<Arc<SynapseClient>>, Option<ModelInfo>) {
+        match SynapseClient::new(&self.config.synapse_url) {
+            Ok(client) => {
+                let model_id = &self.config.llm_model;
+                tracing::info!(
+                    url = %self.config.synapse_url,
+                    model = %model_id,
+                    "synapse client initialized"
+                );
 
                 let model_info = ModelInfo {
-                    model_id: model_id.to_string(),
-                    provider: if model_id.starts_with("claude") { "anthropic" } else { "openai" }.to_string(),
+                    model_id: model_id.clone(),
+                    provider: "synapse".to_string(),
                 };
 
-                tracing::debug!(model = model_id, "agent initialized");
-                (Some(agent), Some(model_info))
+                (Some(Arc::new(client)), Some(model_info))
             }
-            None => (None, None),
+            Err(e) => {
+                tracing::error!(error = %e, url = %self.config.synapse_url, "failed to initialize synapse client");
+                tracing::warn!("running in setup mode - chat unavailable");
+                (None, None)
+            }
         }
     }
 
@@ -194,9 +106,10 @@ impl Daemon {
             "daemon running"
         );
 
-        // Initialize agent with preferred LLM provider (optional - gateway can start unconfigured)
-        // BEACON_LLM_PROVIDER can be "anthropic" or "openai" to force a specific provider
-        let (agent, model_info) = self.init_agent();
+        // Initialize Synapse AI router client
+        let (synapse, model_info) = self.init_synapse();
+        let system_prompt = build_system_prompt(&self.config);
+        let model_id = self.config.llm_model.clone();
 
         // Initialize BYOK key resolver if identity service is configured
         let (key_resolver, jwt_cache) = if let (Some(auth_url), Some(svc_key)) =
@@ -224,8 +137,8 @@ impl Daemon {
             );
         }
 
-        if agent.is_none() {
-            tracing::info!("running in setup mode - chat unavailable until provider configured");
+        if synapse.is_none() {
+            tracing::info!("running in setup mode - chat unavailable until Synapse is reachable");
         }
 
         // Set up shutdown signal
@@ -250,24 +163,6 @@ impl Daemon {
             None
         };
 
-        // Initialize voice services for API (if OpenAI key available)
-        let (stt, tts) = if let Some(ref openai_key) = self.config.api_keys.openai {
-            let stt = SpeechToText::new_whisper(openai_key.clone(), "whisper-1".to_string())
-                .map(Arc::new)
-                .ok();
-            let tts_voice = self.config.persona.tts_voice().unwrap_or("alloy");
-            let tts = TextToSpeech::new_openai(
-                openai_key.clone(),
-                tts_voice.to_string(),
-                self.config.persona.tts_speed(),
-            )
-            .map(Arc::new)
-            .ok();
-            (stt, tts)
-        } else {
-            (None, None)
-        };
-
         // Initialize vision client for image analysis (if Anthropic key available)
         let vision = self.config.api_keys.anthropic.as_ref().and_then(|key| {
             VisionClient::new(key.clone())
@@ -275,8 +170,12 @@ impl Daemon {
                 .ok()
         });
 
-        // Create attachment processor with vision and STT
-        let attachment_processor = Arc::new(AttachmentProcessor::new(vision, stt.clone()));
+        // Create attachment processor with vision and Synapse (for audio transcription)
+        let attachment_processor = Arc::new(AttachmentProcessor::new(
+            vision,
+            synapse.as_ref().map(Arc::clone),
+            self.config.voice.stt_model.clone(),
+        ));
 
         // Start HTTP API server
         let persona_system_prompt = self.config.persona.system_prompt().map(String::from);
@@ -294,22 +193,20 @@ impl Daemon {
         .persona_knowledge(self.config.persona.knowledge.inline.clone())
         .max_context_tokens(self.config.persona.memory.max_context_tokens);
 
-        // Only set agent if configured
-        if let Some(ref agent) = agent {
-            api_builder = api_builder.agent(Arc::clone(agent));
+        // Only set synapse client if configured
+        if let Some(ref synapse) = synapse {
+            api_builder = api_builder.synapse(Arc::clone(synapse));
         }
+        api_builder = api_builder
+            .llm_model(model_id.clone())
+            .llm_max_tokens(MAX_TOKENS)
+            .system_prompt(system_prompt.clone());
 
         if let Some(tg) = telegram {
             api_builder = api_builder.telegram(tg);
         }
 
-        if let Some(stt) = stt {
-            api_builder = api_builder.stt(stt);
-        }
-
-        if let Some(tts) = tts {
-            api_builder = api_builder.tts(tts);
-        }
+        api_builder = api_builder.voice_config(&self.config.voice);
 
         if let Some(model_info) = model_info {
             api_builder = api_builder.model_info(model_info);
@@ -334,10 +231,13 @@ impl Daemon {
         // Initialize hook manager
         let hook_manager = Arc::new(HookManager::new(&self.config.hooks, &self.config.data_dir));
 
-        // Start channel handlers (only if agent is configured)
-        if let Some(ref agent) = agent {
+        // Start channel handlers (only if synapse is configured)
+        if let Some(ref synapse) = synapse {
             self.start_channels(
-                Arc::clone(agent),
+                Arc::clone(synapse),
+                model_id.clone(),
+                system_prompt.clone(),
+                MAX_TOKENS,
                 Arc::clone(&tool_policy),
                 Arc::clone(&pairing_manager),
                 Arc::clone(&attachment_processor),
@@ -345,17 +245,24 @@ impl Daemon {
             )
             .await;
         } else {
-            tracing::info!("skipping channel handlers - no agent configured");
+            tracing::info!("skipping channel handlers - no synapse configured");
         }
 
         // Run voice loop on main thread (cpal streams aren't Send)
-        // Only run if voice is enabled AND agent is configured
-        if self.config.voice.enabled && agent.is_some() {
-            self.run_voice_loop(Arc::clone(agent.as_ref().unwrap()), Arc::clone(&tool_policy), &mut shutdown_rx)
-                .await?;
+        // Only run if voice is enabled AND synapse is configured
+        if self.config.voice.enabled && synapse.is_some() {
+            self.run_voice_loop(
+                Arc::clone(synapse.as_ref().unwrap()),
+                model_id,
+                system_prompt,
+                MAX_TOKENS,
+                Arc::clone(&tool_policy),
+                &mut shutdown_rx,
+            )
+            .await?;
         } else {
-            if self.config.voice.enabled && agent.is_none() {
-                tracing::info!("voice disabled - no agent configured");
+            if self.config.voice.enabled && synapse.is_none() {
+                tracing::info!("voice disabled - no synapse configured");
             } else {
                 tracing::info!("voice disabled - running in messaging-only mode");
             }
@@ -370,7 +277,10 @@ impl Daemon {
     #[allow(clippy::too_many_lines)]
     async fn start_channels(
         &self,
-        agent: Arc<Mutex<Agent>>,
+        synapse: Arc<SynapseClient>,
+        model_id: String,
+        system_prompt: String,
+        max_tokens: u32,
         tool_policy: Arc<crate::tools::ToolPolicy>,
         pairing_manager: Arc<PairingManager>,
         attachment_processor: Arc<AttachmentProcessor>,
@@ -388,7 +298,9 @@ impl Daemon {
             if let Err(e) = discord.connect().await {
                 tracing::error!(error = %e, "Discord connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -403,7 +315,10 @@ impl Daemon {
                     handle_channel_messages(
                         "discord",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         discord,
                         session_repo,
                         user_repo,
@@ -429,7 +344,9 @@ impl Daemon {
             if let Err(e) = slack.connect().await {
                 tracing::error!(error = %e, "Slack connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -444,7 +361,10 @@ impl Daemon {
                     handle_channel_messages(
                         "slack",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         slack,
                         session_repo,
                         user_repo,
@@ -474,7 +394,9 @@ impl Daemon {
             if let Err(e) = whatsapp.connect().await {
                 tracing::error!(error = %e, "WhatsApp connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -489,7 +411,10 @@ impl Daemon {
                     handle_channel_messages(
                         "whatsapp",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         whatsapp,
                         session_repo,
                         user_repo,
@@ -518,7 +443,9 @@ impl Daemon {
             if let Err(e) = signal.connect().await {
                 tracing::error!(error = %e, "Signal connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -533,7 +460,10 @@ impl Daemon {
                     handle_channel_messages(
                         "signal",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         signal,
                         session_repo,
                         user_repo,
@@ -565,7 +495,9 @@ impl Daemon {
             if let Err(e) = imessage.connect().await {
                 tracing::error!(error = %e, "iMessage connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -580,7 +512,10 @@ impl Daemon {
                     handle_channel_messages(
                         "imessage",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         imessage,
                         session_repo,
                         user_repo,
@@ -614,7 +549,9 @@ impl Daemon {
             if let Err(e) = matrix.connect().await {
                 tracing::error!(error = %e, "Matrix connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -629,7 +566,10 @@ impl Daemon {
                     handle_channel_messages(
                         "matrix",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         matrix,
                         session_repo,
                         user_repo,
@@ -665,7 +605,9 @@ impl Daemon {
             if let Err(e) = teams.connect().await {
                 tracing::error!(error = %e, "Teams connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -680,7 +622,10 @@ impl Daemon {
                     handle_channel_messages(
                         "teams",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         teams,
                         session_repo,
                         user_repo,
@@ -706,7 +651,9 @@ impl Daemon {
             if let Err(e) = google_chat.connect().await {
                 tracing::error!(error = %e, "Google Chat connect failed");
             } else {
-                let agent = Arc::clone(&agent);
+                let synapse = Arc::clone(&synapse);
+                let model_id = model_id.clone();
+                let system_prompt = system_prompt.clone();
                 let session_repo = SessionRepo::new(self.db.clone());
                 let user_repo = UserRepo::new(self.db.clone());
                 let memory_repo = db::MemoryRepo::new(self.db.clone());
@@ -721,7 +668,10 @@ impl Daemon {
                     handle_channel_messages(
                         "google_chat",
                         rx,
-                        agent,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
                         google_chat,
                         session_repo,
                         user_repo,
@@ -745,48 +695,25 @@ impl Daemon {
     #[allow(clippy::future_not_send)]
     async fn run_voice_loop(
         &self,
-        agent: Arc<Mutex<Agent>>,
-        tool_policy: Arc<crate::tools::ToolPolicy>,
+        synapse: Arc<SynapseClient>,
+        model_id: String,
+        system_prompt: String,
+        max_tokens: u32,
+        _tool_policy: Arc<crate::tools::ToolPolicy>,
         shutdown_rx: &mut mpsc::Receiver<()>,
     ) -> Result<()> {
-        let openai_key = self.config.api_keys.openai.as_ref().unwrap();
         let wake_word = self
             .config
             .persona
             .wake_word()
             .ok_or_else(|| Error::Config("voice.wakeWord required for voice mode".to_string()))?;
-        let tts_voice = self
-            .config
-            .persona
-            .tts_voice()
-            .ok_or_else(|| Error::Config("voice.tts.voice required for voice mode".to_string()))?;
         let persona_id = self.config.persona.id();
 
-        // Initialize STT based on config
-        let stt = match self.config.voice.stt_provider.as_str() {
-            "deepgram" => {
-                let deepgram_key = self.config.api_keys.deepgram.as_ref().ok_or_else(|| {
-                    Error::Config("DEEPGRAM_API_KEY required for Deepgram STT".to_string())
-                })?;
-                SpeechToText::new_deepgram(deepgram_key.clone(), "nova-2".to_string())?
-            }
-            _ => SpeechToText::new_whisper(openai_key.clone(), "whisper-1".to_string())?,
-        };
+        let stt_model = self.config.voice.stt_model.clone();
+        let tts_model = self.config.voice.tts_model.clone();
+        let tts_voice = self.config.voice.tts_voice.clone();
+        let tts_speed = self.config.voice.tts_speed;
 
-        // Initialize TTS based on config
-        let tts = match self.config.voice.tts_provider.as_str() {
-            "elevenlabs" => {
-                let elevenlabs_key = self.config.api_keys.elevenlabs.as_ref().ok_or_else(|| {
-                    Error::Config("ELEVENLABS_API_KEY required for ElevenLabs TTS".to_string())
-                })?;
-                TextToSpeech::new_elevenlabs(elevenlabs_key.clone(), tts_voice.to_string())?
-            }
-            _ => TextToSpeech::new_openai(
-                openai_key.clone(),
-                tts_voice.to_string(),
-                self.config.persona.tts_speed(),
-            )?,
-        };
         let mut detector = WakeWordDetector::new(vec![wake_word.to_string()])?;
         let mut capture = AudioCapture::new()?;
         let mut playback = AudioPlayback::new()?;
@@ -814,11 +741,15 @@ impl Daemon {
                         &capture,
                         &mut playback,
                         &mut detector,
-                        &stt,
-                        &tts,
-                        &agent,
+                        &synapse,
+                        &model_id,
+                        &system_prompt,
+                        max_tokens,
+                        &stt_model,
+                        &tts_model,
+                        &tts_voice,
+                        tts_speed,
                         voice_context.as_deref(),
-                        &tool_policy,
                     ).await {
                         tracing::error!(error = %e, "voice processing error");
                     }
@@ -837,11 +768,15 @@ impl Daemon {
         capture: &AudioCapture,
         playback: &mut AudioPlayback,
         detector: &mut WakeWordDetector,
-        stt: &SpeechToText,
-        tts: &TextToSpeech,
-        agent: &Arc<Mutex<Agent>>,
+        synapse: &Arc<SynapseClient>,
+        model_id: &str,
+        system_prompt: &str,
+        max_tokens: u32,
+        stt_model: &str,
+        tts_model: &str,
+        tts_voice: &str,
+        tts_speed: f64,
         voice_context: Option<&str>,
-        tool_policy: &Arc<crate::tools::ToolPolicy>,
     ) -> Result<()> {
         let samples = capture.peek_buffer();
 
@@ -861,15 +796,18 @@ impl Daemon {
                 tracing::debug!(samples = speech_samples.len(), "checking for wake word");
 
                 let wav = samples_to_wav(&speech_samples, SAMPLE_RATE)?;
-                if let Ok(transcript) = stt.transcribe(&wav).await {
-                    tracing::debug!(transcript = %transcript, "transcribed");
+                let transcription = synapse
+                    .transcribe(wav.into(), "audio.wav", stt_model)
+                    .await;
+                if let Ok(result) = transcription {
+                    tracing::debug!(transcript = %result.text, "transcribed");
 
-                    if detector.check_wake_word(&transcript) {
-                        let command = extract_command(&transcript, wake_word);
+                    if detector.check_wake_word(&result.text) {
+                        let command = extract_command(&result.text, wake_word);
                         if command.is_empty() {
-                            speak(playback, tts, "Yes?").await?;
+                            speak(playback, synapse, tts_model, tts_voice, tts_speed, "Yes?").await?;
                         } else {
-                            handle_voice_command(playback, tts, agent, &command, voice_context, tool_policy).await?;
+                            handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &command, voice_context).await?;
                         }
                         detector.reset();
                     }
@@ -880,14 +818,14 @@ impl Daemon {
             capture.clear_buffer();
 
             let wav = samples_to_wav(&speech_samples, SAMPLE_RATE)?;
-            match stt.transcribe(&wav).await {
-                Ok(transcript) => {
-                    tracing::info!(command = %transcript, "command received");
-                    handle_voice_command(playback, tts, agent, &transcript, voice_context, tool_policy).await?;
+            match synapse.transcribe(wav.into(), "audio.wav", stt_model).await {
+                Ok(result) => {
+                    tracing::info!(command = %result.text, "command received");
+                    handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &result.text, voice_context).await?;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "STT failed");
-                    speak(playback, tts, "Sorry, I didn't catch that").await?;
+                    speak(playback, synapse, tts_model, tts_voice, tts_speed, "Sorry, I didn't catch that").await?;
                 }
             }
             detector.reset();
@@ -1007,14 +945,17 @@ async fn check_pairing<C: Channel>(
 async fn handle_channel_messages<C: Channel + Send + 'static>(
     channel_name: &str,
     mut rx: mpsc::Receiver<IncomingMessage>,
-    agent: Arc<Mutex<Agent>>,
+    synapse: Arc<SynapseClient>,
+    model_id: String,
+    system_prompt: String,
+    max_tokens: u32,
     channel: C,
     session_repo: SessionRepo,
     user_repo: UserRepo,
     memory_repo: crate::db::MemoryRepo,
     persona_id: String,
     persona_system_prompt: Option<String>,
-    tool_policy: Arc<crate::tools::ToolPolicy>,
+    _tool_policy: Arc<crate::tools::ToolPolicy>,
     pairing_manager: Arc<PairingManager>,
     attachment_processor: Arc<AttachmentProcessor>,
     hook_manager: Arc<HookManager>,
@@ -1196,18 +1137,30 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 }
             }
 
-            // Process with agent
-            let mut agent = agent.lock().await;
-            agent.clear();
+            // Process with Synapse
+            let request = synapse_client::ChatRequest {
+                model: model_id.clone(),
+                messages: vec![
+                    synapse_client::Message::system(&system_prompt),
+                    synapse_client::Message::user(&augmented_prompt),
+                ],
+                stream: false,
+                temperature: None,
+                top_p: None,
+                max_tokens: Some(max_tokens),
+                stop: None,
+                tools: None,
+                tool_choice: None,
+            };
 
-            // Apply tool filter based on channel policy
-            let allowed_tools = tool_policy.allowed_tools(channel_name);
-            agent.set_tool_filter(Some(allowed_tools));
-
-            match agent.chat(&augmented_prompt, |_| {}).await {
-                Ok(response) => response,
+            match synapse.chat_completion(&request).await {
+                Ok(resp) => resp
+                    .choices
+                    .first()
+                    .and_then(|c| c.message.content.clone())
+                    .unwrap_or_default(),
                 Err(e) => {
-                    tracing::error!(error = %e, "agent error");
+                    tracing::error!(error = %e, "synapse error");
                     "Sorry, I encountered an error processing your message.".to_string()
                 }
             }
@@ -1252,13 +1205,18 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
 }
 
 /// Handle a voice command
+#[allow(clippy::too_many_arguments)]
 async fn handle_voice_command(
     playback: &mut AudioPlayback,
-    tts: &TextToSpeech,
-    agent: &Arc<Mutex<Agent>>,
+    synapse: &Arc<SynapseClient>,
+    model_id: &str,
+    system_prompt: &str,
+    max_tokens: u32,
+    tts_model: &str,
+    tts_voice: &str,
+    tts_speed: f64,
     command: &str,
     voice_context: Option<&str>,
-    tool_policy: &Arc<crate::tools::ToolPolicy>,
 ) -> Result<()> {
     tracing::info!(command, "processing voice command");
 
@@ -1271,28 +1229,57 @@ async fn handle_voice_command(
         _ => command.to_string(),
     };
 
-    let response = {
-        let mut agent = agent.lock().await;
-        agent.clear(); // Clear since we're not tracking voice sessions yet
-
-        // Apply tool filter based on voice channel policy (full access)
-        let allowed_tools = tool_policy.allowed_tools("voice");
-        agent.set_tool_filter(Some(allowed_tools));
-
-        agent
-            .chat(&prompt, |_| {})
-            .await
-            .map_err(|e| Error::Agent(e.to_string()))?
+    let request = synapse_client::ChatRequest {
+        model: model_id.to_string(),
+        messages: vec![
+            synapse_client::Message::system(system_prompt),
+            synapse_client::Message::user(&prompt),
+        ],
+        stream: false,
+        temperature: None,
+        top_p: None,
+        max_tokens: Some(max_tokens),
+        stop: None,
+        tools: None,
+        tool_choice: None,
     };
 
-    tracing::debug!(response_len = response.len(), "agent responded");
-    speak(playback, tts, &response).await
+    let response = synapse
+        .chat_completion(&request)
+        .await
+        .map_err(|e| Error::Agent(e.to_string()))?;
+
+    let text = response
+        .choices
+        .first()
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_default();
+
+    tracing::debug!(response_len = text.len(), "synapse responded");
+    speak(playback, synapse, tts_model, tts_voice, tts_speed, &text).await
 }
 
-/// Speak via TTS
-async fn speak(playback: &mut AudioPlayback, tts: &TextToSpeech, text: &str) -> Result<()> {
+/// Speak via Synapse TTS
+async fn speak(
+    playback: &mut AudioPlayback,
+    synapse: &SynapseClient,
+    tts_model: &str,
+    tts_voice: &str,
+    tts_speed: f64,
+    text: &str,
+) -> Result<()> {
     tracing::debug!(text, "speaking");
-    let audio = tts.synthesize(text).await?;
+    let request = synapse_client::SpeechRequest {
+        model: tts_model.to_string(),
+        input: text.to_string(),
+        voice: tts_voice.to_string(),
+        response_format: None,
+        speed: Some(tts_speed),
+    };
+    let audio = synapse
+        .synthesize(&request)
+        .await
+        .map_err(|e| Error::Tts(e.to_string()))?;
     playback.play_mp3(&audio).await
 }
 
