@@ -141,8 +141,9 @@ async fn run_plugin_entry(
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
+    // TODO: add "wasm" arm using Extism for sandboxed execution of untrusted plugins
     let mut cmd = match ext {
-        "js" | "ts" => {
+        "js" | "ts" | "mjs" | "mts" => {
             let mut c = tokio::process::Command::new("bun");
             c.arg(entry_path);
             c
