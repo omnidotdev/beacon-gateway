@@ -116,6 +116,19 @@ async fn handle_socket(
         None
     };
 
+    // Cloud mode: require valid JWT
+    if state.cloud_mode && gatekeeper_user_id.is_none() {
+        tracing::warn!(session_id = %session_id, "cloud mode: rejecting unauthenticated WebSocket");
+        let error = WsOutgoing::Error {
+            code: "auth_required".to_string(),
+            message: "Authentication required. Please sign in.".to_string(),
+        };
+        if let Ok(msg) = serde_json::to_string(&error) {
+            let _ = sender.send(Message::Text(msg.into())).await;
+        }
+        return;
+    }
+
     // Create channel for sending messages back to client
     let (tx, mut rx) = mpsc::channel::<WsOutgoing>(32);
 
@@ -319,9 +332,9 @@ async fn handle_chat_message(
 
     let model = model_override.unwrap_or_else(|| state.llm_model.clone());
 
-    // Fetch MCP tools from Synapse if available
+    // Fetch MCP tools from Synapse and plugins if available
     let tools = if let Some(ref synapse) = state.synapse {
-        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse));
+        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), state.plugin_manager.clone());
         executor.list_tools().await.ok()
     } else {
         None
@@ -445,7 +458,7 @@ async fn handle_chat_message(
             });
 
             // Execute each tool call
-            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse));
+            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), state.plugin_manager.clone());
             for tc in &pending_tool_calls {
                 let result = executor
                     .execute(&tc.name, &tc.arguments)

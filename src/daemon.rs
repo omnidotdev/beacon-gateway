@@ -130,6 +130,17 @@ impl Daemon {
         // Get tool policy from persona
         let tool_policy = Arc::new(self.config.persona.tool_policy());
 
+        // Initialize plugin manager
+        let plugin_manager: crate::api::plugins::SharedPluginManager = {
+            let mut pm = crate::plugins::PluginManager::new();
+            let dirs = crate::plugins::default_plugin_dirs();
+            let loaded = pm.load_all(&dirs);
+            if !loaded.is_empty() {
+                tracing::info!(count = loaded.len(), plugins = ?loaded, "loaded plugins");
+            }
+            Arc::new(tokio::sync::Mutex::new(pm))
+        };
+
         if !self.config.persona.knowledge.packs.is_empty() {
             tracing::warn!(
                 count = self.config.persona.knowledge.packs.len(),
@@ -191,7 +202,9 @@ impl Daemon {
         .manifold_url(self.config.api_server.manifold_url.clone())
         .static_dir(self.config.api_server.static_dir.clone())
         .persona_knowledge(self.config.persona.knowledge.inline.clone())
-        .max_context_tokens(self.config.persona.memory.max_context_tokens);
+        .max_context_tokens(self.config.persona.memory.max_context_tokens)
+        .plugin_manager(plugin_manager.clone())
+        .cloud_mode(self.config.cloud_mode);
 
         // Only set synapse client if configured
         if let Some(ref synapse) = synapse {
@@ -242,6 +255,7 @@ impl Daemon {
                 Arc::clone(&pairing_manager),
                 Arc::clone(&attachment_processor),
                 Arc::clone(&hook_manager),
+                plugin_manager.clone(),
             )
             .await;
         } else {
@@ -258,6 +272,7 @@ impl Daemon {
                 MAX_TOKENS,
                 Arc::clone(&tool_policy),
                 &mut shutdown_rx,
+                plugin_manager,
             )
             .await?;
         } else {
@@ -285,6 +300,7 @@ impl Daemon {
         pairing_manager: Arc<PairingManager>,
         attachment_processor: Arc<AttachmentProcessor>,
         hook_manager: Arc<HookManager>,
+        plugin_manager: crate::api::plugins::SharedPluginManager,
     ) {
         let persona_id = self.config.persona.id().to_string();
         let persona_system_prompt = self.config.persona.system_prompt().map(String::from);
@@ -311,6 +327,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "discord",
@@ -331,6 +348,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -357,6 +375,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "slack",
@@ -377,6 +396,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -407,6 +427,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "whatsapp",
@@ -427,6 +448,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -456,6 +478,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "signal",
@@ -476,6 +499,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -508,6 +532,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "imessage",
@@ -528,6 +553,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -562,6 +588,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "matrix",
@@ -582,6 +609,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -618,6 +646,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "teams",
@@ -638,6 +667,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -664,6 +694,7 @@ impl Daemon {
                 let attachments = Arc::clone(&attachment_processor);
                 let hooks = Arc::clone(&hook_manager);
                 let knowledge = knowledge_chunks.clone();
+                let pm = plugin_manager.clone();
                 tokio::spawn(async move {
                     handle_channel_messages(
                         "google_chat",
@@ -684,6 +715,7 @@ impl Daemon {
                         hooks,
                         knowledge,
                         max_context_tokens,
+                        pm,
                     )
                     .await;
                 });
@@ -699,9 +731,13 @@ impl Daemon {
         model_id: String,
         system_prompt: String,
         max_tokens: u32,
-        _tool_policy: Arc<crate::tools::ToolPolicy>,
+        tool_policy: Arc<crate::tools::ToolPolicy>,
         shutdown_rx: &mut mpsc::Receiver<()>,
+        plugin_manager: crate::api::plugins::SharedPluginManager,
     ) -> Result<()> {
+        // Available for future tool filtering by channel policy
+        let _ = &tool_policy;
+
         let wake_word = self
             .config
             .persona
@@ -750,6 +786,7 @@ impl Daemon {
                         &tts_voice,
                         tts_speed,
                         voice_context.as_deref(),
+                        &plugin_manager,
                     ).await {
                         tracing::error!(error = %e, "voice processing error");
                     }
@@ -777,6 +814,7 @@ impl Daemon {
         tts_voice: &str,
         tts_speed: f64,
         voice_context: Option<&str>,
+        plugin_manager: &crate::api::plugins::SharedPluginManager,
     ) -> Result<()> {
         let samples = capture.peek_buffer();
 
@@ -807,7 +845,7 @@ impl Daemon {
                         if command.is_empty() {
                             speak(playback, synapse, tts_model, tts_voice, tts_speed, "Yes?").await?;
                         } else {
-                            handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &command, voice_context).await?;
+                            handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &command, voice_context, plugin_manager).await?;
                         }
                         detector.reset();
                     }
@@ -821,7 +859,7 @@ impl Daemon {
             match synapse.transcribe(wav.into(), "audio.wav", stt_model).await {
                 Ok(result) => {
                     tracing::info!(command = %result.text, "command received");
-                    handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &result.text, voice_context).await?;
+                    handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &result.text, voice_context, plugin_manager).await?;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "STT failed");
@@ -955,13 +993,17 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
     memory_repo: crate::db::MemoryRepo,
     persona_id: String,
     persona_system_prompt: Option<String>,
-    _tool_policy: Arc<crate::tools::ToolPolicy>,
+    tool_policy: Arc<crate::tools::ToolPolicy>,
     pairing_manager: Arc<PairingManager>,
     attachment_processor: Arc<AttachmentProcessor>,
     hook_manager: Arc<HookManager>,
     knowledge_chunks: Vec<crate::persona::KnowledgeChunk>,
     max_context_tokens: usize,
+    plugin_manager: crate::api::plugins::SharedPluginManager,
 ) {
+    // Available for future tool filtering by channel policy
+    let _ = &tool_policy;
+
     tracing::info!(channel = channel_name, "channel handler started");
 
     while let Some(msg) = rx.recv().await {
@@ -1137,32 +1179,87 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 }
             }
 
-            // Process with Synapse
-            let request = synapse_client::ChatRequest {
-                model: model_id.clone(),
-                messages: vec![
-                    synapse_client::Message::system(&system_prompt),
-                    synapse_client::Message::user(&augmented_prompt),
-                ],
-                stream: false,
-                temperature: None,
-                top_p: None,
-                max_tokens: Some(max_tokens),
-                stop: None,
-                tools: None,
-                tool_choice: None,
+            // Fetch available tools from Synapse MCP and plugins
+            let tools = {
+                let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+                executor.list_tools().await.ok()
             };
 
-            match synapse.chat_completion(&request).await {
-                Ok(resp) => resp
-                    .choices
-                    .first()
-                    .and_then(|c| c.message.content.clone())
-                    .unwrap_or_default(),
-                Err(e) => {
-                    tracing::error!(error = %e, "synapse error");
-                    "Sorry, I encountered an error processing your message.".to_string()
+            // Process with Synapse (multi-turn tool loop)
+            {
+                let mut messages = vec![
+                    synapse_client::Message::system(&system_prompt),
+                    synapse_client::Message::user(&augmented_prompt),
+                ];
+                let mut final_response = String::new();
+                let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+
+                for _turn in 0..10 {
+                    let request = synapse_client::ChatRequest {
+                        model: model_id.clone(),
+                        messages: messages.clone(),
+                        stream: false,
+                        temperature: None,
+                        top_p: None,
+                        max_tokens: Some(max_tokens),
+                        stop: None,
+                        tools: tools.clone(),
+                        tool_choice: None,
+                    };
+
+                    match synapse.chat_completion(&request).await {
+                        Ok(resp) => {
+                            let choice = match resp.choices.first() {
+                                Some(c) => c,
+                                None => break,
+                            };
+
+                            if let Some(ref text) = choice.message.content {
+                                final_response.push_str(text);
+                            }
+
+                            if choice.finish_reason.as_deref() == Some("tool_calls") {
+                                if let Some(ref tool_calls) = choice.message.tool_calls {
+                                    let assistant_content = choice
+                                        .message
+                                        .content
+                                        .as_ref()
+                                        .map(|t| serde_json::Value::String(t.clone()))
+                                        .unwrap_or(serde_json::Value::Null);
+
+                                    messages.push(synapse_client::Message {
+                                        role: "assistant".to_owned(),
+                                        content: assistant_content,
+                                        tool_calls: Some(tool_calls.clone()),
+                                        tool_call_id: None,
+                                    });
+
+                                    for tc in tool_calls {
+                                        let result = executor
+                                            .execute(&tc.function.name, &tc.function.arguments)
+                                            .await
+                                            .unwrap_or_else(|e| format!("Error: {e}"));
+
+                                        messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                    }
+
+                                    continue;
+                                }
+                            }
+
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "synapse error");
+                            final_response =
+                                "Sorry, I encountered an error processing your message."
+                                    .to_string();
+                            break;
+                        }
+                    }
                 }
+
+                final_response
             }
         };
 
@@ -1217,11 +1314,11 @@ async fn handle_voice_command(
     tts_speed: f64,
     command: &str,
     voice_context: Option<&str>,
+    plugin_manager: &crate::api::plugins::SharedPluginManager,
 ) -> Result<()> {
     tracing::info!(command, "processing voice command");
 
     // TODO: inject knowledge into voice path
-    // Build prompt with context if available
     let prompt = match voice_context {
         Some(ctx) if !ctx.is_empty() => {
             format!("<user-context>\n{ctx}\n</user-context>\n\n{command}")
@@ -1229,34 +1326,81 @@ async fn handle_voice_command(
         _ => command.to_string(),
     };
 
-    let request = synapse_client::ChatRequest {
-        model: model_id.to_string(),
-        messages: vec![
-            synapse_client::Message::system(system_prompt),
-            synapse_client::Message::user(&prompt),
-        ],
-        stream: false,
-        temperature: None,
-        top_p: None,
-        max_tokens: Some(max_tokens),
-        stop: None,
-        tools: None,
-        tool_choice: None,
+    // Fetch available tools from Synapse MCP and plugins
+    let tools = {
+        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
+        executor.list_tools().await.ok()
     };
 
-    let response = synapse
-        .chat_completion(&request)
-        .await
-        .map_err(|e| Error::Agent(e.to_string()))?;
+    let mut messages = vec![
+        synapse_client::Message::system(system_prompt),
+        synapse_client::Message::user(&prompt),
+    ];
+    let mut final_text = String::new();
+    let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
 
-    let text = response
-        .choices
-        .first()
-        .and_then(|c| c.message.content.clone())
-        .unwrap_or_default();
+    for _turn in 0..10 {
+        let request = synapse_client::ChatRequest {
+            model: model_id.to_string(),
+            messages: messages.clone(),
+            stream: false,
+            temperature: None,
+            top_p: None,
+            max_tokens: Some(max_tokens),
+            stop: None,
+            tools: tools.clone(),
+            tool_choice: None,
+        };
 
-    tracing::debug!(response_len = text.len(), "synapse responded");
-    speak(playback, synapse, tts_model, tts_voice, tts_speed, &text).await
+        let response = synapse
+            .chat_completion(&request)
+            .await
+            .map_err(|e| Error::Agent(e.to_string()))?;
+
+        let choice = match response.choices.first() {
+            Some(c) => c,
+            None => break,
+        };
+
+        // Overwrite each turn so we speak only the final answer
+        if let Some(ref text) = choice.message.content {
+            final_text = text.clone();
+        }
+
+        if choice.finish_reason.as_deref() == Some("tool_calls") {
+            if let Some(ref tool_calls) = choice.message.tool_calls {
+                let assistant_content = choice
+                    .message
+                    .content
+                    .as_ref()
+                    .map(|t| serde_json::Value::String(t.clone()))
+                    .unwrap_or(serde_json::Value::Null);
+
+                messages.push(synapse_client::Message {
+                    role: "assistant".to_owned(),
+                    content: assistant_content,
+                    tool_calls: Some(tool_calls.clone()),
+                    tool_call_id: None,
+                });
+
+                for tc in tool_calls {
+                    let result = executor
+                        .execute(&tc.function.name, &tc.function.arguments)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                    messages.push(synapse_client::Message::tool(&tc.id, &result));
+                }
+
+                continue;
+            }
+        }
+
+        break;
+    }
+
+    tracing::debug!(response_len = final_text.len(), "synapse responded");
+    speak(playback, synapse, tts_model, tts_voice, tts_speed, &final_text).await
 }
 
 /// Speak via Synapse TTS

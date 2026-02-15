@@ -24,6 +24,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
     let memory_repo = MemoryRepo::new(db.clone());
     let skill_repo = SkillRepo::new(db.clone());
 
+    let browser = beacon_gateway::api::browser::default_browser();
     let canvas = Arc::new(Mutex::new(Canvas::new()));
 
     let state = Arc::new(beacon_gateway::api::ApiState {
@@ -49,7 +50,10 @@ fn build_test_router(db: DbPool) -> axum::Router {
         tts_voice: "alloy".to_string(),
         tts_speed: 1.0,
         model_info: None,
+        browser,
         canvas,
+        node_registry: Arc::new(Mutex::new(beacon_gateway::nodes::NodeRegistry::new())),
+        plugin_manager: Arc::new(Mutex::new(beacon_gateway::plugins::PluginManager::new())),
         key_resolver: None,
         jwt_cache: None,
         persona_knowledge: vec![],

@@ -2,12 +2,16 @@
 
 pub mod admin;
 mod auth;
+pub mod browser;
 pub mod canvas;
 pub mod health;
 pub mod jwt;
+pub mod nodes;
 pub mod pairing;
 pub mod personas;
+pub mod plugins;
 pub mod providers;
+pub mod rate_limit;
 pub mod skills;
 pub mod voice;
 pub mod webhooks;
@@ -28,6 +32,7 @@ use crate::canvas::Canvas;
 use crate::channels::{TeamsChannel, TelegramChannel};
 use crate::context::ContextConfig;
 use crate::db::{DbPool, MemoryRepo, SessionRepo, SkillRepo, UserRepo};
+use crate::nodes::NodeRegistry;
 use crate::tools::ToolPolicy;
 use crate::Result;
 
@@ -71,11 +76,16 @@ pub struct ApiState {
     pub tts_voice: String,
     pub tts_speed: f64,
     pub model_info: Option<ModelInfo>,
+    pub browser: browser::SharedBrowser,
     pub canvas: Arc<Mutex<Canvas>>,
+    pub node_registry: nodes::SharedNodeRegistry,
+    pub plugin_manager: plugins::SharedPluginManager,
     pub key_resolver: Option<Arc<crate::providers::KeyResolver>>,
     pub jwt_cache: Option<Arc<jwt::JwksCache>>,
     pub persona_knowledge: Vec<crate::persona::KnowledgeChunk>,
     pub max_context_tokens: usize,
+    pub cloud_mode: bool,
+    pub rate_limiter: Option<rate_limit::SharedLimiter>,
 }
 
 /// Configuration for building an API server
@@ -104,6 +114,8 @@ pub struct ApiServerBuilder {
     jwt_cache: Option<Arc<jwt::JwksCache>>,
     persona_knowledge: Vec<crate::persona::KnowledgeChunk>,
     max_context_tokens: usize,
+    plugin_manager: Option<plugins::SharedPluginManager>,
+    cloud_mode: bool,
 }
 
 impl ApiServerBuilder {
@@ -142,6 +154,8 @@ impl ApiServerBuilder {
             jwt_cache: None,
             persona_knowledge: Vec::new(),
             max_context_tokens: 8000,
+            plugin_manager: None,
+            cloud_mode: false,
         }
     }
 
@@ -253,6 +267,20 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Enable cloud mode (requires JWT, enables rate limiting)
+    #[must_use]
+    pub fn cloud_mode(mut self, enabled: bool) -> Self {
+        self.cloud_mode = enabled;
+        self
+    }
+
+    /// Set a pre-built plugin manager (shared with daemon)
+    #[must_use]
+    pub fn plugin_manager(mut self, pm: plugins::SharedPluginManager) -> Self {
+        self.plugin_manager = Some(pm);
+        self
+    }
+
     /// Build the API server
     #[must_use]
     pub fn build(self) -> ApiServer {
@@ -264,12 +292,29 @@ impl ApiServerBuilder {
             .manifold_url
             .unwrap_or_else(|| "https://api.manifold.omni.dev".to_string());
 
+        let browser = browser::default_browser();
         let canvas = Arc::new(Mutex::new(Canvas::new()));
+        let node_registry = Arc::new(Mutex::new(NodeRegistry::new()));
+        let plugin_manager = self.plugin_manager.unwrap_or_else(|| {
+            let mut pm = crate::plugins::PluginManager::new();
+            let dirs = crate::plugins::default_plugin_dirs();
+            let loaded = pm.load_all(&dirs);
+            if !loaded.is_empty() {
+                tracing::info!(count = loaded.len(), plugins = ?loaded, "loaded plugins");
+            }
+            Arc::new(Mutex::new(pm))
+        });
 
         let active_persona = Arc::new(RwLock::new(ActivePersona {
             id: self.persona_id.clone(),
             system_prompt: self.persona_system_prompt.clone(),
         }));
+
+        let rate_limiter = if self.cloud_mode {
+            Some(rate_limit::create_limiter(120))
+        } else {
+            None
+        };
 
         let state = Arc::new(ApiState {
             db: self.db,
@@ -295,11 +340,16 @@ impl ApiServerBuilder {
             tts_voice: self.tts_voice,
             tts_speed: self.tts_speed,
             model_info: self.model_info,
+            browser,
             canvas,
+            node_registry,
+            plugin_manager,
             key_resolver: self.key_resolver,
             jwt_cache: self.jwt_cache,
             persona_knowledge: self.persona_knowledge,
             max_context_tokens: self.max_context_tokens,
+            cloud_mode: self.cloud_mode,
+            rate_limiter,
         });
 
         ApiServer {
@@ -340,7 +390,11 @@ impl ApiServer {
             .nest("/api/personas/marketplace", personas::router(self.state.clone()))
             .nest("/api/voice", voice::router(self.state.clone()))
             .nest("/api/webhooks", webhooks::router(self.state.clone()))
+            .nest("/api/browser", browser::router(self.state.browser.clone()))
+            .nest("/api/nodes", nodes::router(self.state.node_registry.clone()))
+            .nest("/api/plugins", plugins::router(self.state.plugin_manager.clone()))
             .nest("/ws", websocket::router(self.state.clone()))
+            .nest("/ws", nodes::ws_router(self.state.node_registry.clone()))
             .nest("/ws/canvas", canvas::router(self.state.canvas.clone()))
             .merge(health::router())
             .merge(health::ready_router(self.state.clone()));
@@ -354,6 +408,12 @@ impl ApiServer {
             router = router.fallback_service(serve_dir);
             tracing::info!(path = %static_dir.display(), "serving static files");
         }
+
+        // Rate limiting (cloud mode only)
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            self.state.clone(),
+            rate_limit::rate_limit_middleware,
+        ));
 
         // CORS layer for cross-origin requests from frontend
         let cors = CorsLayer::new()
@@ -370,6 +430,13 @@ impl ApiServer {
     ///
     /// Returns error if server fails to bind or run
     pub async fn run(self) -> Result<()> {
+        if self.state.cloud_mode {
+            tracing::info!("cloud mode enabled: JWT required, rate limiting active");
+            if self.state.synapse.is_none() {
+                tracing::error!("cloud mode enabled but no Synapse configured - users without BYOK keys will get errors");
+            }
+        }
+
         let addr = format!("0.0.0.0:{}", self.port);
         let listener = TcpListener::bind(&addr)
             .await

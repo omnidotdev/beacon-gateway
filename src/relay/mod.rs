@@ -8,8 +8,12 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use tokio::process::{Child, Command};
 
-use crate::Result;
+use crate::{Error, Result};
+
+/// Default local port Beacon listens on
+const DEFAULT_LOCAL_PORT: u16 = 18790;
 
 /// Cloud relay configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -18,6 +22,8 @@ pub struct RelayConfig {
     pub enabled: bool,
     /// Relay mode
     pub mode: RelayMode,
+    /// Local port Beacon is listening on
+    pub local_port: u16,
 }
 
 /// Relay mode options
@@ -64,14 +70,23 @@ impl RelayConfig {
     /// - `BEACON_SSH_PORT`: SSH tunnel remote port
     /// - `BEACON_SSH_KEY`: path to SSH private key
     /// - `BEACON_SSH_USER`: SSH username
+    /// - `BEACON_PORT`: local port Beacon listens on (default: 18790)
     #[must_use]
     pub fn from_env() -> Self {
         let enabled = std::env::var("BEACON_RELAY_ENABLED")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        let local_port = std::env::var("BEACON_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(DEFAULT_LOCAL_PORT);
+
         if !enabled {
-            return Self::default();
+            return Self {
+                local_port,
+                ..Self::default()
+            };
         }
 
         let mode = std::env::var("BEACON_RELAY_MODE")
@@ -79,7 +94,11 @@ impl RelayConfig {
             .map(|m| Self::parse_mode(&m))
             .unwrap_or_default();
 
-        Self { enabled, mode }
+        Self {
+            enabled,
+            mode,
+            local_port,
+        }
     }
 
     /// Parse relay mode from string
@@ -133,10 +152,53 @@ impl Default for RelayStatus {
     }
 }
 
+/// Find a binary on `PATH`
+///
+/// # Errors
+///
+/// Returns error if the binary is not found
+fn find_binary(name: &str) -> Result<PathBuf> {
+    which::which(name).map_err(|_| Error::Config(format!("`{name}` binary not found on PATH")))
+}
+
+/// Resolve the public URL for a Tailscale node
+///
+/// Runs `tailscale status --json` and extracts `Self.DNSName`
+async fn resolve_tailscale_url(tailscale_path: &PathBuf, port: u16) -> Option<String> {
+    let output = Command::new(tailscale_path)
+        .args(["status", "--json"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        tracing::warn!("failed to get Tailscale status");
+        return None;
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+
+    let dns_name = json
+        .get("Self")?
+        .get("DNSName")?
+        .as_str()?
+        .trim_end_matches('.');
+
+    // Port 443 is the default HTTPS port; omit from URL
+    let url = if port == 443 {
+        format!("https://{dns_name}")
+    } else {
+        format!("https://{dns_name}:{port}")
+    };
+
+    Some(url)
+}
+
 /// Relay manager for handling cloud relay connections
 pub struct RelayManager {
     config: RelayConfig,
     status: RelayStatus,
+    child: Option<Child>,
 }
 
 impl RelayManager {
@@ -157,38 +219,85 @@ impl RelayManager {
             connected: false,
         };
 
-        Self { config, status }
+        Self {
+            config,
+            status,
+            child: None,
+        }
     }
 
     /// Start the relay (if enabled)
     ///
     /// # Errors
     ///
-    /// Returns error if relay fails to start
-    pub fn start(&mut self) -> Result<()> {
+    /// Returns error if relay binary is missing or subprocess fails to spawn
+    pub async fn start(&mut self) -> Result<()> {
         if !self.config.enabled {
             tracing::debug!("relay disabled, skipping start");
             return Ok(());
         }
 
-        match &self.config.mode {
+        let local_port = self.config.local_port;
+
+        match self.config.mode.clone() {
             RelayMode::None => {
                 tracing::debug!("relay mode is none, skipping start");
             }
             RelayMode::TailscaleServe { port } => {
-                tracing::info!(port, "starting Tailscale Serve relay");
-                // TODO: implement Tailscale Serve integration
-                // `tailscale serve --bg https+insecure://localhost:{port}`
+                let ts = find_binary("tailscale")?;
+
+                tracing::info!(port, local_port, "starting Tailscale Serve relay");
+
+                let child = Command::new(&ts)
+                    .args([
+                        "serve",
+                        "--bg",
+                        &port.to_string(),
+                        &format!("https+insecure://localhost:{local_port}"),
+                    ])
+                    .spawn()
+                    .map_err(|e| {
+                        Error::Config(format!("failed to spawn tailscale serve: {e}"))
+                    })?;
+
+                self.child = Some(child);
+
+                if let Some(url) = resolve_tailscale_url(&ts, port).await {
+                    tracing::info!(url, "Tailscale Serve relay available");
+                    self.status.url = Some(url);
+                }
+
                 self.status.connected = true;
             }
             RelayMode::TailscaleFunnel { port, password } => {
+                let ts = find_binary("tailscale")?;
+
                 tracing::info!(
                     port,
+                    local_port,
                     has_password = password.is_some(),
                     "starting Tailscale Funnel relay"
                 );
-                // TODO: implement Tailscale Funnel integration
-                // `tailscale funnel --bg https+insecure://localhost:{port}`
+
+                let child = Command::new(&ts)
+                    .args([
+                        "funnel",
+                        "--bg",
+                        &port.to_string(),
+                        &format!("https+insecure://localhost:{local_port}"),
+                    ])
+                    .spawn()
+                    .map_err(|e| {
+                        Error::Config(format!("failed to spawn tailscale funnel: {e}"))
+                    })?;
+
+                self.child = Some(child);
+
+                if let Some(url) = resolve_tailscale_url(&ts, port).await {
+                    tracing::info!(url, "Tailscale Funnel relay available");
+                    self.status.url = Some(url);
+                }
+
                 self.status.connected = true;
             }
             RelayMode::SshTunnel {
@@ -197,16 +306,51 @@ impl RelayManager {
                 key_path,
                 user,
             } => {
+                let ssh = find_binary("ssh")?;
+
+                let ssh_user = user.as_deref().unwrap_or("root");
+
                 tracing::info!(
                     host,
                     port,
-                    user = user.as_deref().unwrap_or("(default)"),
+                    local_port,
+                    user = ssh_user,
                     key = key_path.as_ref().map(|p| p.display().to_string()),
                     "starting SSH tunnel relay"
                 );
-                // TODO: implement SSH tunnel
-                // `ssh -R {port}:localhost:{local_port} {user}@{host}`
+
+                let mut cmd = Command::new(&ssh);
+
+                cmd.args([
+                    "-R",
+                    &format!("{port}:localhost:{local_port}"),
+                ]);
+
+                if let Some(ref key) = key_path {
+                    cmd.args(["-i", &key.display().to_string()]);
+                }
+
+                cmd.args([
+                    &format!("{ssh_user}@{host}"),
+                    "-N",
+                    "-o", "ServerAliveInterval=30",
+                    "-o", "ServerAliveCountMax=3",
+                    "-o", "ExitOnForwardFailure=yes",
+                    "-o", "StrictHostKeyChecking=accept-new",
+                ]);
+
+                let child = cmd.spawn().map_err(|e| {
+                    Error::Config(format!("failed to spawn SSH tunnel: {e}"))
+                })?;
+
+                self.child = Some(child);
+                self.status.url = Some(format!("https://{host}:{port}"));
                 self.status.connected = true;
+
+                tracing::info!(
+                    url = self.status.url.as_deref().unwrap_or(""),
+                    "SSH tunnel relay started"
+                );
             }
         }
 
@@ -217,15 +361,53 @@ impl RelayManager {
     ///
     /// # Errors
     ///
-    /// Returns error if relay fails to stop
-    pub fn stop(&mut self) -> Result<()> {
+    /// Returns error if relay cleanup fails
+    pub async fn stop(&mut self) -> Result<()> {
         if !self.status.connected {
             return Ok(());
         }
 
         tracing::info!(mode = %self.status.mode, "stopping relay");
 
-        // TODO: implement actual cleanup for each mode
+        // Kill child process if running
+        if let Some(ref mut child) = self.child {
+            if let Err(e) = child.kill().await {
+                tracing::warn!(error = %e, "failed to kill relay child process");
+            }
+        }
+        self.child = None;
+
+        // Run Tailscale cleanup commands to remove the serve/funnel binding
+        match &self.config.mode {
+            RelayMode::TailscaleServe { port } => {
+                if let Ok(ts) = find_binary("tailscale") {
+                    let port_str = port.to_string();
+                    let output = Command::new(&ts)
+                        .args(["serve", "--remove", &port_str])
+                        .output()
+                        .await;
+
+                    if let Err(e) = output {
+                        tracing::warn!(error = %e, "failed to remove tailscale serve binding");
+                    }
+                }
+            }
+            RelayMode::TailscaleFunnel { port, .. } => {
+                if let Ok(ts) = find_binary("tailscale") {
+                    let port_str = port.to_string();
+                    let output = Command::new(&ts)
+                        .args(["funnel", "--remove", &port_str])
+                        .output()
+                        .await;
+
+                    if let Err(e) = output {
+                        tracing::warn!(error = %e, "failed to remove tailscale funnel binding");
+                    }
+                }
+            }
+            RelayMode::None | RelayMode::SshTunnel { .. } => {}
+        }
+
         self.status.connected = false;
         self.status.url = None;
 

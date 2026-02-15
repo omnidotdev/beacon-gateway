@@ -390,6 +390,42 @@ impl MemoryRepo {
         Ok(memories)
     }
 
+    /// Hybrid search combining text substring match with vector similarity
+    ///
+    /// When an embedding is provided, results from both text search and
+    /// vector search are merged and deduplicated. Text matches are
+    /// prioritized (appear first), followed by vector-similar results.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn search_hybrid(
+        &self,
+        user_id: &str,
+        query: &str,
+        embedding: Option<&[f32]>,
+        limit: usize,
+    ) -> Result<Vec<Memory>> {
+        // Start with text search results
+        let mut results = self.search(user_id, query)?;
+        let mut seen: std::collections::HashSet<String> =
+            results.iter().map(|m| m.id.clone()).collect();
+
+        // Merge in vector search results if embedding available
+        if let Some(emb) = embedding {
+            let similar = self.search_similar(user_id, emb, limit)?;
+            for mem in similar {
+                if seen.insert(mem.id.clone()) {
+                    results.push(mem);
+                }
+            }
+        }
+
+        // Truncate to limit
+        results.truncate(limit);
+        Ok(results)
+    }
+
     /// Delete a memory
     ///
     /// # Errors
@@ -586,6 +622,25 @@ mod tests {
         let context = repo.get_context(&user.id, 10).unwrap();
         assert_eq!(context.len(), 2);
         assert!(context[0].pinned); // Pinned first
+    }
+
+    #[test]
+    fn test_search_hybrid_text_only() {
+        let pool = db::init_memory().unwrap();
+        let repo = MemoryRepo::new(pool);
+
+        let user_repo = crate::db::UserRepo::new(repo.pool.clone());
+        let user = user_repo.find_or_create("hybrid_user").unwrap();
+
+        let m1 = Memory::new(user.id.clone(), MemoryCategory::Preference, "Likes dark mode".to_string());
+        let m2 = Memory::new(user.id.clone(), MemoryCategory::Fact, "Works at Acme Corp".to_string());
+        repo.add(&m1).unwrap();
+        repo.add(&m2).unwrap();
+
+        // Text-only hybrid search (no embedding)
+        let results = repo.search_hybrid(&user.id, "dark", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "Likes dark mode");
     }
 
     #[test]

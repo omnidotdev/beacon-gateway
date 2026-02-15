@@ -58,6 +58,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Config
 directories = "6"
 
+# Rate limiting
+governor = "0.8"
+
 # Async utilities
 futures = "0.3"
 async-trait = "0.1"
@@ -102,7 +105,7 @@ chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-
 
 # Synapse AI router client
 # TODO: switch to git dep when Synapse is FOSS (github:omnidotdev/synapse)
-synapse-client = { path = "../../../synapse/services/synapse-server/crates/synapse-client", features = ["agent-core"] }
+synapse-client = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-client", features = ["agent-core"] }
 
 # Agent core (shared LLM provider abstraction)
 agent-core = { git = "https://github.com/omnidotdev/agent-core" }

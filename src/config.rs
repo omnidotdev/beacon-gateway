@@ -64,6 +64,9 @@ pub struct Config {
 
     /// LLM model identifier for chat completions
     pub llm_model: String,
+
+    /// Cloud mode: requires JWT auth, enables rate limiting
+    pub cloud_mode: bool,
 }
 
 /// HTTP API server configuration
@@ -342,6 +345,9 @@ impl Config {
         let llm_model = std::env::var("BEACON_LLM_MODEL")
             .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
 
+        let cloud_mode = std::env::var("BEACON_CLOUD_MODE")
+            .is_ok_and(|v| v == "true" || v == "1");
+
         Ok(Self {
             persona,
             persona_cache_dir: cache_dir,
@@ -361,6 +367,7 @@ impl Config {
             service_key,
             synapse_url,
             llm_model,
+            cloud_mode,
         })
     }
 

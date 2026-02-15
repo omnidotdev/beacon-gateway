@@ -67,6 +67,21 @@ enum Command {
         #[arg(short, long)]
         user: String,
     },
+    /// Install beacon as a system service
+    Install,
+    /// Uninstall the beacon system service
+    Uninstall,
+    /// Show service status
+    Status,
+    /// Tail the service log file
+    Logs {
+        /// Number of lines to show
+        #[arg(short, long, default_value = "50")]
+        lines: usize,
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+    },
 }
 
 #[tokio::main]
@@ -104,6 +119,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Command::TestTts { text } => test_tts(&cli.persona, &text).await,
             Command::SetLifeJson { user, path } => set_life_json(&cli.persona, &user, &path),
             Command::GetLifeJson { user } => get_life_json(&cli.persona, &user),
+            Command::Install => cmd_install(&cli.persona, cli.port),
+            Command::Uninstall => cmd_uninstall(),
+            Command::Status => cmd_status(),
+            Command::Logs { lines, follow } => cmd_logs(lines, follow),
         };
     }
 
@@ -322,6 +341,63 @@ fn get_life_json(persona: &str, user_id: &str) -> anyhow::Result<()> {
             None => println!("User {user_id} has no life.json configured"),
         },
         Err(e) => println!("Error finding user: {e}"),
+    }
+
+    Ok(())
+}
+
+/// Install beacon as a system service
+fn cmd_install(persona: &str, port: u16) -> anyhow::Result<()> {
+    let binary = std::env::current_exe()?;
+    let config = beacon_gateway::lifecycle::ServiceConfig {
+        binary_path: binary,
+        persona: persona.to_string(),
+        port,
+        extra_args: Vec::new(),
+    };
+
+    beacon_gateway::lifecycle::install_service(&config)?;
+    println!("Beacon installed as system service");
+    Ok(())
+}
+
+/// Uninstall the beacon system service
+fn cmd_uninstall() -> anyhow::Result<()> {
+    beacon_gateway::lifecycle::uninstall_service()?;
+    println!("Beacon system service removed");
+    Ok(())
+}
+
+/// Show service status
+fn cmd_status() -> anyhow::Result<()> {
+    let status = beacon_gateway::lifecycle::service_status()?;
+    println!("Beacon service: {status}");
+    Ok(())
+}
+
+/// Tail the service log file
+fn cmd_logs(lines: usize, follow: bool) -> anyhow::Result<()> {
+    let log_path = beacon_gateway::lifecycle::log_path()
+        .ok_or_else(|| anyhow::anyhow!("could not determine log path"))?;
+
+    if !log_path.exists() {
+        anyhow::bail!("log file not found: {}", log_path.display());
+    }
+
+    let mut args = vec![
+        format!("-n{lines}"),
+        log_path.display().to_string(),
+    ];
+    if follow {
+        args.insert(0, "-f".to_string());
+    }
+
+    let status = std::process::Command::new("tail")
+        .args(&args)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("tail exited with {status}");
     }
 
     Ok(())
