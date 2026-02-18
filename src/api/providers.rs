@@ -27,7 +27,7 @@ pub enum ProviderType {
     Anthropic,
     /// `OpenRouter` (aggregated access to multiple providers)
     Openrouter,
-    /// TODO: Omni Credits (coming soon)
+    /// Omni Credits (pay-per-use via Synapse router)
     OmniCredits,
 }
 
@@ -208,20 +208,24 @@ async fn list_providers(
                 "Automatic fallbacks".to_string(),
             ],
         },
-        ProviderInfo {
-            id: ProviderType::OmniCredits,
-            name: "Omni Credits".to_string(),
-            description: "Omni's AI router with smart model selection and MCP support. No API keys needed".to_string(),
-            status: ProviderStatus::ComingSoon,
-            active: false,
-            api_key_url: None,
-            coming_soon: true,
-            features: vec![
-                "Smart routing".to_string(),
-                "MCP server aggregation".to_string(),
-                "Cost optimization".to_string(),
-                "Tool discovery".to_string(),
-            ],
+        {
+            let synapse_available = state.synapse.is_some();
+
+            ProviderInfo {
+                id: ProviderType::OmniCredits,
+                name: "Omni Credits".to_string(),
+                description: "Omni's AI router with smart model selection and MCP support. No API keys needed".to_string(),
+                status: if synapse_available { ProviderStatus::NotConfigured } else { ProviderStatus::ComingSoon },
+                active: false,
+                api_key_url: None,
+                coming_soon: !synapse_available,
+                features: vec![
+                    "Smart routing".to_string(),
+                    "MCP server aggregation".to_string(),
+                    "Cost optimization".to_string(),
+                    "Tool discovery".to_string(),
+                ],
+            }
         },
     ];
 
@@ -244,18 +248,16 @@ async fn configure_provider(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ConfigureProviderRequest>,
 ) -> impl IntoResponse {
-    // Reject coming-soon providers early
-    if matches!(request.provider, ProviderType::OmniCredits) {
-        let name = "Omni Credits";
-
+    // Reject Omni Credits configuration when Synapse is unavailable
+    if matches!(request.provider, ProviderType::OmniCredits) && state.synapse.is_none() {
         return (
             StatusCode::BAD_REQUEST,
             Json(ConfigureProviderResponse {
                 success: false,
-                message: "This provider is coming soon".to_string(),
+                message: "Omni Credits is not yet available".to_string(),
                 provider: ProviderInfo {
                     id: request.provider,
-                    name: name.to_string(),
+                    name: "Omni Credits".to_string(),
                     description: "Coming soon".to_string(),
                     status: ProviderStatus::ComingSoon,
                     active: false,
@@ -448,7 +450,7 @@ fn provider_info_stub(provider: &ProviderType, status: ProviderStatus) -> Provid
         active: matches!(&status, ProviderStatus::Configured),
         status,
         api_key_url: None,
-        coming_soon: matches!(provider, ProviderType::OmniCredits),
+        coming_soon: false,
         features: vec![],
     }
 }
