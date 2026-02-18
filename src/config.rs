@@ -59,6 +59,12 @@ pub struct Config {
     /// Service-to-service key for authenticating to identity service
     pub service_key: Option<String>,
 
+    /// Synapse API base URL for internal endpoints (key provisioning)
+    pub synapse_api_url: Option<String>,
+
+    /// Shared secret for authenticating to Synapse API internal endpoints
+    pub synapse_gateway_secret: Option<String>,
+
     /// Synapse AI router URL
     pub synapse_url: String,
 
@@ -358,6 +364,10 @@ impl Config {
         let auth_base_url = std::env::var("AUTH_BASE_URL").ok();
         let service_key = std::env::var("BEACON_SERVICE_KEY").ok();
 
+        // Synapse API (internal endpoints for key provisioning)
+        let synapse_api_url = std::env::var("SYNAPSE_API_URL").ok();
+        let synapse_gateway_secret = std::env::var("SYNAPSE_GATEWAY_SECRET").ok();
+
         // Synapse AI router
         let synapse_url = std::env::var("SYNAPSE_URL")
             .unwrap_or_else(|_| "http://localhost:6000".to_string());
@@ -409,6 +419,8 @@ impl Config {
             hooks,
             auth_base_url,
             service_key,
+            synapse_api_url,
+            synapse_gateway_secret,
             synapse_url,
             llm_model,
             cloud_mode,

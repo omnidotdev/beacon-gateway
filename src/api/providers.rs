@@ -143,10 +143,11 @@ async fn list_providers(
     State(state): State<Arc<ApiState>>,
 ) -> Json<ProvidersResponse> {
     // Check per-user configured providers if authenticated
-    let user_configured = if let Some(user_id) = extract_user_id(&headers, &state).await {
+    let user_id = extract_user_id(&headers, &state).await;
+    let user_configured = if let Some(ref uid) = user_id {
         if let Some(resolver) = &state.key_resolver {
             resolver
-                .list_configured(&user_id)
+                .list_configured(uid)
                 .await
                 .into_iter()
                 .filter(|c| c.has_user_key)
@@ -210,15 +211,32 @@ async fn list_providers(
         },
         {
             let synapse_available = state.synapse.is_some();
+            let provisioner_available = state.key_provisioner.is_some();
+            let has_cached_key = user_configured.contains(&"omni_credits".to_string());
+
+            let (omni_status, omni_active, omni_coming_soon) = if synapse_available && provisioner_available {
+                if user_id.is_some() || has_cached_key {
+                    // Authenticated user with provisioner = fully configured
+                    (ProviderStatus::Configured, true, false)
+                } else {
+                    // Not authenticated, sign in to activate
+                    (ProviderStatus::NotConfigured, false, false)
+                }
+            } else if synapse_available {
+                // Synapse but no provisioner
+                (ProviderStatus::NotConfigured, false, false)
+            } else {
+                (ProviderStatus::ComingSoon, false, true)
+            };
 
             ProviderInfo {
                 id: ProviderType::OmniCredits,
                 name: "Omni Credits".to_string(),
                 description: "Omni's AI router with smart model selection and MCP support. No API keys needed".to_string(),
-                status: if synapse_available { ProviderStatus::NotConfigured } else { ProviderStatus::ComingSoon },
-                active: false,
+                status: omni_status,
+                active: omni_active,
                 api_key_url: None,
-                coming_soon: !synapse_available,
+                coming_soon: omni_coming_soon,
                 features: vec![
                     "Smart routing".to_string(),
                     "MCP server aggregation".to_string(),
@@ -229,10 +247,24 @@ async fn list_providers(
         },
     ];
 
-    let active_provider = state.model_info.as_ref().map(|m| match m.provider.as_str() {
-        "anthropic" => ProviderType::Anthropic,
-        _ => ProviderType::Openai,
-    });
+    // Determine active provider: BYOK keys override Omni Credits
+    let has_byok = user_configured.iter().any(|p| p != "omni_credits");
+    let active_provider = if has_byok {
+        // User has a BYOK key -- use the env-based model_info to pick the right type
+        state.model_info.as_ref().map(|m| match m.provider.as_str() {
+            "anthropic" => ProviderType::Anthropic,
+            _ => ProviderType::Openai,
+        })
+    } else if user_configured.contains(&"omni_credits".to_string())
+        || (state.key_provisioner.is_some() && user_id.is_some())
+    {
+        Some(ProviderType::OmniCredits)
+    } else {
+        state.model_info.as_ref().map(|m| match m.provider.as_str() {
+            "anthropic" => ProviderType::Anthropic,
+            _ => ProviderType::Openai,
+        })
+    };
 
     Json(ProvidersResponse {
         providers,

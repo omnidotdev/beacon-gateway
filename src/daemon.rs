@@ -127,6 +127,19 @@ impl Daemon {
             (None, None)
         };
 
+        // Initialize key provisioner if Synapse API is configured
+        let key_provisioner =
+            if let (Some(api_url), Some(secret)) = (&self.config.synapse_api_url, &self.config.synapse_gateway_secret)
+            {
+                tracing::info!(url = %api_url, "key provisioning enabled via Synapse API");
+                Some(Arc::new(crate::providers::KeyProvisioner::new(
+                    api_url.clone(),
+                    secret.clone(),
+                )))
+            } else {
+                None
+            };
+
         // Get tool policy from persona
         let tool_policy = Arc::new(self.config.persona.tool_policy());
 
@@ -259,6 +272,10 @@ impl Daemon {
         .knowledge_cache_dir(self.config.knowledge_cache_dir.clone())
         .plugin_manager(plugin_manager.clone())
         .cloud_mode(self.config.cloud_mode);
+
+        if let Some(provisioner) = key_provisioner {
+            api_builder = api_builder.key_provisioner(provisioner);
+        }
 
         // Only set synapse client if configured
         if let Some(ref synapse) = synapse {

@@ -498,16 +498,27 @@ struct PendingToolCall {
     arguments: String,
 }
 
-/// Resolve a per-user Synapse client based on their BYOK key
+/// Resolve a per-user Synapse client based on their BYOK key or managed key
 ///
-/// Returns (client, model_id) if the user has a personal API key configured.
-/// The key is passed as Bearer auth to Synapse for provider routing.
+/// Resolution priority:
+/// 1. BYOK keys (anthropic, openai, openrouter from vault)
+/// 2. Cached Omni Credits key (from vault)
+/// 3. Auto-provision via Synapse API (if cloud mode + provisioner available)
+/// 4. Fallback: return None, caller uses shared `state.synapse`
 async fn resolve_user_synapse(
     resolver: &crate::providers::KeyResolver,
     user_id: &str,
     state: &Arc<ApiState>,
 ) -> Option<(Arc<SynapseClient>, String)> {
-    // Try Anthropic first, then OpenAI, then OpenRouter
+    let synapse_base_url = state
+        .synapse
+        .as_ref()
+        .map_or_else(
+            || "http://localhost:6000".to_string(),
+            |c| c.base_url().to_string(),
+        );
+
+    // Step 1: Try BYOK keys (Anthropic, OpenAI, OpenRouter)
     for provider_name in &["anthropic", "openai", "openrouter"] {
         if let Ok(Some(resolved)) = resolver.resolve(user_id, provider_name).await {
             if !resolved.is_user_key {
@@ -521,21 +532,62 @@ async fn resolve_user_synapse(
                 }
             });
 
-            // Create per-user SynapseClient with user's API key
-            let base_url = state
-                .synapse
-                .as_ref()
-                .map_or_else(
-                    || "http://localhost:6000".to_string(),
-                    |c| c.base_url().to_string(),
-                );
-
-            if let Ok(client) = SynapseClient::new(&base_url) {
+            if let Ok(client) = SynapseClient::new(&synapse_base_url) {
                 let client = client.with_api_key(resolved.api_key);
                 return Some((Arc::new(client), model));
             }
         }
     }
 
+    // Step 2: Try cached Omni Credits key from vault
+    if let Ok(Some(resolved)) = resolver.resolve(user_id, "omni_credits").await {
+        if resolved.is_user_key {
+            let model = crate::daemon::DEFAULT_MODEL.to_string();
+
+            if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+                let client = client.with_api_key(resolved.api_key);
+                return Some((Arc::new(client), model));
+            }
+        }
+    }
+
+    // Step 3: Auto-provision via Synapse API (cloud mode only)
+    if state.cloud_mode {
+        if let Some(provisioner) = &state.key_provisioner {
+            match provisioner.provision(user_id, None, None).await {
+                Ok(provisioned) => {
+                    tracing::info!(
+                        user_id = %user_id,
+                        plan = %provisioned.plan,
+                        "auto-provisioned managed key"
+                    );
+
+                    // Cache the provisioned key in Gatekeeper vault
+                    if let Err(e) = resolver
+                        .store(user_id, "omni_credits", &provisioned.api_key, None)
+                        .await
+                    {
+                        tracing::warn!(error = %e, "failed to cache provisioned key in vault");
+                    }
+
+                    let model = crate::daemon::DEFAULT_MODEL.to_string();
+
+                    if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+                        let client = client.with_api_key(provisioned.api_key);
+                        return Some((Arc::new(client), model));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        user_id = %user_id,
+                        "auto-provision failed, falling back to shared synapse"
+                    );
+                }
+            }
+        }
+    }
+
+    // Step 4: No personal key available, caller falls back to state.synapse
     None
 }

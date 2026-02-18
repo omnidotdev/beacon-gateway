@@ -318,7 +318,7 @@ impl KeyResolver {
     ///
     /// Probes each supported provider via the existing GET endpoint
     pub async fn list_configured(&self, user_id: &str) -> Vec<ConfiguredProvider> {
-        let providers = ["anthropic", "openai", "openrouter"];
+        let providers = ["anthropic", "openai", "openrouter", "omni_credits"];
 
         let mut results = Vec::with_capacity(providers.len());
 
