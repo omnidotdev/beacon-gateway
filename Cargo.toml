@@ -2,7 +2,7 @@
 name = "beacon-gateway"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 authors = ["Omni <team@omni.dev>"]
 description = "Voice and messaging gateway for AI assistants"
 license = "MIT"
