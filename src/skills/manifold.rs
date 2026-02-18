@@ -7,7 +7,7 @@
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::{Error, Persona, Result};
+use crate::{Error, KnowledgePack, Persona, Result};
 
 use super::{Skill, SkillSource};
 
@@ -241,6 +241,80 @@ impl ManifoldClient {
                         .description
                         .as_ref()
                         .is_some_and(|d| d.to_lowercase().contains(&query_lower))
+            })
+            .collect();
+
+        Ok(filtered)
+    }
+
+    // =========================================================================
+    // Knowledge pack methods
+    // =========================================================================
+
+    /// List knowledge packs from a namespace
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the response cannot be parsed
+    pub async fn list_knowledge_packs(&self, namespace: &str) -> Result<Vec<String>> {
+        tracing::debug!(namespace, "listing knowledge packs");
+
+        self.list_tags(namespace, "knowledge").await
+    }
+
+    /// Fetch a specific knowledge pack
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pack is not found or cannot be parsed
+    pub async fn get_knowledge_pack(
+        &self,
+        namespace: &str,
+        pack_name: &str,
+    ) -> Result<KnowledgePack> {
+        tracing::debug!(namespace, pack_name, "fetching knowledge pack");
+
+        let content = self
+            .fetch_artifact(namespace, "knowledge", pack_name)
+            .await?;
+
+        serde_json::from_str(&content).map_err(|e| Error::Manifold(e.to_string()))
+    }
+
+    /// Search knowledge packs by query
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search fails
+    pub async fn search_knowledge_packs(&self, query: &str) -> Result<Vec<KnowledgePack>> {
+        // TODO: implement cross-namespace search when Manifold supports it
+        let tags = self.list_knowledge_packs("community").await?;
+
+        let mut packs = Vec::new();
+        for tag in &tags {
+            match self.get_knowledge_pack("community", tag).await {
+                Ok(pack) => packs.push(pack),
+                Err(e) => {
+                    tracing::debug!(tag, error = %e, "skipping knowledge pack");
+                }
+            }
+        }
+
+        if query.is_empty() {
+            return Ok(packs);
+        }
+
+        let query_lower = query.to_lowercase();
+        let filtered: Vec<KnowledgePack> = packs
+            .into_iter()
+            .filter(|p| {
+                p.name.to_lowercase().contains(&query_lower)
+                    || p.description
+                        .as_ref()
+                        .is_some_and(|d| d.to_lowercase().contains(&query_lower))
+                    || p.tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
             })
             .collect();
 

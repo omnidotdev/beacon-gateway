@@ -7,6 +7,33 @@ use uuid::Uuid;
 use super::DbPool;
 use crate::{Error, Result};
 
+/// Column list for all memory SELECT queries
+const MEMORY_COLUMNS: &str = "id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel, content_hash, origin_device_id, updated_at, deleted_at, synced_at, cloud_id";
+
+/// Map a database row to a `MemoryRow`
+fn row_to_memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRow> {
+    Ok(MemoryRow {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        category: row.get(2)?,
+        content: row.get(3)?,
+        tags: row.get(4)?,
+        pinned: row.get(5)?,
+        access_count: row.get(6)?,
+        created_at: row.get(7)?,
+        accessed_at: row.get(8)?,
+        embedding: row.get(9)?,
+        source_session_id: row.get(10)?,
+        source_channel: row.get(11)?,
+        content_hash: row.get(12)?,
+        origin_device_id: row.get(13)?,
+        updated_at: row.get(14)?,
+        deleted_at: row.get(15)?,
+        synced_at: row.get(16)?,
+        cloud_id: row.get(17)?,
+    })
+}
+
 /// Memory categories
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,6 +93,18 @@ pub struct Memory {
     pub source_session_id: Option<String>,
     /// Source channel (where this memory was learned)
     pub source_channel: Option<String>,
+    /// SHA-256 hash of content for dedup across devices
+    pub content_hash: Option<String>,
+    /// Device ID that originally created this memory
+    pub origin_device_id: Option<String>,
+    /// Last time this memory was modified
+    pub updated_at: String,
+    /// Soft-delete tombstone timestamp
+    pub deleted_at: Option<String>,
+    /// Last time this memory was synced to the cloud
+    pub synced_at: Option<String>,
+    /// API-side UUID for cross-device identity
+    pub cloud_id: Option<String>,
 }
 
 impl Memory {
@@ -73,6 +112,7 @@ impl Memory {
     #[must_use]
     pub fn new(user_id: String, category: MemoryCategory, content: String) -> Self {
         let now = Utc::now();
+        let content_hash = Self::compute_content_hash(&content);
         Self {
             id: format!("mem_{}", Uuid::new_v4()),
             user_id,
@@ -86,7 +126,23 @@ impl Memory {
             embedding: None,
             source_session_id: None,
             source_channel: None,
+            content_hash: Some(content_hash),
+            origin_device_id: None,
+            updated_at: now.to_rfc3339(),
+            deleted_at: None,
+            synced_at: None,
+            cloud_id: None,
         }
+    }
+
+    /// Compute SHA-256 hash of content for dedup
+    #[must_use]
+    pub fn compute_content_hash(content: &str) -> String {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        hex::encode(hasher.finalize())
     }
 
     /// Add a tag to this memory
@@ -148,8 +204,8 @@ impl MemoryRepo {
             .map(|e| super::embedder::Embedder::to_bytes(e));
 
         conn.execute(
-            r"INSERT INTO memories (id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            r"INSERT INTO memories (id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel, content_hash, origin_device_id, updated_at, deleted_at, synced_at, cloud_id)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 memory.id,
                 memory.user_id,
@@ -163,6 +219,12 @@ impl MemoryRepo {
                 embedding_bytes,
                 memory.source_session_id,
                 memory.source_channel,
+                memory.content_hash,
+                memory.origin_device_id,
+                memory.updated_at,
+                memory.deleted_at,
+                memory.synced_at,
+                memory.cloud_id,
             ],
         )?;
 
@@ -187,25 +249,9 @@ impl MemoryRepo {
         let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
-            r"SELECT id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel
-              FROM memories WHERE id = ?1",
+            &format!("SELECT {} FROM memories WHERE id = ?1", MEMORY_COLUMNS),
             [id],
-            |row| {
-                Ok(MemoryRow {
-                    id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    category: row.get(2)?,
-                    content: row.get(3)?,
-                    tags: row.get(4)?,
-                    pinned: row.get(5)?,
-                    access_count: row.get(6)?,
-                    created_at: row.get(7)?,
-                    accessed_at: row.get(8)?,
-                    embedding: row.get(9)?,
-                    source_session_id: row.get(10)?,
-                    source_channel: row.get(11)?,
-                })
-            },
+            row_to_memory_row,
         );
 
         match result {
@@ -222,6 +268,27 @@ impl MemoryRepo {
         }
     }
 
+    /// Get a memory by ID without updating access stats (for sync operations)
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn get_without_access_update(&self, id: &str) -> Result<Option<Memory>> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+
+        let result = conn.query_row(
+            &format!("SELECT {} FROM memories WHERE id = ?1", MEMORY_COLUMNS),
+            [id],
+            row_to_memory_row,
+        );
+
+        match result {
+            Ok(row) => Ok(Some(row.into_memory())),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// List memories for a user, optionally filtered by category
     ///
     /// # Errors
@@ -232,38 +299,22 @@ impl MemoryRepo {
 
         let sql = category.map_or_else(
             || {
-                r"SELECT id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel
-                  FROM memories WHERE user_id = ?1
-                  ORDER BY pinned DESC, accessed_at DESC"
-                    .to_string()
+                format!(
+                    "SELECT {} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC",
+                    MEMORY_COLUMNS
+                )
             },
             |cat| {
                 format!(
-                    r"SELECT id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel
-                      FROM memories WHERE user_id = ?1 AND category = '{}'
-                      ORDER BY pinned DESC, accessed_at DESC",
+                    "SELECT {} FROM memories WHERE user_id = ?1 AND category = '{}' AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC",
+                    MEMORY_COLUMNS,
                     cat.as_str()
                 )
             },
         );
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([user_id], |row| {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                category: row.get(2)?,
-                content: row.get(3)?,
-                tags: row.get(4)?,
-                pinned: row.get(5)?,
-                access_count: row.get(6)?,
-                created_at: row.get(7)?,
-                accessed_at: row.get(8)?,
-                embedding: row.get(9)?,
-                source_session_id: row.get(10)?,
-                source_channel: row.get(11)?,
-            })
-        })?;
+        let rows = stmt.query_map([user_id], row_to_memory_row)?;
 
         let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
         Ok(memories)
@@ -278,28 +329,13 @@ impl MemoryRepo {
         let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
         let pattern = format!("%{query}%");
 
-        let mut stmt = conn.prepare(
-            r"SELECT id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel
-              FROM memories WHERE user_id = ?1 AND (content LIKE ?2 OR tags LIKE ?2)
-              ORDER BY pinned DESC, accessed_at DESC",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM memories WHERE user_id = ?1 AND (content LIKE ?2 OR tags LIKE ?2) AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC",
+            MEMORY_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
-        let rows = stmt.query_map([user_id, &pattern], |row| {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                category: row.get(2)?,
-                content: row.get(3)?,
-                tags: row.get(4)?,
-                pinned: row.get(5)?,
-                access_count: row.get(6)?,
-                created_at: row.get(7)?,
-                accessed_at: row.get(8)?,
-                embedding: row.get(9)?,
-                source_session_id: row.get(10)?,
-                source_channel: row.get(11)?,
-            })
-        })?;
+        let rows = stmt.query_map([user_id, &pattern], row_to_memory_row)?;
 
         let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
         Ok(memories)
@@ -313,31 +349,15 @@ impl MemoryRepo {
     pub fn get_context(&self, user_id: &str, max_items: usize) -> Result<Vec<Memory>> {
         let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
 
-        let mut stmt = conn.prepare(
-            r"SELECT id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel
-              FROM memories WHERE user_id = ?1
-              ORDER BY pinned DESC, access_count DESC, accessed_at DESC
-              LIMIT ?2",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, access_count DESC, accessed_at DESC LIMIT ?2",
+            MEMORY_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         #[allow(clippy::cast_possible_wrap)]
         let limit = max_items as i64;
-        let rows = stmt.query_map(rusqlite::params![user_id, limit], |row| {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                category: row.get(2)?,
-                content: row.get(3)?,
-                tags: row.get(4)?,
-                pinned: row.get(5)?,
-                access_count: row.get(6)?,
-                created_at: row.get(7)?,
-                accessed_at: row.get(8)?,
-                embedding: row.get(9)?,
-                source_session_id: row.get(10)?,
-                source_channel: row.get(11)?,
-            })
-        })?;
+        let rows = stmt.query_map(rusqlite::params![user_id, limit], row_to_memory_row)?;
 
         let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
         Ok(memories)
@@ -354,8 +374,14 @@ impl MemoryRepo {
 
         // Use sqlite-vec to find similar memories
         // Join with memories table to filter by user_id
-        let mut stmt = conn.prepare(
-            r"SELECT m.id, m.user_id, m.category, m.content, m.tags, m.pinned, m.access_count, m.created_at, m.accessed_at, m.embedding, m.source_session_id, m.source_channel
+        let prefixed_columns = MEMORY_COLUMNS
+            .split(", ")
+            .map(|c| format!("m.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            r"SELECT {prefixed_columns}
               FROM memories m
               INNER JOIN (
                   SELECT memory_id, distance
@@ -364,27 +390,13 @@ impl MemoryRepo {
                   ORDER BY distance
                   LIMIT ?2
               ) v ON m.id = v.memory_id
-              WHERE m.user_id = ?3
-              ORDER BY v.distance",
-        )?;
+              WHERE m.user_id = ?3 AND m.deleted_at IS NULL
+              ORDER BY v.distance"
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         #[allow(clippy::cast_possible_wrap)]
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64, user_id], |row| {
-            Ok(MemoryRow {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                category: row.get(2)?,
-                content: row.get(3)?,
-                tags: row.get(4)?,
-                pinned: row.get(5)?,
-                access_count: row.get(6)?,
-                created_at: row.get(7)?,
-                accessed_at: row.get(8)?,
-                embedding: row.get(9)?,
-                source_session_id: row.get(10)?,
-                source_channel: row.get(11)?,
-            })
-        })?;
+        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64, user_id], row_to_memory_row)?;
 
         let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
         Ok(memories)
@@ -426,7 +438,7 @@ impl MemoryRepo {
         Ok(results)
     }
 
-    /// Delete a memory
+    /// Soft-delete a memory (sets `deleted_at` tombstone)
     ///
     /// # Errors
     ///
@@ -434,11 +446,35 @@ impl MemoryRepo {
     pub fn delete(&self, id: &str) -> Result<bool> {
         let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
 
-        // Delete from vector table first (foreign key-like constraint)
+        // Delete from vector table (no longer needed for search)
         conn.execute("DELETE FROM memories_vec WHERE memory_id = ?1", [id])?;
 
-        let deleted = conn.execute("DELETE FROM memories WHERE id = ?1", [id])?;
+        // Soft-delete: set tombstone instead of removing the row
+        let deleted = conn.execute(
+            "UPDATE memories SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND deleted_at IS NULL",
+            [id],
+        )?;
         Ok(deleted > 0)
+    }
+
+    /// Hard-delete memories with tombstones older than the given cutoff
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn purge_tombstones(&self, cutoff_days: u32) -> Result<usize> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+
+        let deleted = conn.execute(
+            "DELETE FROM memories WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?1)",
+            [format!("-{cutoff_days} days")],
+        )?;
+
+        if deleted > 0 {
+            tracing::info!(count = deleted, cutoff_days, "purged memory tombstones");
+        }
+
+        Ok(deleted)
     }
 
     /// Update a memory's embedding
@@ -484,6 +520,9 @@ impl MemoryRepo {
         if let Some(c) = content {
             updates.push("content = ?");
             params.push(Box::new(c.to_string()));
+            // Recompute content_hash when content changes
+            updates.push("content_hash = ?");
+            params.push(Box::new(Memory::compute_content_hash(c)));
         }
         if let Some(p) = pinned {
             updates.push("pinned = ?");
@@ -493,6 +532,9 @@ impl MemoryRepo {
         if updates.is_empty() {
             return Ok(false);
         }
+
+        // Always bump updated_at on modification
+        updates.push("updated_at = datetime('now')");
 
         params.push(Box::new(id.to_string()));
 
@@ -504,6 +546,181 @@ impl MemoryRepo {
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(AsRef::as_ref).collect();
         let rows_affected = conn.execute(&sql, params_refs.as_slice())?;
         Ok(rows_affected > 0)
+    }
+
+    /// Query memories that need syncing (updated_at > synced_at or never synced)
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn unsynced(&self) -> Result<Vec<Memory>> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+
+        let sql = format!(
+            "SELECT {} FROM memories WHERE synced_at IS NULL OR updated_at > synced_at ORDER BY updated_at ASC",
+            MEMORY_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_memory_row)?;
+
+        let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
+        Ok(memories)
+    }
+
+    /// Mark memories as synced
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn mark_synced(&self, ids: &[&str]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "UPDATE memories SET synced_at = datetime('now') WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+
+        let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        conn.execute(&sql, params.as_slice())?;
+
+        Ok(())
+    }
+
+    /// Set the cloud_id for a memory after successful push
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn set_cloud_id(&self, id: &str, cloud_id: &str) -> Result<bool> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+
+        let updated = conn.execute(
+            "UPDATE memories SET cloud_id = ?1 WHERE id = ?2",
+            rusqlite::params![cloud_id, id],
+        )?;
+
+        Ok(updated > 0)
+    }
+
+    /// Upsert a memory from a remote sync (used during pull)
+    ///
+    /// Uses content_hash for dedup: if a memory with the same user_id and
+    /// content_hash exists, apply LWW merge. Otherwise insert as new.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn upsert_from_remote(&self, memory: &Memory) -> Result<bool> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let tags_json = serde_json::to_string(&memory.tags).unwrap_or_else(|_| "[]".to_string());
+
+        // Check for existing memory by content_hash (dedup)
+        if let Some(ref content_hash) = memory.content_hash {
+            let existing: Option<(String, String, i32)> = conn
+                .query_row(
+                    "SELECT id, COALESCE(updated_at, created_at), access_count FROM memories WHERE user_id = ?1 AND content_hash = ?2",
+                    rusqlite::params![memory.user_id, content_hash],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .ok();
+
+            if let Some((existing_id, existing_updated, existing_count)) = existing {
+                // LWW merge: only update if remote is newer
+                if memory.updated_at > existing_updated {
+                    let merged_count = std::cmp::max(
+                        memory.access_count,
+                        u32::try_from(existing_count).unwrap_or(0),
+                    );
+
+                    conn.execute(
+                        r"UPDATE memories SET
+                            content = ?1, tags = ?2, pinned = ?3, access_count = ?4,
+                            updated_at = ?5, deleted_at = ?6, cloud_id = ?7, synced_at = datetime('now')
+                          WHERE id = ?8",
+                        rusqlite::params![
+                            memory.content,
+                            tags_json,
+                            i32::from(memory.pinned),
+                            merged_count,
+                            memory.updated_at,
+                            memory.deleted_at,
+                            memory.cloud_id,
+                            existing_id,
+                        ],
+                    )?;
+
+                    return Ok(true);
+                }
+
+                // Remote is older, only merge access_count
+                let merged_count = std::cmp::max(
+                    memory.access_count,
+                    u32::try_from(existing_count).unwrap_or(0),
+                );
+                if merged_count > u32::try_from(existing_count).unwrap_or(0) {
+                    conn.execute(
+                        "UPDATE memories SET access_count = ?1, synced_at = datetime('now') WHERE id = ?2",
+                        rusqlite::params![merged_count, existing_id],
+                    )?;
+                }
+
+                return Ok(false);
+            }
+        }
+
+        // No existing match, insert as new
+        self.add(memory)?;
+
+        // Mark as synced immediately since it came from the cloud
+        conn.execute(
+            "UPDATE memories SET synced_at = datetime('now') WHERE id = ?1",
+            [&memory.id],
+        )?;
+
+        Ok(true)
+    }
+
+    /// Check if a memory with the given content hash already exists for a user
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn exists_by_content_hash(&self, user_id: &str, content_hash: &str) -> Result<bool> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE user_id = ?1 AND content_hash = ?2 AND deleted_at IS NULL",
+            rusqlite::params![user_id, content_hash],
+            |row| row.get(0),
+        )?;
+
+        Ok(count > 0)
+    }
+
+    /// Get exportable memories: pinned + top by access count
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn get_exportable(&self, user_id: &str, max_items: usize) -> Result<Vec<Memory>> {
+        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+
+        let sql = format!(
+            "SELECT {} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, access_count DESC, accessed_at DESC LIMIT ?2",
+            MEMORY_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+
+        #[allow(clippy::cast_possible_wrap)]
+        let limit = max_items as i64;
+        let rows = stmt.query_map(rusqlite::params![user_id, limit], row_to_memory_row)?;
+
+        let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
+        Ok(memories)
     }
 
     /// Format memories for prompt injection
@@ -539,10 +756,17 @@ struct MemoryRow {
     embedding: Option<Vec<u8>>,
     source_session_id: Option<String>,
     source_channel: Option<String>,
+    content_hash: Option<String>,
+    origin_device_id: Option<String>,
+    updated_at: Option<String>,
+    deleted_at: Option<String>,
+    synced_at: Option<String>,
+    cloud_id: Option<String>,
 }
 
 impl MemoryRow {
     fn into_memory(self) -> Memory {
+        let now_str = Utc::now().to_rfc3339();
         Memory {
             id: self.id,
             user_id: self.user_id,
@@ -560,6 +784,12 @@ impl MemoryRow {
                 .map(|b| super::embedder::Embedder::from_bytes(&b)),
             source_session_id: self.source_session_id,
             source_channel: self.source_channel,
+            content_hash: self.content_hash,
+            origin_device_id: self.origin_device_id,
+            updated_at: self.updated_at.unwrap_or(now_str),
+            deleted_at: self.deleted_at,
+            synced_at: self.synced_at,
+            cloud_id: self.cloud_id,
         }
     }
 }

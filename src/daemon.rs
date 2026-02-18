@@ -141,15 +141,68 @@ impl Daemon {
             Arc::new(tokio::sync::Mutex::new(pm))
         };
 
-        if !self.config.persona.knowledge.packs.is_empty() {
-            tracing::warn!(
-                count = self.config.persona.knowledge.packs.len(),
-                "knowledge pack references not yet supported, will be ignored"
+        // Resolve knowledge packs from Manifold and merge with inline chunks
+        let resolved_knowledge = if !self.config.persona.knowledge.packs.is_empty() {
+            let manifold_url = self.config.api_server.manifold_url.as_deref()
+                .unwrap_or("https://api.manifold.omni.dev");
+            let resolver = crate::knowledge::KnowledgePackResolver::new(
+                manifold_url,
+                self.config.knowledge_cache_dir.clone(),
             );
-        }
+            let results = resolver.resolve_all(&self.config.persona.knowledge.packs).await;
+            let mut extra_chunks = Vec::new();
+            for result in results {
+                match result {
+                    Ok(pack) => {
+                        tracing::info!(name = %pack.name, chunks = pack.chunks.len(), "loaded knowledge pack");
+                        extra_chunks.extend(pack.chunks);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to resolve knowledge pack");
+                    }
+                }
+            }
+            extra_chunks
+        } else {
+            Vec::new()
+        };
+
+        // Merge inline knowledge with resolved pack knowledge
+        let mut all_knowledge = self.config.persona.knowledge.inline.clone();
+        all_knowledge.extend(resolved_knowledge);
 
         if synapse.is_none() {
             tracing::info!("running in setup mode - chat unavailable until Synapse is reachable");
+        }
+
+        // Spawn periodic memory sync if configured
+        if let Some(ref sync_config) = self.config.sync {
+            let sync_client = crate::sync::SyncClient::new(
+                &sync_config.api_url,
+                &sync_config.device_id,
+            );
+            let sync_db = self.db.clone();
+            let sync_interval = sync_config.interval_secs;
+
+            tracing::info!(
+                api_url = %sync_config.api_url,
+                device_id = %sync_config.device_id,
+                interval_secs = sync_interval,
+                "memory sync enabled"
+            );
+
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(sync_interval));
+                // Skip the first immediate tick
+                interval.tick().await;
+
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = sync_client.full_sync(&sync_db).await {
+                        tracing::warn!(error = %e, "memory sync failed");
+                    }
+                }
+            });
         }
 
         // Set up shutdown signal
@@ -201,8 +254,9 @@ impl Daemon {
         .api_key(self.config.api_server.api_key.clone())
         .manifold_url(self.config.api_server.manifold_url.clone())
         .static_dir(self.config.api_server.static_dir.clone())
-        .persona_knowledge(self.config.persona.knowledge.inline.clone())
+        .persona_knowledge(all_knowledge.clone())
         .max_context_tokens(self.config.persona.memory.max_context_tokens)
+        .knowledge_cache_dir(self.config.knowledge_cache_dir.clone())
         .plugin_manager(plugin_manager.clone())
         .cloud_mode(self.config.cloud_mode);
 
@@ -256,6 +310,7 @@ impl Daemon {
                 Arc::clone(&attachment_processor),
                 Arc::clone(&hook_manager),
                 plugin_manager.clone(),
+                all_knowledge,
             )
             .await;
         } else {
@@ -301,10 +356,10 @@ impl Daemon {
         attachment_processor: Arc<AttachmentProcessor>,
         hook_manager: Arc<HookManager>,
         plugin_manager: crate::api::plugins::SharedPluginManager,
+        knowledge_chunks: Vec<crate::persona::KnowledgeChunk>,
     ) {
         let persona_id = self.config.persona.id().to_string();
         let persona_system_prompt = self.config.persona.system_prompt().map(String::from);
-        let knowledge_chunks = self.config.persona.knowledge.inline.clone();
         let max_context_tokens = self.config.persona.memory.max_context_tokens;
 
         // Discord

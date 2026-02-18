@@ -49,6 +49,7 @@ pub mod providers;
 pub mod relay;
 pub mod security;
 pub mod skills;
+pub mod sync;
 pub mod tools;
 pub mod voice;
 
@@ -57,9 +58,13 @@ pub use context::{ContextBuilder, LifeJson, LifeJsonReader};
 pub use daemon::Daemon;
 pub use db::{DbConn, DbPool};
 pub use error::{Error, Result};
-pub use knowledge::{format_knowledge, select_knowledge};
+pub use knowledge::{
+    KnowledgePackResolver, ResolverError, cosine_similarity, format_knowledge,
+    hydrate_embeddings, select_knowledge, select_knowledge_with_embeddings,
+};
 pub use persona::{
-    KnowledgeChunk, KnowledgeConfig, KnowledgePack, KnowledgePackRef, KnowledgePriority, Persona,
+    KnowledgeChunk, KnowledgeConfig, KnowledgePack, KnowledgePackRef, KnowledgePriority,
+    PackEmbeddings, Persona,
 };
 pub use providers::KeyResolver;
 pub use security::{DmPolicy, PairedUser, PairingManager};
@@ -75,3 +80,4 @@ pub use relay::{RelayConfig, RelayManager, RelayMode, RelayStatus};
 pub use discovery::MdnsAdvertiser;
 pub use hooks::{HookAction, HookEvent, HookManager, HookResult, HooksConfig};
 pub use plugins::{PluginKind, PluginManifest, PluginManager};
+pub use sync::SyncClient;

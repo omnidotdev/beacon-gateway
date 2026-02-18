@@ -67,6 +67,12 @@ pub struct Config {
 
     /// Cloud mode: requires JWT auth, enables rate limiting
     pub cloud_mode: bool,
+
+    /// Directory for caching resolved knowledge packs
+    pub knowledge_cache_dir: PathBuf,
+
+    /// Memory sync configuration (optional, disabled by default)
+    pub sync: Option<SyncConfig>,
 }
 
 /// HTTP API server configuration
@@ -189,6 +195,19 @@ pub struct ApiKeys {
 
     /// Google Chat service account JSON file path
     pub google_chat_service_account: Option<std::path::PathBuf>,
+}
+
+/// Memory sync configuration
+#[derive(Debug, Clone)]
+pub struct SyncConfig {
+    /// Cloud API URL for memory sync
+    pub api_url: String,
+
+    /// Unique device identifier for this gateway instance
+    pub device_id: String,
+
+    /// Sync interval in seconds (default: 300 = 5 minutes)
+    pub interval_secs: u64,
 }
 
 /// Return the XDG cache directory for persona files, creating it if needed
@@ -348,6 +367,31 @@ impl Config {
         let cloud_mode = std::env::var("BEACON_CLOUD_MODE")
             .is_ok_and(|v| v == "true" || v == "1");
 
+        // Knowledge pack cache directory
+        let knowledge_cache_dir = std::env::var("BEACON_KNOWLEDGE_CACHE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                directories::ProjectDirs::from("dev", "omni", "omni").map_or_else(
+                    || PathBuf::from(".cache/omni/knowledge"),
+                    |d| d.cache_dir().join("knowledge"),
+                )
+            });
+
+        // Memory sync configuration (opt-in via env vars)
+        let sync = std::env::var("BEACON_SYNC_API_URL").ok().map(|api_url| {
+            let device_id = std::env::var("BEACON_DEVICE_ID")
+                .unwrap_or_else(|_| format!("gw_{}", uuid::Uuid::new_v4()));
+            let interval_secs = std::env::var("BEACON_SYNC_INTERVAL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(300);
+            SyncConfig {
+                api_url,
+                device_id,
+                interval_secs,
+            }
+        });
+
         Ok(Self {
             persona,
             persona_cache_dir: cache_dir,
@@ -368,6 +412,8 @@ impl Config {
             synapse_url,
             llm_model,
             cloud_mode,
+            knowledge_cache_dir,
+            sync,
         })
     }
 

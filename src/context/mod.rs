@@ -6,7 +6,9 @@
 //! - life.json data (portable identity)
 
 mod life_json;
+pub mod life_json_sync;
 mod builder;
 
 pub use builder::{BuiltContext, ContextBuilder, ContextConfig, ContextMessage};
 pub use life_json::{LifeJson, LifeJsonReader};
+pub use life_json_sync::{ExportResult, ImportResult};

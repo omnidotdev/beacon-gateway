@@ -6,6 +6,8 @@ pub mod browser;
 pub mod canvas;
 pub mod health;
 pub mod jwt;
+pub mod knowledge;
+pub mod life_json;
 pub mod nodes;
 pub mod pairing;
 pub mod personas;
@@ -84,6 +86,7 @@ pub struct ApiState {
     pub jwt_cache: Option<Arc<jwt::JwksCache>>,
     pub persona_knowledge: Vec<crate::persona::KnowledgeChunk>,
     pub max_context_tokens: usize,
+    pub knowledge_cache_dir: PathBuf,
     pub cloud_mode: bool,
     pub rate_limiter: Option<rate_limit::SharedLimiter>,
 }
@@ -114,6 +117,7 @@ pub struct ApiServerBuilder {
     jwt_cache: Option<Arc<jwt::JwksCache>>,
     persona_knowledge: Vec<crate::persona::KnowledgeChunk>,
     max_context_tokens: usize,
+    knowledge_cache_dir: Option<PathBuf>,
     plugin_manager: Option<plugins::SharedPluginManager>,
     cloud_mode: bool,
 }
@@ -154,6 +158,7 @@ impl ApiServerBuilder {
             jwt_cache: None,
             persona_knowledge: Vec::new(),
             max_context_tokens: 8000,
+            knowledge_cache_dir: None,
             plugin_manager: None,
             cloud_mode: false,
         }
@@ -267,6 +272,13 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Set the knowledge pack cache directory
+    #[must_use]
+    pub fn knowledge_cache_dir(mut self, dir: PathBuf) -> Self {
+        self.knowledge_cache_dir = Some(dir);
+        self
+    }
+
     /// Enable cloud mode (requires JWT, enables rate limiting)
     #[must_use]
     pub fn cloud_mode(mut self, enabled: bool) -> Self {
@@ -348,6 +360,9 @@ impl ApiServerBuilder {
             jwt_cache: self.jwt_cache,
             persona_knowledge: self.persona_knowledge,
             max_context_tokens: self.max_context_tokens,
+            knowledge_cache_dir: self.knowledge_cache_dir.unwrap_or_else(|| {
+                PathBuf::from(".cache/omni/knowledge")
+            }),
             cloud_mode: self.cloud_mode,
             rate_limiter,
         });
@@ -386,6 +401,8 @@ impl ApiServer {
             .nest("/api/admin", admin::router(self.state.clone()))
             .nest("/api/canvas", canvas::api::router(self.state.canvas.clone()))
             .nest("/api/providers", providers::router(self.state.clone()))
+            .nest("/api/knowledge", knowledge::router(self.state.clone()))
+            .nest("/api/memories", life_json::router(self.state.clone()))
             .nest("/api/skills", skills::router(self.state.clone()))
             .nest("/api/personas/marketplace", personas::router(self.state.clone()))
             .nest("/api/voice", voice::router(self.state.clone()))

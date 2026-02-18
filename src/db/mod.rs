@@ -2,6 +2,7 @@
 
 pub mod embedder;
 pub mod indexer;
+pub mod knowledge;
 pub mod memory;
 pub mod persona;
 mod schema;
@@ -47,6 +48,7 @@ pub(crate) fn register_sqlite_vec() {
 
 pub use embedder::{Embedder, EMBEDDING_DIM};
 pub use indexer::{ExtractedFact, ExtractionResponse, Indexer};
+pub use knowledge::{KnowledgePackRepo, KnowledgePackRow};
 pub use memory::{Memory, MemoryCategory, MemoryRepo};
 pub use persona::{InstalledPersona, PersonaRepo};
 pub use schema::SCHEMA_VERSION;

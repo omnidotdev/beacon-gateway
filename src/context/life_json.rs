@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
 /// life.json root structure (partial - only what Beacon needs)
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LifeJson {
     pub version: Option<String>,
     pub identity: Option<Identity>,
@@ -17,7 +17,7 @@ pub struct LifeJson {
 }
 
 /// Identity slice
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {
     pub name: Option<String>,
@@ -32,7 +32,7 @@ pub struct Identity {
 }
 
 /// Location within identity
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Location {
     pub city: Option<String>,
     pub region: Option<String>,
@@ -40,7 +40,7 @@ pub struct Location {
 }
 
 /// Preferences slice
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
     pub language: Option<String>,
@@ -50,7 +50,7 @@ pub struct Preferences {
 }
 
 /// Communication preferences
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Communication {
     pub style: Option<String>,
@@ -58,7 +58,7 @@ pub struct Communication {
 }
 
 /// Unit preferences
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Units {
     pub temperature: Option<String>,
@@ -68,7 +68,7 @@ pub struct Units {
 }
 
 /// Per-assistant configuration from life.json
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantConfig {
     pub enabled: Option<bool>,
@@ -79,7 +79,7 @@ pub struct AssistantConfig {
 }
 
 /// A learned fact about the user
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LearnedFact {
     pub fact: String,
     pub confidence: Option<f32>,
@@ -87,7 +87,7 @@ pub struct LearnedFact {
 }
 
 /// Per-assistant interaction preferences
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantPreferences {
     pub verbosity: Option<String>,
@@ -97,7 +97,7 @@ pub struct AssistantPreferences {
 }
 
 /// Per-assistant context
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantContext {
     pub current_projects: Option<Vec<String>>,
@@ -106,7 +106,7 @@ pub struct AssistantContext {
 }
 
 /// Per-assistant permissions
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_field_names)]
 pub struct AssistantPermissions {
@@ -119,13 +119,13 @@ pub struct AssistantPermissions {
 }
 
 /// Calendar slice (scheduling preferences)
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Calendar {
     pub scheduling: Option<Scheduling>,
 }
 
 /// Scheduling preferences
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scheduling {
     pub working_hours: Option<WorkingHours>,
@@ -133,7 +133,7 @@ pub struct Scheduling {
 }
 
 /// Working hours configuration
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WorkingHours {
     pub start: Option<String>,
     pub end: Option<String>,

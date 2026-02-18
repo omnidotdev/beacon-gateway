@@ -3,6 +3,8 @@
 //! Implements the persona.json specification for portable digital entity identity.
 //! See: <https://persona.omni.dev>
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::tools::{ToolPolicy, ToolPolicyConfig};
@@ -343,6 +345,10 @@ pub struct KnowledgeChunk {
     /// Injection priority
     #[serde(default)]
     pub priority: KnowledgePriority,
+
+    /// Pre-computed embedding vector for semantic selection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
 }
 
 /// When to inject a knowledge chunk
@@ -371,6 +377,20 @@ pub struct KnowledgePackRef {
     pub priority: Option<KnowledgePriority>,
 }
 
+/// Pre-computed embedding vectors for knowledge pack chunks
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackEmbeddings {
+    /// Embedding model used to generate vectors
+    pub model: String,
+
+    /// Dimensionality of each vector
+    pub dimensions: usize,
+
+    /// Map from chunk index (as string) to embedding vector
+    pub vectors: HashMap<String, Vec<f32>>,
+}
+
 /// A knowledge pack published to Manifold
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -394,6 +414,10 @@ pub struct KnowledgePack {
 
     /// Knowledge chunks
     pub chunks: Vec<KnowledgeChunk>,
+
+    /// Pre-computed embeddings for chunks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embeddings: Option<PackEmbeddings>,
 }
 
 // Default value functions

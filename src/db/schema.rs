@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Initialize the database schema
 ///
@@ -40,6 +40,12 @@ pub fn init(conn: &Connection) -> Result<()> {
     }
     if version < 8 {
         migrate_v8(conn)?;
+    }
+    if version < 9 {
+        migrate_v9(conn)?;
+    }
+    if version < 10 {
+        migrate_v10(conn)?;
     }
 
     Ok(())
@@ -283,6 +289,96 @@ fn migrate_v8(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("migrated to schema v8 (message threading)");
+    Ok(())
+}
+
+fn migrate_v9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Add sync metadata columns to memories
+        ALTER TABLE memories ADD COLUMN content_hash TEXT;
+        ALTER TABLE memories ADD COLUMN origin_device_id TEXT;
+        ALTER TABLE memories ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'));
+        ALTER TABLE memories ADD COLUMN deleted_at TEXT;
+        ALTER TABLE memories ADD COLUMN synced_at TEXT;
+        ALTER TABLE memories ADD COLUMN cloud_id TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_memories_synced ON memories(synced_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);
+
+        PRAGMA user_version = 9;
+        ",
+    )?;
+
+    // Backfill content_hash for existing memories
+    backfill_content_hashes(conn)?;
+
+    tracing::info!("migrated to schema v9 (memory sync)");
+    Ok(())
+}
+
+/// Backfill content_hash for existing memories that lack one
+fn backfill_content_hashes(conn: &Connection) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let mut stmt = conn.prepare(
+        "SELECT id, content FROM memories WHERE content_hash IS NULL",
+    )?;
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .flatten()
+        .collect();
+
+    let count = rows.len();
+    for (id, content) in rows {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let hash = hex::encode(hasher.finalize());
+
+        conn.execute(
+            "UPDATE memories SET content_hash = ?1 WHERE id = ?2",
+            rusqlite::params![hash, id],
+        )?;
+    }
+
+    if count > 0 {
+        tracing::info!(count, "backfilled content hashes for existing memories");
+    }
+
+    Ok(())
+}
+
+fn migrate_v10(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Installed knowledge packs table
+        CREATE TABLE IF NOT EXISTS installed_knowledge_packs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            source_namespace TEXT NOT NULL,
+            description TEXT,
+            tags TEXT NOT NULL DEFAULT '[]',
+            chunk_count INTEGER NOT NULL DEFAULT 0,
+            has_embeddings INTEGER NOT NULL DEFAULT 0,
+            content TEXT NOT NULL,
+            installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(name, source_namespace)
+        );
+
+        -- Vector table for knowledge chunk embeddings
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
+            chunk_id TEXT PRIMARY KEY,
+            embedding FLOAT[1536]
+        );
+
+        PRAGMA user_version = 10;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v10 (knowledge packs)");
     Ok(())
 }
 
