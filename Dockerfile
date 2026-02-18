@@ -40,6 +40,7 @@ COPY personas /etc/beacon/personas
 
 ENV RUST_LOG=info
 ENV BEACON_PERSONAS_DIR=/etc/beacon/personas
+ENV BEACON_DISABLE_VOICE=true
 
 EXPOSE 18789 18790
 
