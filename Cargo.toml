@@ -104,8 +104,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 
 # Synapse AI router client
-# TODO: switch to git dep when Synapse is FOSS (github:omnidotdev/synapse)
-synapse-client = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-client", features = ["agent-core"] }
+synapse-client = { git = "https://github.com/omnidotdev/synapse-gateway", features = ["agent-core"] }
 
 # Agent core (shared LLM provider abstraction)
 agent-core = { git = "https://github.com/omnidotdev/agent-core" }
