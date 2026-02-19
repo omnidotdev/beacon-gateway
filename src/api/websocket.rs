@@ -232,6 +232,12 @@ async fn handle_chat_message(
         .find_or_create(&user_id)
         .map_err(|e| crate::Error::Database(e.to_string()))?;
 
+    tracing::info!(
+        session_id = %session_id,
+        persona_id_override = ?persona_id_override,
+        "handle_chat_message: resolving persona"
+    );
+
     // Resolve persona: prefer per-message override, fall back to active persona
     let (active_persona_id, active_system_prompt) = if let Some(ref override_id) = persona_id_override {
         // No-persona mode: skip system prompt entirely
@@ -274,6 +280,13 @@ async fn handle_chat_message(
     state
         .session_repo
         .add_message(&session.id, MessageRole::User, content)?;
+
+    tracing::info!(
+        active_persona_id = %active_persona_id,
+        has_persona_prompt = active_system_prompt.is_some(),
+        static_system_prompt_len = state.system_prompt.len(),
+        "handle_chat_message: building messages"
+    );
 
     // Build context config with active persona
     let context_config = crate::api::ApiServer::context_config(
