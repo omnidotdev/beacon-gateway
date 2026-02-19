@@ -247,14 +247,17 @@ async fn list_providers(
         },
     ];
 
-    // Determine active provider: BYOK keys override Omni Credits
+    // Determine active provider: BYOK keys override Omni Credits.
+    // Mirror resolve_user_synapse priority: anthropic → openai → openrouter → omni_credits → env fallback
     let has_byok = user_configured.iter().any(|p| p != "omni_credits");
     let active_provider = if has_byok {
-        // User has a BYOK key -- use the env-based model_info to pick the right type
-        state.model_info.as_ref().map(|m| match m.provider.as_str() {
-            "anthropic" => ProviderType::Anthropic,
-            _ => ProviderType::Openai,
-        })
+        if user_configured.contains(&"anthropic".to_string()) {
+            Some(ProviderType::Anthropic)
+        } else if user_configured.contains(&"openai".to_string()) {
+            Some(ProviderType::Openai)
+        } else {
+            Some(ProviderType::Openrouter)
+        }
     } else if user_configured.contains(&"omni_credits".to_string())
         || (state.key_provisioner.is_some() && user_id.is_some())
     {
