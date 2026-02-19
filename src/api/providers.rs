@@ -1,8 +1,8 @@
 //! Provider configuration API for BYOK (Bring Your Own Key)
 //!
-//! Allows users to configure their own API keys for LLM providers.
-//! When Gatekeeper is configured, keys are stored encrypted in the vault
-//! and resolved per-user at request time.
+//! Lists available LLM providers and their status. Key management (adding/removing
+//! provider keys) is handled via the Synapse dashboard at `/dashboard/provider-keys`.
+//! Keys are resolved per-user at request time via the Synapse API.
 
 use std::sync::Arc;
 

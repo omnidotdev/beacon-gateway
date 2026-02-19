@@ -29,6 +29,7 @@ struct ResolveProviderKeysRequest {
     identity_provider_id: String,
 }
 
+#[derive(Debug)]
 struct CachedUserKeys {
     keys: HashMap<String, ResolvedKey>,
     expires_at: Instant,
@@ -61,7 +62,7 @@ impl KeyResolver {
             gateway_secret,
             client: reqwest::Client::new(),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            ttl: Duration::from_secs(300),
+            ttl: Duration::from_secs(300), // 5 min
             env_keys,
         }
     }
@@ -113,6 +114,7 @@ impl KeyResolver {
         }
     }
 
+    /// Fetch all provider keys for a user from Synapse in one request
     async fn fetch_from_synapse(
         &self,
         identity_provider_id: &str,
@@ -144,6 +146,7 @@ impl KeyResolver {
         Ok(body.provider_keys)
     }
 
+    /// Fall back to env var key when Synapse is unreachable or user has no configured keys
     fn env_fallback(&self, provider: &str) -> crate::Result<Option<ResolvedKey>> {
         let key = match provider {
             "anthropic" => self.env_keys.anthropic.clone(),

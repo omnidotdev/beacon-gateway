@@ -53,7 +53,9 @@ pub struct Config {
     /// Hooks configuration
     pub hooks: HooksConfig,
 
-    /// Identity service URL for BYOK key resolution
+    /// Identity service URL for JWT validation (JWKS endpoint).
+    /// Used for `JwksCache` to validate Bearer tokens.
+    /// BYOK key resolution now uses `synapse_api_url` instead.
     pub auth_base_url: Option<String>,
 
     /// Service-to-service key for authenticating to identity service
@@ -360,7 +362,7 @@ impl Config {
         // Hooks configuration (from ~/.beacon/hooks.toml or defaults)
         let hooks = Self::load_hooks_config(&data_dir);
 
-        // Identity service integration for BYOK
+        // Identity service URL for JWT validation (JWKS endpoint)
         let auth_base_url = std::env::var("AUTH_BASE_URL").ok();
         let service_key = std::env::var("BEACON_SERVICE_KEY").ok();
 
