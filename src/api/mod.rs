@@ -241,9 +241,9 @@ impl ApiServerBuilder {
     /// Set voice configuration from `VoiceConfig`
     #[must_use]
     pub fn voice_config(mut self, config: &crate::config::VoiceConfig) -> Self {
-        self.stt_model = config.stt_model.clone();
-        self.tts_model = config.tts_model.clone();
-        self.tts_voice = config.tts_voice.clone();
+        self.stt_model.clone_from(&config.stt_model);
+        self.tts_model.clone_from(&config.tts_model);
+        self.tts_voice.clone_from(&config.tts_voice);
         self.tts_speed = config.tts_speed;
         self
     }
@@ -320,16 +320,17 @@ impl ApiServerBuilder {
         let skill_repo = SkillRepo::new(self.db.clone());
 
         // Create embedder and indexer if OPENAI_API_KEY is set
-        let embedder = std::env::var("OPENAI_API_KEY")
-            .ok()
-            .and_then(|key| Embedder::new(key).ok())
+        let openai_key = std::env::var("OPENAI_API_KEY").ok();
+
+        let embedder = openai_key
+            .as_deref()
+            .and_then(|key| Embedder::new(key.to_string()).ok())
             .map(Arc::new);
 
-        let indexer = embedder.as_ref().and_then(|emb| {
-            std::env::var("OPENAI_API_KEY").ok().map(|key| {
-                Arc::new(Indexer::new((**emb).clone(), memory_repo.clone(), key))
-            })
-        });
+        let indexer = embedder
+            .as_ref()
+            .zip(openai_key.as_deref())
+            .map(|(emb, key)| Arc::new(Indexer::new((**emb).clone(), memory_repo.clone(), key.to_string())));
         let manifold_url = self
             .manifold_url
             .unwrap_or_else(|| "https://api.manifold.omni.dev".to_string());

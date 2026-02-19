@@ -29,7 +29,7 @@ pub struct ExtractionResponse {
 }
 
 /// Conversation indexer
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Indexer {
     embedder: Embedder,
     memory_repo: MemoryRepo,

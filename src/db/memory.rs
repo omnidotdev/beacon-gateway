@@ -176,7 +176,7 @@ impl Memory {
 }
 
 /// Memory repository for database operations
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MemoryRepo {
     pool: DbPool,
 }

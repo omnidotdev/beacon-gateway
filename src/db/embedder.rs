@@ -6,7 +6,7 @@ use crate::{Error, Result};
 pub const EMBEDDING_DIM: usize = 1536;
 
 /// Text embedder using `OpenAI`'s embedding API
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Embedder {
     client: reqwest::Client,
     api_key: String,
