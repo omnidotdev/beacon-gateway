@@ -584,15 +584,16 @@ async fn handle_chat_message(
                 .iter()
                 .partition(|tc| tc.name == "ask_user");
 
+            #[derive(serde::Deserialize, Default)]
+            struct AskArgs {
+                #[serde(default)]
+                question: String,
+                options: Option<Vec<String>>,
+                #[serde(default)]
+                multi_select: bool,
+            }
+
             for tc in &ask_user_calls {
-                #[derive(serde::Deserialize, Default)]
-                struct AskArgs {
-                    #[serde(default)]
-                    question: String,
-                    options: Option<Vec<String>>,
-                    #[serde(default)]
-                    multi_select: bool,
-                }
                 let ask: AskArgs = serde_json::from_str(&tc.arguments).unwrap_or_else(|e| {
                     tracing::warn!(tool_id = %tc.id, error = %e, "malformed ask_user arguments, using defaults");
                     AskArgs::default()

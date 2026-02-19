@@ -26,7 +26,8 @@ pub fn format_invocation(name: &str, arguments: &str) -> String {
         "Bash" | "shell" => "command",
         "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
         "Glob" | "Grep" => "pattern",
-        "WebFetch" | "WebSearch" => "url",
+        "WebFetch" => "url",
+        "WebSearch" => "query",
         _ => {
             if let Some(val) = args
                 .as_object()
