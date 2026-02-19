@@ -58,9 +58,6 @@ pub struct Config {
     /// BYOK key resolution now uses `synapse_api_url` instead.
     pub auth_base_url: Option<String>,
 
-    /// Service-to-service key for authenticating to identity service
-    pub service_key: Option<String>,
-
     /// Synapse API base URL for internal endpoints (key provisioning)
     pub synapse_api_url: Option<String>,
 
@@ -364,7 +361,6 @@ impl Config {
 
         // Identity service URL for JWT validation (JWKS endpoint)
         let auth_base_url = std::env::var("AUTH_BASE_URL").ok();
-        let service_key = std::env::var("BEACON_SERVICE_KEY").ok();
 
         // Synapse API (internal endpoints for key provisioning)
         let synapse_api_url = std::env::var("SYNAPSE_API_URL").ok();
@@ -420,7 +416,6 @@ impl Config {
             auth,
             hooks,
             auth_base_url,
-            service_key,
             synapse_api_url,
             synapse_gateway_secret,
             synapse_url,
