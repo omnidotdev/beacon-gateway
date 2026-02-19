@@ -6,13 +6,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-    routing::{delete, get, post},
-    Json, Router,
-};
+use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::ApiState;
@@ -60,24 +54,6 @@ pub struct ProviderInfo {
     pub coming_soon: bool,
     /// Features available with this provider
     pub features: Vec<String>,
-}
-
-/// Request to configure a provider
-#[derive(Debug, Deserialize)]
-pub struct ConfigureProviderRequest {
-    pub provider: ProviderType,
-    /// API key (required for BYOK providers)
-    pub api_key: Option<String>,
-    /// Optional model override
-    pub model: Option<String>,
-}
-
-/// Response after configuring a provider
-#[derive(Debug, Serialize)]
-pub struct ConfigureProviderResponse {
-    pub success: bool,
-    pub message: String,
-    pub provider: ProviderInfo,
 }
 
 /// All providers response
@@ -269,83 +245,10 @@ async fn list_providers(
     })
 }
 
-/// Configure a provider API key
-///
-/// Key management is now handled via the Synapse dashboard
-async fn configure_provider(
-    _headers: HeaderMap,
-    State(_state): State<Arc<ApiState>>,
-    Json(request): Json<ConfigureProviderRequest>,
-) -> impl IntoResponse {
-    (
-        StatusCode::GONE,
-        Json(ConfigureProviderResponse {
-            success: false,
-            message: "Provider key management has moved to the Synapse dashboard".to_string(),
-            provider: provider_info_stub(&request.provider, ProviderStatus::NotConfigured),
-        }),
-    )
-}
-
-/// Response after revoking a provider key
-#[derive(Debug, Serialize)]
-pub struct RevokeProviderResponse {
-    pub success: bool,
-    pub message: String,
-}
-
-/// Revoke (delete) a provider API key
-///
-/// Key management is now handled via the Synapse dashboard
-async fn revoke_provider(
-    _headers: HeaderMap,
-    State(_state): State<Arc<ApiState>>,
-    axum::extract::Path(_provider): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    (
-        StatusCode::GONE,
-        Json(RevokeProviderResponse {
-            success: false,
-            message: "Provider key management has moved to the Synapse dashboard".to_string(),
-        }),
-    )
-}
-
-/// Map `ProviderType` enum to the string identifier used by Gatekeeper
-fn provider_type_to_str(provider: &ProviderType) -> &'static str {
-    match provider {
-        ProviderType::Openai => "openai",
-        ProviderType::Anthropic => "anthropic",
-        ProviderType::Openrouter => "openrouter",
-        ProviderType::OmniCredits => "omni_credits",
-    }
-}
-
-/// Build a minimal `ProviderInfo` for error/status responses
-fn provider_info_stub(provider: &ProviderType, status: ProviderStatus) -> ProviderInfo {
-    ProviderInfo {
-        id: provider.clone(),
-        name: match provider {
-            ProviderType::Openai => "OpenAI".to_string(),
-            ProviderType::Anthropic => "Anthropic".to_string(),
-            ProviderType::Openrouter => "OpenRouter".to_string(),
-            ProviderType::OmniCredits => "Omni Credits".to_string(),
-        },
-        description: String::new(),
-        active: matches!(&status, ProviderStatus::Configured),
-        status,
-        api_key_url: None,
-        coming_soon: false,
-        features: vec![],
-    }
-}
-
 /// Create the providers router
 pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
         .route("/", get(list_providers))
-        .route("/configure", post(configure_provider))
-        .route("/{provider}", delete(revoke_provider))
         .with_state(state)
 }
 
