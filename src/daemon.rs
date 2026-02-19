@@ -111,17 +111,19 @@ impl Daemon {
         let system_prompt = build_system_prompt(&self.config);
         let model_id = self.config.llm_model.clone();
 
-        // Initialize BYOK key resolver if identity service is configured
-        let (key_resolver, jwt_cache) = if let (Some(auth_url), Some(svc_key)) =
-            (&self.config.auth_base_url, &self.config.service_key)
+        // Initialize BYOK key resolver if Synapse API is configured
+        let (key_resolver, jwt_cache) = if let (Some(api_url), Some(secret)) =
+            (&self.config.synapse_api_url, &self.config.synapse_gateway_secret)
         {
-            tracing::info!(url = %auth_url, "BYOK enabled via identity service");
+            tracing::info!(url = %api_url, "BYOK enabled via Synapse");
             let resolver = Arc::new(crate::providers::KeyResolver::new(
-                auth_url.clone(),
-                svc_key.clone(),
+                api_url.clone(),
+                secret.clone(),
                 self.config.api_keys.clone(),
             ));
-            let jwks = Arc::new(crate::api::jwt::JwksCache::new(auth_url.clone()));
+            let auth_url = self.config.auth_base_url.clone()
+                .unwrap_or_else(|| api_url.clone());
+            let jwks = Arc::new(crate::api::jwt::JwksCache::new(auth_url));
             (Some(resolver), Some(jwks))
         } else {
             (None, None)

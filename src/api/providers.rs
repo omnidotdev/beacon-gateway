@@ -146,13 +146,7 @@ async fn list_providers(
     let user_id = extract_user_id(&headers, &state).await;
     let user_configured = if let Some(ref uid) = user_id {
         if let Some(resolver) = &state.key_resolver {
-            resolver
-                .list_configured(uid)
-                .await
-                .into_iter()
-                .filter(|c| c.has_user_key)
-                .map(|c| c.provider)
-                .collect::<Vec<_>>()
+            resolver.list_configured(uid).await
         } else {
             vec![]
         }
@@ -275,197 +269,22 @@ async fn list_providers(
     })
 }
 
-/// Configure a provider API key via Gatekeeper vault
+/// Configure a provider API key
 ///
-/// Requires JWT in Authorization header and Gatekeeper integration enabled
+/// Key management is now handled via the Synapse dashboard
 async fn configure_provider(
-    headers: HeaderMap,
-    State(state): State<Arc<ApiState>>,
+    _headers: HeaderMap,
+    State(_state): State<Arc<ApiState>>,
     Json(request): Json<ConfigureProviderRequest>,
 ) -> impl IntoResponse {
-    // Reject Omni Credits configuration when Synapse is unavailable
-    if matches!(request.provider, ProviderType::OmniCredits) && state.synapse.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ConfigureProviderResponse {
-                success: false,
-                message: "Omni Credits is not yet available".to_string(),
-                provider: ProviderInfo {
-                    id: request.provider,
-                    name: "Omni Credits".to_string(),
-                    description: "Coming soon".to_string(),
-                    status: ProviderStatus::ComingSoon,
-                    active: false,
-                    api_key_url: None,
-                    coming_soon: true,
-                    features: vec![],
-                },
-            }),
-        );
-    }
-
-    // Model-only switch (no API key provided)
-    let Some(api_key) = &request.api_key else {
-        if let Some(ref model) = request.model {
-            let Some(user_id) = extract_user_id(&headers, &state).await else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ConfigureProviderResponse {
-                        success: false,
-                        message: "Authentication required".to_string(),
-                        provider: provider_info_stub(
-                            &request.provider,
-                            ProviderStatus::NotConfigured,
-                        ),
-                    }),
-                );
-            };
-
-            if let Some(resolver) = &state.key_resolver {
-                let provider_str = provider_type_to_str(&request.provider);
-
-                if let Ok(Some(existing)) = resolver.resolve(&user_id, provider_str).await {
-                    if existing.is_user_key {
-                        match resolver
-                            .store(&user_id, provider_str, &existing.api_key, Some(model.as_str()))
-                            .await
-                        {
-                            Ok(result) if result.success => {
-                                tracing::info!(
-                                    user_id = %user_id,
-                                    provider = %provider_str,
-                                    model = %model,
-                                    "model switched for existing provider key"
-                                );
-
-                                return (
-                                    StatusCode::OK,
-                                    Json(ConfigureProviderResponse {
-                                        success: true,
-                                        message: result.message,
-                                        provider: provider_info_stub(
-                                            &request.provider,
-                                            ProviderStatus::Configured,
-                                        ),
-                                    }),
-                                );
-                            }
-                            Ok(result) => {
-                                return (
-                                    StatusCode::UNPROCESSABLE_ENTITY,
-                                    Json(ConfigureProviderResponse {
-                                        success: false,
-                                        message: result.message,
-                                        provider: provider_info_stub(
-                                            &request.provider,
-                                            ProviderStatus::Invalid,
-                                        ),
-                                    }),
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "failed to update model for provider");
-
-                                return (
-                                    StatusCode::BAD_GATEWAY,
-                                    Json(ConfigureProviderResponse {
-                                        success: false,
-                                        message: "Failed to update model in vault".to_string(),
-                                        provider: provider_info_stub(
-                                            &request.provider,
-                                            ProviderStatus::NotConfigured,
-                                        ),
-                                    }),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // No model switch or no existing key — require API key
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ConfigureProviderResponse {
-                success: false,
-                message: "API key is required".to_string(),
-                provider: provider_info_stub(&request.provider, ProviderStatus::NotConfigured),
-            }),
-        );
-    };
-
-    // Require JWT authentication
-    let Some(user_id) = extract_user_id(&headers, &state).await else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ConfigureProviderResponse {
-                success: false,
-                message: "Authentication required".to_string(),
-                provider: provider_info_stub(&request.provider, ProviderStatus::NotConfigured),
-            }),
-        );
-    };
-
-    // Require Gatekeeper integration
-    let Some(resolver) = &state.key_resolver else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ConfigureProviderResponse {
-                success: false,
-                message: "Key storage not configured".to_string(),
-                provider: provider_info_stub(&request.provider, ProviderStatus::NotConfigured),
-            }),
-        );
-    };
-
-    let provider_str = provider_type_to_str(&request.provider);
-
-    // Store in Gatekeeper vault (handles validation + encryption)
-    match resolver
-        .store(&user_id, provider_str, api_key, request.model.as_deref())
-        .await
-    {
-        Ok(result) if result.success => {
-            tracing::info!(
-                user_id = %user_id,
-                provider = %provider_str,
-                "provider API key configured via Gatekeeper"
-            );
-
-            (
-                StatusCode::OK,
-                Json(ConfigureProviderResponse {
-                    success: true,
-                    message: result.message,
-                    provider: provider_info_stub(&request.provider, ProviderStatus::Configured),
-                }),
-            )
-        }
-        Ok(result) => {
-            // Gatekeeper returned success: false (e.g., invalid key)
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(ConfigureProviderResponse {
-                    success: false,
-                    message: result.message,
-                    provider: provider_info_stub(&request.provider, ProviderStatus::Invalid),
-                }),
-            )
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to store provider key");
-
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(ConfigureProviderResponse {
-                    success: false,
-                    message: "Failed to store key in vault".to_string(),
-                    provider: provider_info_stub(&request.provider, ProviderStatus::NotConfigured),
-                }),
-            )
-        }
-    }
+    (
+        StatusCode::GONE,
+        Json(ConfigureProviderResponse {
+            success: false,
+            message: "Provider key management has moved to the Synapse dashboard".to_string(),
+            provider: provider_info_stub(&request.provider, ProviderStatus::NotConfigured),
+        }),
+    )
 }
 
 /// Response after revoking a provider key
@@ -475,69 +294,21 @@ pub struct RevokeProviderResponse {
     pub message: String,
 }
 
-/// Revoke (delete) a provider API key from Gatekeeper vault
+/// Revoke (delete) a provider API key
+///
+/// Key management is now handled via the Synapse dashboard
 async fn revoke_provider(
-    headers: HeaderMap,
-    State(state): State<Arc<ApiState>>,
-    axum::extract::Path(provider): axum::extract::Path<String>,
+    _headers: HeaderMap,
+    State(_state): State<Arc<ApiState>>,
+    axum::extract::Path(_provider): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    // Require JWT authentication
-    let Some(user_id) = extract_user_id(&headers, &state).await else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(RevokeProviderResponse {
-                success: false,
-                message: "Authentication required".to_string(),
-            }),
-        );
-    };
-
-    // Require Gatekeeper integration
-    let Some(resolver) = &state.key_resolver else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(RevokeProviderResponse {
-                success: false,
-                message: "Key storage not configured".to_string(),
-            }),
-        );
-    };
-
-    match resolver.delete(&user_id, &provider).await {
-        Ok(result) if result.success => {
-            tracing::info!(
-                user_id = %user_id,
-                provider = %provider,
-                "provider API key revoked"
-            );
-
-            (
-                StatusCode::OK,
-                Json(RevokeProviderResponse {
-                    success: true,
-                    message: result.message,
-                }),
-            )
-        }
-        Ok(result) => (
-            StatusCode::NOT_FOUND,
-            Json(RevokeProviderResponse {
-                success: false,
-                message: result.message,
-            }),
-        ),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to revoke provider key");
-
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(RevokeProviderResponse {
-                    success: false,
-                    message: "Failed to delete key from vault".to_string(),
-                }),
-            )
-        }
-    }
+    (
+        StatusCode::GONE,
+        Json(RevokeProviderResponse {
+            success: false,
+            message: "Provider key management has moved to the Synapse dashboard".to_string(),
+        }),
+    )
 }
 
 /// Map `ProviderType` enum to the string identifier used by Gatekeeper

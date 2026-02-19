@@ -759,13 +759,8 @@ async fn resolve_user_synapse(
                         "auto-provisioned managed key"
                     );
 
-                    // Cache the provisioned key in Gatekeeper vault
-                    if let Err(e) = resolver
-                        .store(user_id, "omni_credits", &provisioned.api_key, None)
-                        .await
-                    {
-                        tracing::warn!(error = %e, "failed to cache provisioned key in vault");
-                    }
+                    // Invalidate resolver cache so next resolve fetches the new key from Synapse
+                    resolver.invalidate(user_id).await;
 
                     let model = crate::daemon::DEFAULT_MODEL.to_string();
 
