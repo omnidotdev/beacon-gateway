@@ -1160,7 +1160,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             user.life_json_path.as_deref(),
             &session_repo,
             &user_repo,
-            Some(&memory_repo),
+            Some((&memory_repo, msg.content.as_str())),
             thread_id,
         );
 

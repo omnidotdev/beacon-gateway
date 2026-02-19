@@ -142,7 +142,11 @@ impl ContextBuilder {
         )
     }
 
-    /// Build context for a session with memory support
+    /// Build context for a session with query-driven semantic memory retrieval.
+    ///
+    /// `memory` is `Some((repo, query))` where `query` is the user's current message,
+    /// used to search for semantically relevant memories via `search_hybrid`.
+    /// Pass `None` to skip memory injection entirely.
     ///
     /// # Errors
     ///
@@ -154,7 +158,7 @@ impl ContextBuilder {
         life_json_path: Option<&str>,
         session_repo: &SessionRepo,
         user_repo: &UserRepo,
-        memory_repo: Option<&MemoryRepo>,
+        memory: Option<(&MemoryRepo, &str)>,
     ) -> Result<BuiltContext> {
         self.build_with_thread(
             session_id,
@@ -162,15 +166,18 @@ impl ContextBuilder {
             life_json_path,
             session_repo,
             user_repo,
-            memory_repo,
+            memory,
             None,
         )
     }
 
-    /// Build context for a session with memory and thread support
+    /// Build context for a session with memory and thread support.
     ///
     /// When `thread_id` is provided, only messages from that thread are included
     /// in the conversation history.
+    ///
+    /// `memory` is `Some((repo, query))` where `query` is the user's current message,
+    /// used to search for semantically relevant memories via `search_hybrid`.
     ///
     /// # Errors
     ///
@@ -183,7 +190,7 @@ impl ContextBuilder {
         life_json_path: Option<&str>,
         session_repo: &SessionRepo,
         user_repo: &UserRepo,
-        memory_repo: Option<&MemoryRepo>,
+        memory: Option<(&MemoryRepo, &str)>,
         thread_id: Option<&str>,
     ) -> Result<BuiltContext> {
         let mut system_parts = Vec::new();
@@ -198,9 +205,11 @@ impl ContextBuilder {
             }
         }
 
-        // Load memories from database
-        if let Some(repo) = memory_repo {
-            let memories = repo.get_context(user_id, self.config.max_memories).unwrap_or_default();
+        // Load memories from database using query-driven hybrid search
+        if let Some((repo, query)) = memory {
+            let memories = repo
+                .search_hybrid(user_id, query, None, self.config.max_memories)
+                .unwrap_or_default();
             if !memories.is_empty() {
                 let memory_context = format_memories(&memories);
                 if !memory_context.is_empty() {
@@ -641,6 +650,41 @@ mod tests {
     #[test]
     fn format_memories_empty_returns_empty_string() {
         assert_eq!(format_memories(&[]), String::new());
+    }
+
+    #[test]
+    fn build_with_memory_uses_query_for_search() {
+        let pool = crate::db::init_memory().unwrap();
+        let session_repo = crate::db::SessionRepo::new(pool.clone());
+        let user_repo = crate::db::UserRepo::new(pool.clone());
+        let memory_repo = crate::db::MemoryRepo::new(pool.clone());
+
+        // Add a memory
+        let user = user_repo.find_or_create("query_test_user").unwrap();
+        let mem = crate::db::Memory::new(
+            user.id.clone(),
+            crate::db::MemoryCategory::Preference,
+            "User prefers Rust over Python".to_string(),
+        );
+        memory_repo.add(&mem).unwrap();
+
+        let config = ContextConfig::default();
+        let builder = ContextBuilder::new(config);
+
+        // Use a single keyword that LIKE-matches the stored memory content
+        // (semantic search requires an embedder; unit tests use keyword fallback)
+        let result = builder.build_with_memory(
+            "session_test",
+            &user.id,
+            None,
+            &session_repo,
+            &user_repo,
+            Some((&memory_repo, "Rust")),
+        );
+        assert!(result.is_ok());
+        // Memory with "Rust" should have been retrieved (keyword match)
+        let ctx = result.unwrap();
+        assert!(ctx.system_context.contains("Rust"), "memory should be in context: {}", ctx.system_context);
     }
 
     #[test]

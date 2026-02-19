@@ -124,7 +124,7 @@ pub async fn handle_activity(
         user.life_json_path.as_deref(),
         &state.session_repo,
         &state.user_repo,
-        Some(&state.memory_repo),
+        Some((&state.memory_repo, text)),
     );
 
     if let Ok(ctx) = &built_context {

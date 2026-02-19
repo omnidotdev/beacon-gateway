@@ -177,7 +177,7 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
             user.life_json_path.as_deref(),
             &state.session_repo,
             &state.user_repo,
-            Some(&state.memory_repo),
+            Some((&state.memory_repo, prompt)),
         );
 
         let augmented_prompt = built_context
