@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 
 use super::ApiState;
 use crate::context::ContextBuilder;
+use crate::api::feedback::{FeedbackAnswer, FeedbackManager};
 use crate::db::MessageRole;
 
 /// Optional query parameters for WebSocket connection
@@ -134,6 +135,8 @@ async fn handle_socket(
 ) {
     let (mut sender, mut receiver) = socket.split();
 
+    let feedback = std::sync::Arc::new(FeedbackManager::new());
+
     // Send connected message
     let connected = WsOutgoing::Connected {
         session_id: session_id.clone(),
@@ -194,6 +197,7 @@ async fn handle_socket(
     });
 
     // Handle incoming messages
+    let feedback_for_recv = std::sync::Arc::clone(&feedback);
     let session_id_clone = session_id.clone();
     let gk_user_clone = gatekeeper_user_id.clone();
     let mut recv_task = tokio::spawn(async move {
@@ -201,7 +205,7 @@ async fn handle_socket(
             match msg {
                 Message::Text(text) => {
                     if let Err(e) =
-                        handle_message(&text, &state, &session_id_clone, tx.clone(), gk_user_clone.as_deref()).await
+                        handle_message(&text, &state, &session_id_clone, tx.clone(), gk_user_clone.as_deref(), &feedback_for_recv).await
                     {
                         let error = WsOutgoing::Error {
                             code: "internal_error".to_string(),
@@ -229,6 +233,7 @@ async fn handle_socket(
         _ = &mut recv_task => send_task.abort(),
     }
 
+    feedback.cancel_all();
     tracing::info!(session_id = %session_id, "WebSocket disconnected");
 }
 
@@ -239,6 +244,7 @@ async fn handle_message(
     session_id: &str,
     tx: mpsc::Sender<WsOutgoing>,
     gatekeeper_user_id: Option<&str>,
+    feedback: &std::sync::Arc<FeedbackManager>,
 ) -> crate::Result<()> {
     let incoming: WsIncoming = serde_json::from_str(text)
         .map_err(|e| crate::Error::Config(format!("invalid message: {e}")))?;
@@ -252,8 +258,16 @@ async fn handle_message(
         WsIncoming::Chat { content, persona_id } => {
             handle_chat_message(&content, persona_id, state, session_id, tx, gatekeeper_user_id).await?;
         }
-        // TODO: route agent responses to a pending-request registry
-        WsIncoming::AgentResponse { .. } => {}
+        WsIncoming::AgentResponse { request_id, answer } => {
+            let fb_answer = match answer.as_str() {
+                "allow" => FeedbackAnswer::Allow,
+                "allow_session" => FeedbackAnswer::AllowSession,
+                "deny" | "denied" => FeedbackAnswer::Denied,
+                "" => FeedbackAnswer::Cancelled,
+                other => FeedbackAnswer::Text(other.to_string()),
+            };
+            feedback.respond(request_id, fb_answer);
+        }
     }
 
     Ok(())
@@ -717,5 +731,18 @@ mod tests {
         let json = r#"{"type":"agent_response","request_id":"00000000-0000-0000-0000-000000000000","answer":"A"}"#;
         let msg: WsIncoming = serde_json::from_str(json).unwrap();
         assert!(matches!(msg, WsIncoming::AgentResponse { .. }));
+    }
+
+    #[test]
+    fn feedback_manager_cancel_on_disconnect() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mgr = crate::api::feedback::FeedbackManager::new();
+            let id = uuid::Uuid::new_v4();
+            let rx = mgr.register(id);
+            mgr.cancel_all();
+            let answer = rx.await.unwrap();
+            assert!(matches!(answer, crate::api::feedback::FeedbackAnswer::Cancelled));
+        });
     }
 }
