@@ -301,8 +301,87 @@ async fn configure_provider(
         );
     }
 
-    // Require API key in request
+    // Model-only switch (no API key provided)
     let Some(api_key) = &request.api_key else {
+        if let Some(ref model) = request.model {
+            let Some(user_id) = extract_user_id(&headers, &state).await else {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ConfigureProviderResponse {
+                        success: false,
+                        message: "Authentication required".to_string(),
+                        provider: provider_info_stub(
+                            &request.provider,
+                            ProviderStatus::NotConfigured,
+                        ),
+                    }),
+                );
+            };
+
+            if let Some(resolver) = &state.key_resolver {
+                let provider_str = provider_type_to_str(&request.provider);
+
+                if let Ok(Some(existing)) = resolver.resolve(&user_id, provider_str).await {
+                    if existing.is_user_key {
+                        match resolver
+                            .store(&user_id, provider_str, &existing.api_key, Some(model.as_str()))
+                            .await
+                        {
+                            Ok(result) if result.success => {
+                                tracing::info!(
+                                    user_id = %user_id,
+                                    provider = %provider_str,
+                                    model = %model,
+                                    "model switched for existing provider key"
+                                );
+
+                                return (
+                                    StatusCode::OK,
+                                    Json(ConfigureProviderResponse {
+                                        success: true,
+                                        message: result.message,
+                                        provider: provider_info_stub(
+                                            &request.provider,
+                                            ProviderStatus::Configured,
+                                        ),
+                                    }),
+                                );
+                            }
+                            Ok(result) => {
+                                return (
+                                    StatusCode::UNPROCESSABLE_ENTITY,
+                                    Json(ConfigureProviderResponse {
+                                        success: false,
+                                        message: result.message,
+                                        provider: provider_info_stub(
+                                            &request.provider,
+                                            ProviderStatus::Invalid,
+                                        ),
+                                    }),
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "failed to update model for provider");
+
+                                return (
+                                    StatusCode::BAD_GATEWAY,
+                                    Json(ConfigureProviderResponse {
+                                        success: false,
+                                        message: "Failed to update model in vault".to_string(),
+                                        provider: provider_info_stub(
+                                            &request.provider,
+                                            ProviderStatus::NotConfigured,
+                                        ),
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // No model switch or no existing key — require API key
         return (
             StatusCode::BAD_REQUEST,
             Json(ConfigureProviderResponse {
