@@ -313,8 +313,29 @@ async fn handle_chat_message(
     {
         match resolve_user_synapse(resolver, gk_user_id, state).await {
             Some((client, model)) => (Some(client), Some(model)),
+            None if state.cloud_mode => {
+                tracing::warn!(user_id = %gk_user_id, "cloud mode: no user key resolved, cannot fall back to shared client");
+                let error = WsOutgoing::Error {
+                    code: "provision_failed".to_string(),
+                    message: "Unable to provision your account. Please try again or check your API key settings.".to_string(),
+                };
+                tx.send(error)
+                    .await
+                    .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+                return Ok(());
+            }
             None => (state.synapse.clone(), None),
         }
+    } else if state.cloud_mode {
+        tracing::warn!("cloud mode: no key resolver configured, cannot resolve user keys");
+        let error = WsOutgoing::Error {
+            code: "config_error".to_string(),
+            message: "Service misconfigured. Please contact support.".to_string(),
+        };
+        tx.send(error)
+            .await
+            .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+        return Ok(());
     } else {
         (state.synapse.clone(), None)
     };
@@ -578,10 +599,10 @@ async fn resolve_user_synapse(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         error = %e,
                         user_id = %user_id,
-                        "auto-provision failed, falling back to shared synapse"
+                        "auto-provision failed"
                     );
                 }
             }
