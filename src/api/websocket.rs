@@ -564,15 +564,60 @@ async fn handle_chat_message(
                 tool_call_id: None,
             });
 
-            // Execute each tool call
-            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), state.plugin_manager.clone());
-            for tc in &pending_tool_calls {
-                let result = executor
-                    .execute(&tc.name, &tc.arguments)
-                    .await
-                    .unwrap_or_else(|e| format!("Error: {e}"));
+            let executor = Arc::new(crate::tools::executor::ToolExecutor::new(
+                Arc::clone(&synapse),
+                state.plugin_manager.clone(),
+            ));
 
-                messages.push(synapse_client::Message::tool(&tc.id, &result));
+            // Emit ToolStart for every tool immediately
+            for tc in &pending_tool_calls {
+                let _ = tx.try_send(WsOutgoing::ToolStart {
+                    tool_id: tc.id.clone(),
+                    name: tc.name.clone(),
+                });
+            }
+
+            // Partition: reads run fully parallel, mutates (+ unknown interactives) run sequentially
+            use crate::tools::executor::ToolKind;
+            let (reads, mutates): (Vec<_>, Vec<_>) = pending_tool_calls
+                .iter()
+                .partition(|tc| ToolKind::classify(&tc.name) == ToolKind::Read);
+
+            // Run read tools concurrently
+            let read_futs = reads.into_iter().map(|tc| {
+                let executor = Arc::clone(&executor);
+                let tool_id = tc.id.clone();
+                let name = tc.name.clone();
+                let args = tc.arguments.clone();
+                async move {
+                    let result = executor.execute(&name, &args).await;
+                    (tool_id, name, args, result)
+                }
+            });
+            let read_results = futures::future::join_all(read_futs).await;
+
+            // Run mutate tools sequentially
+            let mut mutate_results = Vec::new();
+            for tc in mutates {
+                let result = executor.execute(&tc.name, &tc.arguments).await;
+                mutate_results.push((tc.id.clone(), tc.name.clone(), tc.arguments.clone(), result));
+            }
+
+            // Emit ToolResult and push to conversation for all results
+            for (tool_id, name, args, result) in read_results.into_iter().chain(mutate_results) {
+                let (output, is_error) = match result {
+                    Ok(out) => (out, false),
+                    Err(e) => (format!("Error: {e}"), true),
+                };
+                let invocation = crate::tools::format_invocation(&name, &args);
+                let _ = tx.try_send(WsOutgoing::ToolResult {
+                    tool_id: tool_id.clone(),
+                    name: name.clone(),
+                    invocation,
+                    output: output.clone(),
+                    is_error,
+                });
+                messages.push(synapse_client::Message::tool(&tool_id, &output));
             }
 
             continue; // Next turn
@@ -744,5 +789,18 @@ mod tests {
             let answer = rx.await.unwrap();
             assert!(matches!(answer, crate::api::feedback::FeedbackAnswer::Cancelled));
         });
+    }
+
+    #[test]
+    fn partitions_tool_batch_correctly() {
+        use crate::tools::executor::ToolKind;
+
+        let names = vec!["Read", "Bash", "Glob", "Write", "WebSearch"];
+        let (reads, mutates): (Vec<&&str>, Vec<&&str>) = names
+            .iter()
+            .partition(|n| ToolKind::classify(*n) == ToolKind::Read);
+
+        assert_eq!(reads, vec![&"Read", &"Glob", &"WebSearch"]);
+        assert_eq!(mutates, vec![&"Bash", &"Write"]);
     }
 }
