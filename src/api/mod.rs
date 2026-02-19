@@ -1,6 +1,8 @@
 //! HTTP API server for beacon gateway
 
 pub mod admin;
+pub mod feedback;
+pub use feedback::{FeedbackAnswer, FeedbackManager};
 mod auth;
 pub mod browser;
 pub mod canvas;
