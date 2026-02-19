@@ -37,11 +37,11 @@ pub enum WsIncoming {
         #[serde(default)]
         persona_id: Option<String>,
     },
-    /// Client answer to an ask_user / permission / location_request event
+    /// Client answer to an `ask_user` / permission / `location_request` event
     AgentResponse {
         request_id: uuid::Uuid,
-        /// For ask_user: selected option or typed text.
-        /// For permission: "allow" | "allow_session" | "deny".
+        /// For `ask_user`: selected option or typed text.
+        /// For permission: "allow" | `"allow_session"` | "deny".
         /// For location: serialized coords JSON or "denied".
         answer: String,
     },
