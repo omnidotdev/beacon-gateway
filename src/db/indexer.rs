@@ -29,6 +29,7 @@ pub struct ExtractionResponse {
 }
 
 /// Conversation indexer
+#[derive(Clone)]
 pub struct Indexer {
     embedder: Embedder,
     memory_repo: MemoryRepo,
@@ -248,6 +249,16 @@ Be concise. Each fact should be a single, clear statement."#;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexer_is_clone() {
+        use crate::db::{Embedder, MemoryRepo};
+        let pool = crate::db::init_memory().unwrap();
+        let embedder = Embedder::new("fake-key".to_string()).unwrap();
+        let memory_repo = MemoryRepo::new(pool);
+        let indexer = Indexer::new(embedder, memory_repo, "fake-key".to_string());
+        let _cloned = indexer.clone();
+    }
 
     #[test]
     fn test_extraction_response_parse() {
