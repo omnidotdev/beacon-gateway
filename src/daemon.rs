@@ -888,7 +888,7 @@ impl Daemon {
         voice_context: Option<&str>,
         plugin_manager: &crate::api::plugins::SharedPluginManager,
     ) -> Result<()> {
-        let samples = capture.peek_buffer();
+        let samples = capture.take_buffer();
 
         if samples.len() < CHUNK_SIZE {
             return Ok(());
