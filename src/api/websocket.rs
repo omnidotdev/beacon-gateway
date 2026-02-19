@@ -593,7 +593,10 @@ async fn handle_chat_message(
                     #[serde(default)]
                     multi_select: bool,
                 }
-                let ask: AskArgs = serde_json::from_str(&tc.arguments).unwrap_or_default();
+                let ask: AskArgs = serde_json::from_str(&tc.arguments).unwrap_or_else(|e| {
+                    tracing::warn!(tool_id = %tc.id, error = %e, "malformed ask_user arguments, using defaults");
+                    AskArgs::default()
+                });
                 let req_id = uuid::Uuid::new_v4();
 
                 tx.send(WsOutgoing::AskUser {
@@ -611,13 +614,15 @@ async fn handle_chat_message(
                 )
                 .await
                 .ok()
-                .and_then(|r| r.ok())
-                .map(|a| match a {
-                    crate::api::feedback::FeedbackAnswer::Text(s) => s,
-                    crate::api::feedback::FeedbackAnswer::Cancelled => "[cancelled]".to_string(),
-                    _ => "[no answer]".to_string(),
-                })
-                .unwrap_or_else(|| "[timeout]".to_string());
+                .and_then(Result::ok)
+                .map_or_else(
+                    || "[timeout]".to_string(),
+                    |a| match a {
+                        crate::api::feedback::FeedbackAnswer::Text(s) => s,
+                        crate::api::feedback::FeedbackAnswer::Cancelled => "[cancelled]".to_string(),
+                        _ => "[no answer]".to_string(),
+                    },
+                );
 
                 messages.push(synapse_client::Message::tool(&tc.id, &answer));
             }
