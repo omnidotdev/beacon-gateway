@@ -135,7 +135,7 @@ async fn handle_socket(
 ) {
     let (mut sender, mut receiver) = socket.split();
 
-    let feedback = std::sync::Arc::new(FeedbackManager::new());
+    let feedback = Arc::new(FeedbackManager::new());
 
     // Send connected message
     let connected = WsOutgoing::Connected {
@@ -197,7 +197,7 @@ async fn handle_socket(
     });
 
     // Handle incoming messages
-    let feedback_for_recv = std::sync::Arc::clone(&feedback);
+    let feedback_for_recv = Arc::clone(&feedback);
     let session_id_clone = session_id.clone();
     let gk_user_clone = gatekeeper_user_id.clone();
     let mut recv_task = tokio::spawn(async move {
@@ -244,7 +244,7 @@ async fn handle_message(
     session_id: &str,
     tx: mpsc::Sender<WsOutgoing>,
     gatekeeper_user_id: Option<&str>,
-    feedback: &std::sync::Arc<FeedbackManager>,
+    feedback: &Arc<FeedbackManager>,
 ) -> crate::Result<()> {
     let incoming: WsIncoming = serde_json::from_str(text)
         .map_err(|e| crate::Error::Config(format!("invalid message: {e}")))?;

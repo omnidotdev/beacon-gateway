@@ -74,6 +74,12 @@ impl FeedbackManager {
     }
 }
 
+impl Drop for FeedbackManager {
+    fn drop(&mut self) {
+        self.cancel_all();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
