@@ -670,7 +670,10 @@ impl Config {
         Self::load_persona(&cache_dir, persona_id)
     }
 
-    /// Fetch a persona from Manifold registry via web router (blocking)
+    /// Fetch a persona from Manifold registry via web router
+    ///
+    /// Uses `spawn_blocking` to avoid dropping a `reqwest::blocking::Client`
+    /// inside the async runtime, which causes a panic on shutdown
     fn fetch_persona_from_manifold(
         base_url: &str,
         namespace: &str,
@@ -683,38 +686,45 @@ impl Config {
             persona_id
         );
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| Error::Config(format!("failed to create HTTP client: {e}")))?;
+        let persona_id_owned = persona_id.to_string();
+        let namespace_owned = namespace.to_string();
 
-        let response = client
-            .get(&url)
-            .send()
-            .map_err(|e| Error::Config(format!("failed to fetch persona from Manifold: {e}")))?;
+        // Run on a dedicated OS thread so the blocking client's internal
+        // runtime is created and dropped outside the async context
+        std::thread::spawn(move || {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| Error::Config(format!("failed to create HTTP client: {e}")))?;
 
-        if !response.status().is_success() {
-            return Err(Error::Config(format!(
-                "persona '{}' not found in namespace '{}' ({})",
-                persona_id,
-                namespace,
-                response.status()
-            )));
-        }
+            let response = client.get(&url).send().map_err(|e| {
+                Error::Config(format!("failed to fetch persona from Manifold: {e}"))
+            })?;
 
-        let content = response
-            .text()
-            .map_err(|e| Error::Config(format!("failed to read Manifold response: {e}")))?;
+            if !response.status().is_success() {
+                return Err(Error::Config(format!(
+                    "persona '{}' not found in namespace '{}' ({})",
+                    persona_id_owned, namespace_owned, response.status()
+                )));
+            }
 
-        let persona: Persona = serde_json::from_str(&content)
-            .map_err(|e| Error::Config(format!("failed to parse persona JSON: {e}")))?;
+            let content = response.text().map_err(|e| {
+                Error::Config(format!("failed to read Manifold response: {e}"))
+            })?;
 
-        tracing::info!(
-            persona_id,
-            namespace,
-            "loaded persona from Manifold"
-        );
+            let persona: Persona = serde_json::from_str(&content).map_err(|e| {
+                Error::Config(format!("failed to parse persona JSON: {e}"))
+            })?;
 
-        Ok(persona)
+            tracing::info!(
+                persona_id = persona_id_owned,
+                namespace = namespace_owned,
+                "loaded persona from Manifold"
+            );
+
+            Ok(persona)
+        })
+        .join()
+        .map_err(|_| Error::Config("persona fetch thread panicked".to_string()))?
     }
 }
