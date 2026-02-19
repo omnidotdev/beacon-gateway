@@ -32,10 +32,11 @@ impl ToolKind {
         match name {
             // Read-only tools
             "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch"
-            | "ListDir" | "NotebookRead" | "TaskList" | "TaskGet" => Self::Read,
+            | "ListDir" | "NotebookRead" | "TaskList" | "TaskGet"
+            | "memory_search" => Self::Read,
             // Interactive tools
             "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
-            // Everything else defaults to Mutate (safe)
+            // Everything else defaults to Mutate (safe, includes memory_store / memory_forget)
             _ => Self::Mutate,
         }
     }
@@ -45,6 +46,7 @@ impl ToolKind {
 pub struct ToolExecutor {
     synapse: Arc<SynapseClient>,
     plugin_manager: SharedPluginManager,
+    memory_tools: Option<Arc<crate::tools::BuiltinMemoryTools>>,
 }
 
 impl ToolExecutor {
@@ -53,7 +55,15 @@ impl ToolExecutor {
         Self {
             synapse,
             plugin_manager,
+            memory_tools: None,
         }
+    }
+
+    /// Attach built-in memory tools to this executor
+    #[must_use]
+    pub fn with_memory_tools(mut self, tools: Arc<crate::tools::BuiltinMemoryTools>) -> Self {
+        self.memory_tools = Some(tools);
+        self
     }
 
     /// Fetch available tools from both Synapse MCP and loaded plugins
@@ -81,11 +91,21 @@ impl ToolExecutor {
             });
         }
 
+        // Include built-in memory tools if attached
+        if self.memory_tools.is_some() {
+            definitions.extend(crate::tools::BuiltinMemoryTools::tool_definitions());
+        }
+
         Ok(definitions)
     }
 
     /// Execute a tool call, routing to plugin subprocess or Synapse MCP
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
+        // Route built-in memory tools
+        if name.starts_with("memory_") && let Some(ref mt) = self.memory_tools {
+            return mt.execute(name, arguments).await;
+        }
+
         // Plugin tools use `plugin_id::tool_name` format
         if let Some((plugin_id, tool_name)) = name.split_once("::") {
             return self.execute_plugin(plugin_id, tool_name, arguments).await;

@@ -3,11 +3,13 @@
 mod browser;
 mod cron;
 pub mod executor;
+pub mod memory;
 mod policy;
 mod sessions;
 mod web;
 
 pub use browser::{BrowserController, BrowserControllerConfig, ElementInfo, PageContent, Screenshot};
+pub use memory::BuiltinMemoryTools;
 pub use cron::{CronTools, ScheduleInfo, ScheduleParams};
 pub use policy::{ToolPolicy, ToolPolicyConfig, ToolProfile};
 pub use sessions::{MessageInfo, SessionInfo, SessionTools};

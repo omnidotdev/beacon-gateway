@@ -451,9 +451,16 @@ async fn handle_chat_message(
 
     let model = model_override.unwrap_or_else(|| state.llm_model.clone());
 
+    let memory_tools = Arc::new(crate::tools::BuiltinMemoryTools::new(
+        state.memory_repo.clone(),
+        state.embedder.clone(),
+        user_id.clone(),
+    ));
+
     // Fetch MCP tools from Synapse and plugins if available
     let tools = if let Some(ref synapse) = state.synapse {
-        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), state.plugin_manager.clone());
+        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), state.plugin_manager.clone())
+            .with_memory_tools(Arc::clone(&memory_tools));
         executor.list_tools().await.ok()
     } else {
         None
@@ -580,10 +587,13 @@ async fn handle_chat_message(
                 tool_call_id: None,
             });
 
-            let executor = Arc::new(crate::tools::executor::ToolExecutor::new(
-                Arc::clone(&synapse),
-                state.plugin_manager.clone(),
-            ));
+            let executor = Arc::new(
+                crate::tools::executor::ToolExecutor::new(
+                    Arc::clone(&synapse),
+                    state.plugin_manager.clone(),
+                )
+                .with_memory_tools(Arc::clone(&memory_tools)),
+            );
 
             // Emit ToolStart for every tool immediately
             for tc in &pending_tool_calls {

@@ -58,7 +58,7 @@ impl MemoryCategory {
         }
     }
 
-    fn from_str_value(s: &str) -> Option<Self> {
+    pub fn from_str_value(s: &str) -> Option<Self> {
         match s {
             "preference" => Some(Self::Preference),
             "fact" => Some(Self::Fact),
