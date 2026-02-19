@@ -66,7 +66,7 @@ pub struct ProvidersResponse {
 /// Extract user ID from JWT in the Authorization header
 async fn extract_user_id(headers: &HeaderMap, state: &ApiState) -> Option<String> {
     let Some(jwt_cache) = state.jwt_cache.as_ref() else {
-        tracing::warn!("BYOK auth failed: no JWT cache (AUTH_BASE_URL or BEACON_SERVICE_KEY not set)");
+        tracing::warn!("BYOK auth failed: no JWT cache (SYNAPSE_API_URL or SYNAPSE_GATEWAY_SECRET not set)");
         return None;
     };
 
