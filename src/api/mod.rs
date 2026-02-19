@@ -35,7 +35,7 @@ use tower_http::trace::TraceLayer;
 use crate::canvas::Canvas;
 use crate::channels::{TeamsChannel, TelegramChannel};
 use crate::context::ContextConfig;
-use crate::db::{DbPool, MemoryRepo, SessionRepo, SkillRepo, UserRepo};
+use crate::db::{DbPool, Embedder, Indexer, MemoryRepo, SessionRepo, SkillRepo, UserRepo};
 use crate::nodes::NodeRegistry;
 use crate::tools::ToolPolicy;
 use crate::Result;
@@ -72,6 +72,12 @@ pub struct ApiState {
     pub session_repo: SessionRepo,
     pub user_repo: UserRepo,
     pub memory_repo: MemoryRepo,
+    /// Text embedder for semantic memory search.
+    /// Present only when `OPENAI_API_KEY` is set.
+    pub embedder: Option<Arc<Embedder>>,
+    /// Conversation indexer for post-turn memory extraction.
+    /// Present only when `OPENAI_API_KEY` is set.
+    pub indexer: Option<Arc<Indexer>>,
     pub skill_repo: SkillRepo,
     pub tool_policy: Arc<ToolPolicy>,
     pub manifold_url: String,
@@ -312,6 +318,18 @@ impl ApiServerBuilder {
         let user_repo = UserRepo::new(self.db.clone());
         let memory_repo = MemoryRepo::new(self.db.clone());
         let skill_repo = SkillRepo::new(self.db.clone());
+
+        // Create embedder and indexer if OPENAI_API_KEY is set
+        let embedder = std::env::var("OPENAI_API_KEY")
+            .ok()
+            .and_then(|key| Embedder::new(key).ok())
+            .map(Arc::new);
+
+        let indexer = embedder.as_ref().and_then(|emb| {
+            std::env::var("OPENAI_API_KEY").ok().map(|key| {
+                Arc::new(Indexer::new((**emb).clone(), memory_repo.clone(), key))
+            })
+        });
         let manifold_url = self
             .manifold_url
             .unwrap_or_else(|| "https://api.manifold.omni.dev".to_string());
@@ -356,6 +374,8 @@ impl ApiServerBuilder {
             session_repo,
             user_repo,
             memory_repo,
+            embedder,
+            indexer,
             skill_repo,
             tool_policy: self.tool_policy,
             manifold_url,
@@ -485,5 +505,17 @@ impl ApiServer {
     #[must_use]
     pub fn spawn(self) -> tokio::task::JoinHandle<Result<()>> {
         tokio::spawn(async move { self.run().await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn api_state_has_embedder_and_indexer_fields() {
+        // Compile-time assertion: these fields must exist on ApiState
+        fn _check(state: &crate::api::ApiState) {
+            let _: &Option<std::sync::Arc<crate::db::Embedder>> = &state.embedder;
+            let _: &Option<std::sync::Arc<crate::db::Indexer>> = &state.indexer;
+        }
     }
 }
