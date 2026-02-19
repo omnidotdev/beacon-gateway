@@ -249,7 +249,7 @@ impl MemoryRepo {
         let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
-            &format!("SELECT {} FROM memories WHERE id = ?1", MEMORY_COLUMNS),
+            &format!("SELECT {} FROM memories WHERE id = ?1 AND deleted_at IS NULL", MEMORY_COLUMNS),
             [id],
             row_to_memory_row,
         );
