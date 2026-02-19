@@ -12,6 +12,35 @@ use crate::{Error, Result};
 /// Shared plugin manager type
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
+/// Classification used to determine execution strategy within a tool batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    /// Read-only; safe to run fully in parallel.
+    Read,
+    /// Mutating; serialized among other mutating tools but parallel with reads.
+    Mutate,
+    /// Requires user response before any tool in the batch runs.
+    Interactive,
+}
+
+impl ToolKind {
+    /// Classify a tool by name.
+    ///
+    /// Unknown tools default to `Mutate` — the safe conservative choice.
+    #[must_use]
+    pub fn classify(name: &str) -> Self {
+        match name {
+            // Read-only tools
+            "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch"
+            | "ListDir" | "NotebookRead" | "TaskList" | "TaskGet" => Self::Read,
+            // Interactive tools
+            "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
+            // Everything else defaults to Mutate (safe)
+            _ => Self::Mutate,
+        }
+    }
+}
+
 /// Executes tool calls via Synapse MCP or plugin subprocess
 pub struct ToolExecutor {
     synapse: Arc<SynapseClient>,
@@ -169,4 +198,25 @@ async fn run_plugin_entry(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(stdout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_known_tools() {
+        assert_eq!(ToolKind::classify("Read"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("Glob"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("Grep"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("WebSearch"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("WebFetch"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("Write"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("Edit"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("Bash"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("ask_user"), ToolKind::Interactive);
+        assert_eq!(ToolKind::classify("permission"), ToolKind::Interactive);
+        // Unknown tools default to Mutate (safe default)
+        assert_eq!(ToolKind::classify("unknown_tool"), ToolKind::Mutate);
+    }
 }
