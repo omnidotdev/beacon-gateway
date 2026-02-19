@@ -362,13 +362,29 @@ async fn handle_chat_message(
         active_system_prompt,
     );
     let context_builder = ContextBuilder::new(context_config);
-    let mut built_context = context_builder.build_with_memory(
+
+    // Embed user message for semantic memory retrieval when embedder is available
+    let query_embedding = if let Some(ref embedder) = state.embedder {
+        match embedder.embed(content).await {
+            Ok(emb) => Some(emb),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to embed user message for semantic retrieval");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let _query_embedding_for_tools = query_embedding.clone();
+
+    let mut built_context = context_builder.build_with_semantic_memory(
         &session.id,
         &user_id,
         user.life_json_path.as_deref(),
         &state.session_repo,
         &state.user_repo,
         Some(&state.memory_repo),
+        query_embedding.as_deref(),
     );
 
     // Inject knowledge based on user message

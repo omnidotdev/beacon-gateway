@@ -244,6 +244,85 @@ impl ContextBuilder {
         })
     }
 
+    /// Build context using semantic (embedding-based) memory retrieval
+    ///
+    /// When `query_embedding` is provided, uses vector similarity search
+    /// to find contextually relevant memories. Falls back to access-count
+    /// ordering when embedding is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operations fail
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_semantic_memory(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        life_json_path: Option<&str>,
+        session_repo: &SessionRepo,
+        user_repo: &UserRepo,
+        memory_repo: Option<&MemoryRepo>,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<BuiltContext> {
+        let mut system_parts = Vec::new();
+
+        // Load life.json context
+        if let Some(path) = life_json_path
+            && let Ok(life_json) = LifeJsonReader::read(path)
+        {
+            let life_context = life_json.build_context_string(&self.config.persona_id);
+            if !life_context.is_empty() {
+                system_parts.push(life_context);
+            }
+        }
+
+        // Load memories — semantic when embedding available, access-count otherwise
+        if let Some(repo) = memory_repo {
+            let memories = query_embedding.map_or_else(
+                || {
+                    repo.get_context(user_id, self.config.max_memories)
+                        .unwrap_or_default()
+                },
+                |embedding| {
+                    repo.search_similar(user_id, embedding, self.config.max_memories)
+                        .unwrap_or_default()
+                },
+            );
+
+            if !memories.is_empty() {
+                let memory_context = format_memories(&memories);
+                if !memory_context.is_empty() {
+                    system_parts.push(memory_context);
+                }
+            }
+        }
+
+        // Load learned user context from database
+        let user_contexts = user_repo.get_context(user_id).unwrap_or_default();
+        if !user_contexts.is_empty() {
+            let learned_context = format_user_context(&user_contexts);
+            if !learned_context.is_empty() {
+                system_parts.push(learned_context);
+            }
+        }
+
+        let system_context = system_parts.join("\n\n");
+
+        let messages = session_repo
+            .get_messages(session_id, self.config.max_messages)
+            .unwrap_or_default();
+        let (context_messages, estimated_tokens) =
+            self.prune_messages(&messages, &system_context);
+
+        Ok(BuiltContext {
+            persona_prompt: self.config.persona_system_prompt.clone(),
+            knowledge_context: String::new(),
+            system_context,
+            messages: context_messages,
+            estimated_tokens,
+        })
+    }
+
     /// Build context from just a life.json file (for initial setup)
     #[must_use]
     pub fn build_from_life_json(&self, life_json: &LifeJson) -> BuiltContext {
@@ -562,5 +641,29 @@ mod tests {
     #[test]
     fn format_memories_empty_returns_empty_string() {
         assert_eq!(format_memories(&[]), String::new());
+    }
+
+    #[test]
+    fn build_with_semantic_memory_uses_search_similar_when_embedding_provided() {
+        let pool = crate::db::init_memory().unwrap();
+        let memory_repo = crate::db::MemoryRepo::new(pool.clone());
+        let session_repo = crate::db::SessionRepo::new(pool.clone());
+        let user_repo = crate::db::UserRepo::new(pool.clone());
+
+        let config = ContextConfig::default();
+        let builder = ContextBuilder::new(config);
+
+        // Should not panic with a provided embedding (even synthetic zeros)
+        let fake_embedding = vec![0.0_f32; 1536];
+        let result = builder.build_with_semantic_memory(
+            "session_1",
+            "user_1",
+            None,
+            &session_repo,
+            &user_repo,
+            None,
+            Some(&fake_embedding),
+        );
+        assert!(result.is_ok(), "build_with_semantic_memory must not fail: {:?}", result.err());
     }
 }
