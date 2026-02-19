@@ -17,9 +17,10 @@ use synapse_client::{ChatEvent, SynapseClient};
 use tokio::sync::mpsc;
 
 use super::ApiState;
-use crate::context::ContextBuilder;
 use crate::api::feedback::{FeedbackAnswer, FeedbackManager};
+use crate::context::ContextBuilder;
 use crate::db::MessageRole;
+use crate::tools::executor::ToolKind;
 
 /// Optional query parameters for WebSocket connection
 #[derive(Debug, Deserialize)]
@@ -578,7 +579,6 @@ async fn handle_chat_message(
             }
 
             // Partition: reads run fully parallel, mutates (+ unknown interactives) run sequentially
-            use crate::tools::executor::ToolKind;
             let (reads, mutates): (Vec<_>, Vec<_>) = pending_tool_calls
                 .iter()
                 .partition(|tc| ToolKind::classify(&tc.name) == ToolKind::Read);

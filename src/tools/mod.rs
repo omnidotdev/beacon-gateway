@@ -25,8 +25,7 @@ pub fn format_invocation(name: &str, arguments: &str) -> String {
     let key = match name {
         "Bash" | "shell" => "command",
         "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
-        "Glob" => "pattern",
-        "Grep" => "pattern",
+        "Glob" | "Grep" => "pattern",
         "WebFetch" | "WebSearch" => "url",
         _ => {
             if let Some(val) = args
@@ -46,6 +45,5 @@ pub fn format_invocation(name: &str, arguments: &str) -> String {
 
     args.get(key)
         .and_then(|v| v.as_str())
-        .map(|s| s.chars().take(60).collect::<String>())
-        .unwrap_or_else(|| name.to_string())
+        .map_or_else(|| name.to_string(), |s| s.chars().take(60).collect::<String>())
 }
