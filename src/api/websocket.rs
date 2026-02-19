@@ -375,8 +375,6 @@ async fn handle_chat_message(
     } else {
         None
     };
-    let _query_embedding_for_tools = query_embedding.clone();
-
     let mut built_context = context_builder.build_with_semantic_memory(
         &session.id,
         &user_id,
