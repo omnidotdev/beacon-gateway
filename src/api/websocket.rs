@@ -579,54 +579,51 @@ async fn handle_chat_message(
                 });
             }
 
-            // Drain interactive tools first — they require user response before other tools run
-            let (interactives, rest): (Vec<_>, Vec<_>) = pending_tool_calls
+            // Drain ask_user calls first — they require user response before other tools run
+            let (ask_user_calls, rest): (Vec<_>, Vec<_>) = pending_tool_calls
                 .iter()
-                .partition(|tc| ToolKind::classify(&tc.name) == ToolKind::Interactive);
+                .partition(|tc| tc.name == "ask_user");
 
-            for tc in &interactives {
-                if tc.name == "ask_user" {
-                    #[derive(serde::Deserialize, Default)]
-                    struct AskArgs {
-                        #[serde(default)]
-                        question: String,
-                        options: Option<Vec<String>>,
-                        #[serde(default)]
-                        multi_select: bool,
-                    }
-                    let ask: AskArgs = serde_json::from_str(&tc.arguments).unwrap_or_default();
-                    let req_id = uuid::Uuid::new_v4();
-
-                    tx.send(WsOutgoing::AskUser {
-                        request_id: req_id,
-                        question: ask.question,
-                        options: ask.options,
-                        multi_select: ask.multi_select,
-                    })
-                    .await
-                    .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
-
-                    let answer = tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        feedback.register(req_id),
-                    )
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .map(|a| match a {
-                        crate::api::feedback::FeedbackAnswer::Text(s) => s,
-                        crate::api::feedback::FeedbackAnswer::Cancelled => "[cancelled]".to_string(),
-                        _ => "[no answer]".to_string(),
-                    })
-                    .unwrap_or_else(|| "[timeout]".to_string());
-
-                    messages.push(synapse_client::Message::tool(&tc.id, &answer));
+            for tc in &ask_user_calls {
+                #[derive(serde::Deserialize, Default)]
+                struct AskArgs {
+                    #[serde(default)]
+                    question: String,
+                    options: Option<Vec<String>>,
+                    #[serde(default)]
+                    multi_select: bool,
                 }
-                // Other interactive tool names (permission, location_request) fall through to rest
-                // and are handled as mutates until Phase 2 implements them
+                let ask: AskArgs = serde_json::from_str(&tc.arguments).unwrap_or_default();
+                let req_id = uuid::Uuid::new_v4();
+
+                tx.send(WsOutgoing::AskUser {
+                    request_id: req_id,
+                    question: ask.question,
+                    options: ask.options,
+                    multi_select: ask.multi_select,
+                })
+                .await
+                .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+
+                let answer = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    feedback.register(req_id),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .map(|a| match a {
+                    crate::api::feedback::FeedbackAnswer::Text(s) => s,
+                    crate::api::feedback::FeedbackAnswer::Cancelled => "[cancelled]".to_string(),
+                    _ => "[no answer]".to_string(),
+                })
+                .unwrap_or_else(|| "[timeout]".to_string());
+
+                messages.push(synapse_client::Message::tool(&tc.id, &answer));
             }
 
-            // Partition: reads run fully parallel, mutates (+ unknown interactives) run sequentially
+            // Remaining tools: reads run in parallel, everything else (including other interactive
+            // tool names not yet implemented) runs sequentially
             let (reads, mutates): (Vec<_>, Vec<_>) = rest
                 .into_iter()
                 .partition(|tc| ToolKind::classify(&tc.name) == ToolKind::Read);
