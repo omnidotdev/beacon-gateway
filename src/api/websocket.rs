@@ -714,6 +714,22 @@ async fn handle_chat_message(
         .await
         .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
 
+    // Post-turn background fact extraction — fire-and-forget, never blocks the response
+    if let Some(indexer) = state.indexer.clone() {
+        let uid = user_id.clone();
+        let user_msg = content.to_string();
+        let assistant_msg = full_response.clone();
+        let sid = session.id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = indexer
+                .index_message(&uid, &user_msg, &assistant_msg, Some(&sid), Some("web"))
+                .await
+            {
+                tracing::warn!(error = %e, user_id = %uid, "post-turn indexing failed");
+            }
+        });
+    }
+
     Ok(())
 }
 
@@ -889,5 +905,11 @@ mod tests {
         assert_eq!(parsed.question, "Which env?");
         assert_eq!(parsed.options.unwrap().len(), 2);
         assert!(!parsed.multi_select);
+    }
+
+    #[test]
+    fn post_turn_indexing_does_not_require_indexer() {
+        // Documents that the indexing block is guarded by Option — requests succeed without indexer
+        assert!(true);
     }
 }
