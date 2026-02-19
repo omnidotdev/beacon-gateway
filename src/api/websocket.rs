@@ -37,6 +37,14 @@ pub enum WsIncoming {
         #[serde(default)]
         persona_id: Option<String>,
     },
+    /// Client answer to an ask_user / permission / location_request event
+    AgentResponse {
+        request_id: uuid::Uuid,
+        /// For ask_user: selected option or typed text.
+        /// For permission: "allow" | "allow_session" | "deny".
+        /// For location: serialized coords JSON or "denied".
+        answer: String,
+    },
     /// Ping to keep connection alive
     Ping,
 }
@@ -49,6 +57,48 @@ pub enum WsOutgoing {
     ChatChunk { content: String },
     /// Chat response complete
     ChatComplete { message_id: String },
+    /// Tool invocation started — emitted immediately on dispatch
+    ToolStart {
+        tool_id: String,
+        name: String,
+    },
+    /// Tool invocation finished
+    ToolResult {
+        tool_id: String,
+        name: String,
+        /// Short display summary (command run, file path, etc.)
+        invocation: String,
+        output: String,
+        is_error: bool,
+    },
+    /// Agent wants to ask the user a question
+    AskUser {
+        request_id: uuid::Uuid,
+        question: String,
+        /// Predefined options; absent = free-text input
+        options: Option<Vec<String>>,
+        multi_select: bool,
+    },
+    /// Agent requests permission for a tool action
+    Permission {
+        request_id: uuid::Uuid,
+        tool_name: String,
+        /// Human-readable action description
+        action: String,
+        /// Structured context (e.g., {command: "rm -rf"})
+        context: serde_json::Value,
+    },
+    /// Agent requests the user's location
+    LocationRequest {
+        request_id: uuid::Uuid,
+        purpose: String,
+    },
+    /// Background progress update
+    Progress {
+        label: String,
+        /// 0–100, absent if indeterminate
+        percent: Option<u8>,
+    },
     /// Error occurred
     Error { code: String, message: String },
     /// Pong response
@@ -202,6 +252,8 @@ async fn handle_message(
         WsIncoming::Chat { content, persona_id } => {
             handle_chat_message(&content, persona_id, state, session_id, tx, gatekeeper_user_id).await?;
         }
+        // TODO: route agent responses to a pending-request registry
+        WsIncoming::AgentResponse { .. } => {}
     }
 
     Ok(())
@@ -631,4 +683,39 @@ async fn resolve_user_synapse(
 
     // Step 4: No personal key available, caller falls back to state.synapse
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_start_serializes() {
+        let msg = WsOutgoing::ToolStart {
+            tool_id: "abc".to_string(),
+            name: "Bash".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"tool_start\""));
+        assert!(json.contains("\"tool_id\":\"abc\""));
+    }
+
+    #[test]
+    fn ask_user_serializes() {
+        let msg = WsOutgoing::AskUser {
+            request_id: uuid::Uuid::nil(),
+            question: "Which project?".to_string(),
+            options: Some(vec!["A".to_string(), "B".to_string()]),
+            multi_select: false,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"ask_user\""));
+    }
+
+    #[test]
+    fn agent_response_deserializes() {
+        let json = r#"{"type":"agent_response","request_id":"00000000-0000-0000-0000-000000000000","answer":"A"}"#;
+        let msg: WsIncoming = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, WsIncoming::AgentResponse { .. }));
+    }
 }
