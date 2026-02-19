@@ -127,9 +127,16 @@ impl WakeWordDetector {
 
     /// Check if transcribed text contains a wake word
     ///
-    /// Call this after STT to verify wake word presence
+    /// Strips punctuation before matching to handle STT artifacts
+    /// like commas and periods (e.g. "Hey, Oren" matches "hey orin")
     pub fn check_wake_word(&mut self, transcript: &str) -> bool {
-        let normalized = transcript.to_lowercase();
+        let normalized: String = transcript
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect();
+        // Collapse multiple spaces from stripped punctuation
+        let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
 
         for wake_word in &self.wake_words {
             if normalized.contains(wake_word) {

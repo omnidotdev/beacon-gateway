@@ -11,7 +11,7 @@
     "url": "https://orin.omni.dev"
   },
   "voice": {
-    "wakeWords": ["hey orin", "hi orin", "okay orin"],
+    "wakeWords": ["hey orin", "hi orin", "okay orin", "hey oren", "hi oren", "okay oren"],
     "tts": {
       "provider": "openai",
       "voice": "nova",
