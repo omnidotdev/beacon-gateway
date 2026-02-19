@@ -214,8 +214,14 @@ mod tests {
         assert_eq!(ToolKind::classify("Write"), ToolKind::Mutate);
         assert_eq!(ToolKind::classify("Edit"), ToolKind::Mutate);
         assert_eq!(ToolKind::classify("Bash"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("ListDir"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("NotebookRead"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("TaskList"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("TaskGet"), ToolKind::Read);
         assert_eq!(ToolKind::classify("ask_user"), ToolKind::Interactive);
         assert_eq!(ToolKind::classify("permission"), ToolKind::Interactive);
+        assert_eq!(ToolKind::classify("AskUserQuestion"), ToolKind::Interactive);
+        assert_eq!(ToolKind::classify("location_request"), ToolKind::Interactive);
         // Unknown tools default to Mutate (safe default)
         assert_eq!(ToolKind::classify("unknown_tool"), ToolKind::Mutate);
     }
