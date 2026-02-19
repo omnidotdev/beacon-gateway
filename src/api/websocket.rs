@@ -234,8 +234,11 @@ async fn handle_chat_message(
 
     // Resolve persona: prefer per-message override, fall back to active persona
     let (active_persona_id, active_system_prompt) = if let Some(ref override_id) = persona_id_override {
+        // No-persona mode: skip system prompt entirely
+        if override_id == crate::NO_PERSONA_ID {
+            (override_id.clone(), None)
         // Load the requested persona from cache or embedded defaults
-        if let Some((_info, system_prompt)) = super::health::load_full_persona(&state.persona_cache_dir, override_id)
+        } else if let Some((_info, system_prompt)) = super::health::load_full_persona(&state.persona_cache_dir, override_id)
             .or_else(|| {
                 crate::Config::load_embedded_persona(override_id).ok().map(|p| {
                     let prompt = p.system_prompt().map(String::from);

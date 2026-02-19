@@ -53,6 +53,9 @@ pub mod sync;
 pub mod tools;
 pub mod voice;
 
+/// Sentinel persona ID indicating no persona should be applied
+pub const NO_PERSONA_ID: &str = "__none__";
+
 pub use config::Config;
 pub use context::{ContextBuilder, LifeJson, LifeJsonReader};
 pub use daemon::Daemon;
