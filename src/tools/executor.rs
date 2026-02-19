@@ -36,14 +36,7 @@ impl ToolExecutor {
             .await
             .map_err(|e| Error::Tool(e.to_string()))?
             .into_iter()
-            .map(|t| synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: t.name,
-                    description: Some(t.description),
-                    parameters: Some(t.input_schema),
-                },
-            })
+            .map(synapse_client::ToolDefinition::from)
             .collect();
 
         // Merge plugin tools
@@ -79,18 +72,7 @@ impl ToolExecutor {
             .await
             .map_err(|e| Error::Tool(e.to_string()))?;
 
-        // Concatenate text content blocks
-        let text = result
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                synapse_client::ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        Ok(text)
+        Ok(result.text())
     }
 
     /// Execute a plugin tool via subprocess
