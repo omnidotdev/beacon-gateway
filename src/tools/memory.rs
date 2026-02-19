@@ -175,7 +175,10 @@ impl BuiltinMemoryTools {
                     Some(&embedding),
                     args.limit,
                 )?,
-                Err(_) => self.memory_repo.search(&self.user_id, &args.query)?,
+                Err(e) => {
+                    tracing::warn!(error = %e, "memory_search: embedding failed, falling back to text search");
+                    self.memory_repo.search(&self.user_id, &args.query)?
+                }
             }
         } else {
             self.memory_repo.search(&self.user_id, &args.query)?

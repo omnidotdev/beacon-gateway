@@ -36,7 +36,9 @@ impl ToolKind {
             | "memory_search" => Self::Read,
             // Interactive tools
             "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
-            // Everything else defaults to Mutate (safe, includes memory_store / memory_forget)
+            // Mutating memory tools
+            "memory_store" | "memory_forget" => Self::Mutate,
+            // Everything else defaults to Mutate (safe)
             _ => Self::Mutate,
         }
     }
@@ -242,6 +244,10 @@ mod tests {
         assert_eq!(ToolKind::classify("permission"), ToolKind::Interactive);
         assert_eq!(ToolKind::classify("AskUserQuestion"), ToolKind::Interactive);
         assert_eq!(ToolKind::classify("location_request"), ToolKind::Interactive);
+        // Memory tools
+        assert_eq!(ToolKind::classify("memory_search"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("memory_store"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("memory_forget"), ToolKind::Mutate);
         // Unknown tools default to Mutate (safe default)
         assert_eq!(ToolKind::classify("unknown_tool"), ToolKind::Mutate);
     }
