@@ -364,11 +364,15 @@ async fn handle_chat_message(
         None
     };
 
-    // Build initial messages
-    let mut messages = vec![
-        synapse_client::Message::system(&state.system_prompt),
-        synapse_client::Message::user(&augmented_prompt),
-    ];
+    // Build initial messages — skip system prompt in no-persona mode
+    let mut messages = if active_persona_id == crate::NO_PERSONA_ID {
+        vec![synapse_client::Message::user(&augmented_prompt)]
+    } else {
+        vec![
+            synapse_client::Message::system(&state.system_prompt),
+            synapse_client::Message::user(&augmented_prompt),
+        ]
+    };
 
     // Multi-turn tool loop (max 10 rounds to prevent runaway)
     let mut full_response = String::new();
