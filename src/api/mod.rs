@@ -104,6 +104,8 @@ pub struct ApiState {
     pub rate_limiter: Option<rate_limit::SharedLimiter>,
     /// Active WebSocket senders keyed by user ID, for proactive `ws_push` delivery
     pub ws_senders: Option<WsSenders>,
+    /// Aether billing state for entitlement and usage-limit enforcement
+    pub billing_state: Option<crate::billing::BillingState>,
 }
 
 /// Configuration for building an API server
@@ -136,6 +138,7 @@ pub struct ApiServerBuilder {
     knowledge_cache_dir: Option<PathBuf>,
     plugin_manager: Option<plugins::SharedPluginManager>,
     cloud_mode: bool,
+    billing_state: Option<crate::billing::BillingState>,
 }
 
 impl ApiServerBuilder {
@@ -178,6 +181,7 @@ impl ApiServerBuilder {
             knowledge_cache_dir: None,
             plugin_manager: None,
             cloud_mode: false,
+            billing_state: None,
         }
     }
 
@@ -365,6 +369,11 @@ impl ApiServerBuilder {
             None
         };
 
+        let billing_state = crate::billing::BillingState::from_env().unwrap_or_else(|e| {
+            tracing::error!(error = %e, "billing initialization failed, running without billing");
+            None
+        });
+
         let state = Arc::new(ApiState {
             db: self.db,
             api_key: self.api_key,
@@ -406,6 +415,7 @@ impl ApiServerBuilder {
             cloud_mode: self.cloud_mode,
             rate_limiter,
             ws_senders: Some(Arc::new(RwLock::new(HashMap::new()))),
+            billing_state,
         });
 
         ApiServer {
@@ -466,6 +476,21 @@ impl ApiServer {
             router = router.fallback_service(serve_dir);
             tracing::info!(path = %static_dir.display(), "serving static files");
         }
+
+        // Billing: entitlement + usage-limit enforcement (cloud mode only, when Aether is configured)
+        let router = if let (Some(billing_state), Some(jwt_cache)) =
+            (self.state.billing_state.clone(), self.state.jwt_cache.clone())
+        {
+            router.layer(axum::middleware::from_fn(move |req, next| {
+                let billing = billing_state.clone();
+                let jc = jwt_cache.clone();
+                async move {
+                    crate::billing::middleware::billing_middleware(billing, jc, req, next).await
+                }
+            }))
+        } else {
+            router
+        };
 
         // Rate limiting (cloud mode only)
         let router = router.layer(axum::middleware::from_fn_with_state(

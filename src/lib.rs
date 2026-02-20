@@ -27,6 +27,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod billing;
 pub mod attachments;
 pub mod canvas;
 pub mod channels;

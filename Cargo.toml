@@ -106,6 +106,15 @@ chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-
 # Synapse AI router client
 synapse-client = { git = "https://github.com/omnidotdev/synapse-gateway", features = ["agent-core"] }
 
+# Synapse billing client (Aether entitlement + usage metering)
+synapse-billing = { git = "https://github.com/omnidotdev/synapse-gateway" }
+
+# Secret key handling
+secrecy = "0.10"
+
+# TTL cache for entitlement/usage results
+mini-moka = "0.10"
+
 # Agent core (shared LLM provider abstraction)
 agent-core = { git = "https://github.com/omnidotdev/agent-core" }
 
