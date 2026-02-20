@@ -185,6 +185,14 @@ async fn handle_socket(
     // Create channel for sending messages back to client
     let (tx, mut rx) = mpsc::channel::<WsOutgoing>(32);
 
+    // Register sender for proactive ws_push delivery
+    // Key: Gatekeeper user_id when authenticated, otherwise session_id
+    let ws_push_key = gatekeeper_user_id.clone().unwrap_or_else(|| session_id.clone());
+    if let Some(ref senders) = state.ws_senders {
+        senders.write().await.insert(ws_push_key.clone(), tx.clone());
+        tracing::debug!(key = %ws_push_key, "ws_push: registered sender");
+    }
+
     // Spawn task to forward messages from channel to WebSocket
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -195,6 +203,9 @@ async fn handle_socket(
             }
         }
     });
+
+    // Clone state for deregistration after tasks complete
+    let state_for_cleanup = Arc::clone(&state);
 
     // Handle incoming messages
     let feedback_for_recv = Arc::clone(&feedback);
@@ -234,6 +245,13 @@ async fn handle_socket(
     }
 
     feedback.cancel_all();
+
+    // Deregister sender on disconnect
+    if let Some(ref senders) = state_for_cleanup.ws_senders {
+        senders.write().await.remove(&ws_push_key);
+        tracing::debug!(key = %ws_push_key, "ws_push: deregistered sender");
+    }
+
     tracing::info!(session_id = %session_id, "WebSocket disconnected");
 }
 
