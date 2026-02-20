@@ -47,6 +47,12 @@ pub async fn billing_middleware(
         return next.run(request).await;
     };
 
+    // Skip billing for marketplace management paths — no AI consumption
+    let path = request.uri().path();
+    if path.starts_with("/api/skills") || path.starts_with("/api/personas/marketplace") {
+        return next.run(request).await;
+    }
+
     // Validate JWT and extract user ID from sub claim
     let sub = match jwt_cache.validate(&token).await {
         Ok(claims) => claims.sub,
