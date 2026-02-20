@@ -1429,12 +1429,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             .with_subject(&msg.sender_id),
         );
 
-        // Publish beacon.conversation.ended after each turn completes (best-effort)
-        crate::events::publish(crate::events::build_conversation_ended_event(
-            &session.id,
-            channel_name,
-            &msg.sender_id,
-        ));
+        // TODO: publish beacon.conversation.ended when session close/expiry is implemented
     }
 }
 
