@@ -59,6 +59,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         key_resolver: None,
         key_provisioner: None,
         jwt_cache: None,
+        local_key_store: None,
         persona_knowledge: vec![],
         max_context_tokens: 8000,
         knowledge_cache_dir: std::path::PathBuf::from("/tmp/test-knowledge-cache"),

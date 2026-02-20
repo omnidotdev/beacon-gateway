@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
+use axum::{extract::State, http::HeaderMap, routing::{delete, get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::ApiState;
@@ -63,6 +63,21 @@ pub struct ProvidersResponse {
     pub active_provider: Option<ProviderType>,
 }
 
+/// Request body for POST /api/providers/configure
+#[derive(Debug, Deserialize)]
+pub struct ConfigureRequest {
+    pub provider: String,
+    pub api_key: String,
+    pub model_preference: Option<String>,
+}
+
+/// Response for configure/remove operations
+#[derive(Debug, Serialize)]
+pub struct ConfigureResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Extract user ID from JWT in the Authorization header
 async fn extract_user_id(headers: &HeaderMap, state: &ApiState) -> Option<String> {
     let Some(jwt_cache) = state.jwt_cache.as_ref() else {
@@ -91,22 +106,26 @@ async fn extract_user_id(headers: &HeaderMap, state: &ApiState) -> Option<String
 
 /// Resolve provider status for a specific provider
 ///
-/// Checks per-user vault keys first, then falls back to env-level config
+/// Priority: user-configured Synapse key → local DB key → env var
 fn provider_status(
     provider_str: &str,
     user_configured: &[String],
-    state: &ApiState,
+    local_configured: &[String],
 ) -> ProviderStatus {
     if user_configured.contains(&provider_str.to_string()) {
         return ProviderStatus::Configured;
     }
-
-    let env_active = state
-        .model_info
-        .as_ref()
-        .is_some_and(|m| m.provider == provider_str);
-
-    if env_active {
+    if local_configured.contains(&provider_str.to_string()) {
+        return ProviderStatus::Configured;
+    }
+    // Check env vars directly for all providers
+    let has_env_key = match provider_str {
+        "anthropic" => std::env::var("ANTHROPIC_API_KEY").is_ok(),
+        "openai" => std::env::var("OPENAI_API_KEY").is_ok(),
+        "openrouter" => std::env::var("OPENROUTER_API_KEY").is_ok(),
+        _ => false,
+    };
+    if has_env_key {
         ProviderStatus::Configured
     } else {
         ProviderStatus::NotConfigured
@@ -130,6 +149,12 @@ async fn list_providers(
         vec![]
     };
 
+    let local_configured = if let Some(store) = &state.local_key_store {
+        store.list_configured().unwrap_or_default()
+    } else {
+        vec![]
+    };
+
     let preferred_provider = if let Some(ref uid) = user_id {
         if let Some(resolver) = &state.key_resolver {
             resolver.resolve_preferred(uid).await
@@ -143,9 +168,9 @@ async fn list_providers(
         None
     };
 
-    let openai_status = provider_status("openai", &user_configured, &state);
-    let anthropic_status = provider_status("anthropic", &user_configured, &state);
-    let openrouter_status = provider_status("openrouter", &user_configured, &state);
+    let openai_status = provider_status("openai", &user_configured, &local_configured);
+    let anthropic_status = provider_status("anthropic", &user_configured, &local_configured);
+    let openrouter_status = provider_status("openrouter", &user_configured, &local_configured);
 
     let providers = vec![
         ProviderInfo {
@@ -235,10 +260,25 @@ async fn list_providers(
             _ => None,
         }
     } else {
-        // No user keys at all — fall back to env-configured model
-        state.model_info.as_ref().map(|m| match m.provider.as_str() {
-            "anthropic" => ProviderType::Anthropic,
-            _ => ProviderType::Openai,
+        // No Synapse preference — use local store or env order: anthropic → openai → openrouter
+        let all_configured: Vec<&str> = ["anthropic", "openai", "openrouter"]
+            .into_iter()
+            .filter(|p| {
+                local_configured.contains(&p.to_string())
+                    || std::env::var(match *p {
+                        "anthropic" => "ANTHROPIC_API_KEY",
+                        "openai" => "OPENAI_API_KEY",
+                        _ => "OPENROUTER_API_KEY",
+                    })
+                    .is_ok()
+            })
+            .collect();
+
+        all_configured.first().and_then(|p| match *p {
+            "anthropic" => Some(ProviderType::Anthropic),
+            "openai" => Some(ProviderType::Openai),
+            "openrouter" => Some(ProviderType::Openrouter),
+            _ => None,
         })
     };
 
@@ -248,10 +288,92 @@ async fn list_providers(
     })
 }
 
+/// Configure a provider key locally (self-hosted deployments)
+async fn configure_provider(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<ConfigureRequest>,
+) -> Result<Json<ConfigureResponse>, (axum::http::StatusCode, Json<ConfigureResponse>)> {
+    let valid_providers = ["anthropic", "openai", "openrouter"];
+    if !valid_providers.contains(&body.provider.as_str()) {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(ConfigureResponse {
+                success: false,
+                message: format!("unknown provider: {}", body.provider),
+            }),
+        ));
+    }
+
+    let Some(store) = &state.local_key_store else {
+        return Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(ConfigureResponse {
+                success: false,
+                message: "local key store not available".to_string(),
+            }),
+        ));
+    };
+
+    match store.set(&body.provider, &body.api_key, body.model_preference.as_deref()) {
+        Ok(()) => {
+            tracing::info!(provider = %body.provider, "local provider key configured");
+            Ok(Json(ConfigureResponse {
+                success: true,
+                message: format!("{} configured successfully", body.provider),
+            }))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to save local provider key");
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ConfigureResponse {
+                    success: false,
+                    message: "failed to save provider key".to_string(),
+                }),
+            ))
+        }
+    }
+}
+
+/// Remove a locally configured provider key
+async fn remove_provider(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(provider): axum::extract::Path<String>,
+) -> Result<Json<ConfigureResponse>, (axum::http::StatusCode, Json<ConfigureResponse>)> {
+    let Some(store) = &state.local_key_store else {
+        return Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(ConfigureResponse {
+                success: false,
+                message: "local key store not available".to_string(),
+            }),
+        ));
+    };
+
+    match store.remove(&provider) {
+        Ok(()) => Ok(Json(ConfigureResponse {
+            success: true,
+            message: format!("{} key removed", provider),
+        })),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to remove local provider key");
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ConfigureResponse {
+                    success: false,
+                    message: "failed to remove provider key".to_string(),
+                }),
+            ))
+        }
+    }
+}
+
 /// Create the providers router
 pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
         .route("/", get(list_providers))
+        .route("/configure", post(configure_provider))
+        .route("/{provider}", delete(remove_provider))
         .with_state(state)
 }
 
