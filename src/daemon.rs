@@ -1138,6 +1138,15 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 }
             };
 
+        // Publish beacon.conversation.started for new sessions (best-effort)
+        if session_repo.message_count(&session.id).unwrap_or(1) == 0 {
+            crate::events::publish(crate::events::build_conversation_started_event(
+                &session.id,
+                channel_name,
+                &msg.sender_id,
+            ));
+        }
+
         // Extract thread_id for threading support
         // For platforms like Slack/Discord, reply_to contains the thread identifier
         let thread_id = msg.reply_to.as_deref();
@@ -1336,6 +1345,17 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                             .await
                                             .unwrap_or_else(|e| format!("Error: {e}"));
 
+                                        // Publish beacon.tool.executed (best-effort)
+                                        let tool_success = !result.starts_with("Error: ");
+                                        crate::events::publish(
+                                            crate::events::build_tool_executed_event(
+                                                &session.id,
+                                                &tc.function.name,
+                                                tool_success,
+                                                &msg.sender_id,
+                                            ),
+                                        );
+
                                         messages.push(synapse_client::Message::tool(&tc.id, &result));
                                     }
 
@@ -1408,6 +1428,13 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             )
             .with_subject(&msg.sender_id),
         );
+
+        // Publish beacon.conversation.ended after each turn completes (best-effort)
+        crate::events::publish(crate::events::build_conversation_ended_event(
+            &session.id,
+            channel_name,
+            &msg.sender_id,
+        ));
     }
 }
 

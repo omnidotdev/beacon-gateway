@@ -103,6 +103,81 @@ impl OmniEvent {
     }
 }
 
+/// Build a `beacon.conversation.started` event.
+///
+/// # Arguments
+///
+/// - `session_id` - Unique session identifier (used as conversation ID and subject)
+/// - `channel` - Channel name (e.g., `"discord"`, `"slack"`)
+/// - `organization_id` - Organization/user scoping identifier
+#[must_use]
+pub fn build_conversation_started_event(
+    session_id: &str,
+    channel: &str,
+    organization_id: &str,
+) -> OmniEvent {
+    OmniEvent::new(
+        "beacon.conversation.started",
+        organization_id,
+        serde_json::json!({
+            "conversationId": session_id,
+            "channel": channel,
+        }),
+    )
+    .with_subject(session_id)
+}
+
+/// Build a `beacon.conversation.ended` event.
+///
+/// # Arguments
+///
+/// - `session_id` - Unique session identifier (used as conversation ID and subject)
+/// - `channel` - Channel name (e.g., `"discord"`, `"slack"`)
+/// - `organization_id` - Organization/user scoping identifier
+#[must_use]
+pub fn build_conversation_ended_event(
+    session_id: &str,
+    channel: &str,
+    organization_id: &str,
+) -> OmniEvent {
+    OmniEvent::new(
+        "beacon.conversation.ended",
+        organization_id,
+        serde_json::json!({
+            "conversationId": session_id,
+            "channel": channel,
+        }),
+    )
+    .with_subject(session_id)
+}
+
+/// Build a `beacon.tool.executed` event.
+///
+/// # Arguments
+///
+/// - `session_id` - Session identifier for the conversation in which the tool ran
+/// - `tool_name` - Name of the tool that was executed
+/// - `success` - Whether the tool execution succeeded
+/// - `organization_id` - Organization/user scoping identifier
+#[must_use]
+pub fn build_tool_executed_event(
+    session_id: &str,
+    tool_name: &str,
+    success: bool,
+    organization_id: &str,
+) -> OmniEvent {
+    OmniEvent::new(
+        "beacon.tool.executed",
+        organization_id,
+        serde_json::json!({
+            "conversationId": session_id,
+            "toolName": tool_name,
+            "success": success,
+        }),
+    )
+    .with_subject(session_id)
+}
+
 /// Initialize the global Iggy publisher.
 ///
 /// No-op if already initialized. Call once at daemon startup.
@@ -283,4 +358,49 @@ async fn send_event(config: &EventsConfig, event: &OmniEvent) -> anyhow::Result<
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_started_event_has_correct_type() {
+        let event = build_conversation_started_event("sess-1", "discord", "org-1");
+        assert_eq!(event.event_type, "beacon.conversation.started");
+        assert_eq!(event.source, "beacon-gateway");
+        assert_eq!(event.subject, Some("sess-1".to_string()));
+        assert_eq!(event.organization_id, "org-1");
+        assert_eq!(event.data["channel"], "discord");
+        assert_eq!(event.data["conversationId"], "sess-1");
+    }
+
+    #[test]
+    fn conversation_ended_event_has_correct_type() {
+        let event = build_conversation_ended_event("sess-2", "slack", "org-2");
+        assert_eq!(event.event_type, "beacon.conversation.ended");
+        assert_eq!(event.source, "beacon-gateway");
+        assert_eq!(event.subject, Some("sess-2".to_string()));
+        assert_eq!(event.organization_id, "org-2");
+        assert_eq!(event.data["channel"], "slack");
+        assert_eq!(event.data["conversationId"], "sess-2");
+    }
+
+    #[test]
+    fn tool_executed_event_has_correct_type() {
+        let event = build_tool_executed_event("sess-3", "web_search", true, "org-3");
+        assert_eq!(event.event_type, "beacon.tool.executed");
+        assert_eq!(event.source, "beacon-gateway");
+        assert_eq!(event.subject, Some("sess-3".to_string()));
+        assert_eq!(event.organization_id, "org-3");
+        assert_eq!(event.data["toolName"], "web_search");
+        assert_eq!(event.data["success"], true);
+        assert_eq!(event.data["conversationId"], "sess-3");
+    }
+
+    #[test]
+    fn tool_executed_event_captures_failure() {
+        let event = build_tool_executed_event("sess-4", "bash", false, "org-4");
+        assert_eq!(event.data["success"], false);
+    }
 }
