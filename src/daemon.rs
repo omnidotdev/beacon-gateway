@@ -106,6 +106,14 @@ impl Daemon {
             "daemon running"
         );
 
+        // Initialize Iggy event publisher (best-effort; failures do not block startup)
+        crate::events::init_publisher(crate::events::EventsConfig::from_env());
+
+        // Log Vortex scheduling availability
+        if let Some(ref vortex_url) = self.config.api_server.vortex_url {
+            tracing::info!(url = %vortex_url, "Vortex scheduling integration available");
+        }
+
         // Initialize Synapse AI router client
         let (synapse, model_info) = self.init_synapse();
         let system_prompt = build_system_prompt(&self.config);
@@ -1184,6 +1192,20 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             "message received"
         );
 
+        // Publish beacon.message.received event (best-effort)
+        crate::events::publish(
+            crate::events::OmniEvent::new(
+                "beacon.message.received",
+                &msg.sender_id,
+                serde_json::json!({
+                    "channel": channel_name,
+                    "messageId": msg.id,
+                    "userId": msg.sender_id,
+                }),
+            )
+            .with_subject(&msg.sender_id),
+        );
+
         // Acknowledge message with eyes reaction
         if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, "\u{1F440}").await {
             tracing::debug!(error = %e, "ack reaction failed");
@@ -1372,6 +1394,20 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
         if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, "\u{2705}").await {
             tracing::debug!(error = %e, "done reaction failed");
         }
+
+        // Publish beacon.message.processed event (best-effort)
+        crate::events::publish(
+            crate::events::OmniEvent::new(
+                "beacon.message.processed",
+                &msg.sender_id,
+                serde_json::json!({
+                    "channel": channel_name,
+                    "messageId": msg.id,
+                    "userId": msg.sender_id,
+                }),
+            )
+            .with_subject(&msg.sender_id),
+        );
     }
 }
 
