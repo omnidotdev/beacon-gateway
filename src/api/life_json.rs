@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{auth::require_api_key, ApiState};
 use crate::context::life_json_sync;
+use crate::db::{Memory, MemoryCategory};
 
 // --- Request/Response types ---
 
@@ -138,6 +139,73 @@ pub struct MemoryListResponse {
     pub count: usize,
 }
 
+/// Memory item DTO (embedding excluded for API responses)
+#[derive(Serialize)]
+pub struct MemoryDto {
+    pub id: String,
+    pub user_id: String,
+    pub category: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub pinned: bool,
+    pub access_count: u32,
+    pub created_at: String,
+    pub accessed_at: String,
+    pub source_session_id: Option<String>,
+    pub source_channel: Option<String>,
+}
+
+impl From<&Memory> for MemoryDto {
+    fn from(m: &Memory) -> Self {
+        Self {
+            id: m.id.clone(),
+            user_id: m.user_id.clone(),
+            category: m.category.to_string(),
+            content: m.content.clone(),
+            tags: m.tags.clone(),
+            pinned: m.pinned,
+            access_count: m.access_count,
+            created_at: m.created_at.to_rfc3339(),
+            accessed_at: m.accessed_at.to_rfc3339(),
+            source_session_id: m.source_session_id.clone(),
+            source_channel: m.source_channel.clone(),
+        }
+    }
+}
+
+/// Query parameters for the CRUD list endpoint
+#[derive(Deserialize)]
+pub struct ListQuery {
+    pub user_id: String,
+    pub category: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// Query parameters for the memory search endpoint
+#[derive(Deserialize)]
+pub struct MemorySearchQuery {
+    pub user_id: String,
+    pub q: String,
+    pub limit: Option<usize>,
+}
+
+/// Request body for creating a memory via the CRUD endpoint
+#[derive(Deserialize)]
+pub struct CreateMemoryRequest {
+    pub user_id: String,
+    pub content: String,
+    pub category: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Response for CRUD list/search endpoints
+#[derive(Serialize)]
+pub struct ListResponse {
+    pub memories: Vec<MemoryDto>,
+    pub count: usize,
+}
+
 // --- Handlers ---
 
 /// Export memories as life.json format
@@ -208,72 +276,63 @@ async fn import_memories(
     ))
 }
 
-/// List or search memories for a user
-async fn list_memories(
+/// List memories for a user (CRUD endpoint)
+async fn crud_list_memories(
     State(state): State<Arc<ApiState>>,
-    Query(query): Query<MemoryListQuery>,
-) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = query.limit.unwrap_or(50);
+    Query(query): Query<ListQuery>,
+) -> Result<Json<ListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let category = query.category.as_deref().and_then(MemoryCategory::from_str_value);
+    let memories = state
+        .memory_repo
+        .list(&query.user_id, category)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
 
-    let memories = if let Some(ref q) = query.q {
-        state
-            .memory_repo
-            .search_hybrid(&query.user_id, q, None, limit)
-    } else {
-        let category = query.category.as_deref().and_then(|s| match s {
-            "preference" => Some(crate::db::MemoryCategory::Preference),
-            "fact" => Some(crate::db::MemoryCategory::Fact),
-            "correction" => Some(crate::db::MemoryCategory::Correction),
-            "general" => Some(crate::db::MemoryCategory::General),
-            _ => None,
-        });
-        state.memory_repo.list(&query.user_id, category)
-    };
-
-    let memories = memories.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            error_response("db_error", &e.to_string()),
-        )
-    })?;
-
-    let count = memories.len();
-    let items: Vec<MemoryItem> = memories.iter().map(MemoryItem::from).collect();
-
-    Ok(Json(MemoryListResponse {
-        memories: items,
-        count,
-    }))
+    let mut dtos: Vec<MemoryDto> = memories.iter().map(MemoryDto::from).collect();
+    if let Some(limit) = query.limit {
+        dtos.truncate(limit);
+    }
+    let count = dtos.len();
+    Ok(Json(ListResponse { memories: dtos, count }))
 }
 
-/// Add a memory manually
-async fn add_memory(
+/// Search memories by text query (CRUD endpoint)
+async fn search_memories(
     State(state): State<Arc<ApiState>>,
-    Json(req): Json<AddMemoryRequest>,
-) -> Result<(StatusCode, Json<MemoryItem>), (StatusCode, Json<ErrorResponse>)> {
-    let category = match req.category.as_deref().unwrap_or("general") {
-        "preference" => crate::db::MemoryCategory::Preference,
-        "fact" => crate::db::MemoryCategory::Fact,
-        "correction" => crate::db::MemoryCategory::Correction,
-        _ => crate::db::MemoryCategory::General,
-    };
+    Query(query): Query<MemorySearchQuery>,
+) -> Result<Json<ListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(10);
+    let memories = state
+        .memory_repo
+        .search(&query.user_id, &query.q)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
 
-    let mut memory = crate::db::Memory::new(req.user_id, category, req.content);
+    let dtos: Vec<MemoryDto> = memories.iter().take(limit).map(MemoryDto::from).collect();
+    let count = dtos.len();
+    Ok(Json(ListResponse { memories: dtos, count }))
+}
+
+/// Create a new memory (CRUD endpoint)
+async fn create_memory(
+    State(state): State<Arc<ApiState>>,
+    Json(req): Json<CreateMemoryRequest>,
+) -> Result<(StatusCode, Json<MemoryDto>), (StatusCode, Json<ErrorResponse>)> {
+    let category = req
+        .category
+        .as_deref()
+        .and_then(MemoryCategory::from_str_value)
+        .unwrap_or(MemoryCategory::General);
+
+    let mut memory = Memory::new(req.user_id, category, req.content);
     for tag in req.tags {
         memory = memory.with_tag(tag);
     }
-    if req.pinned {
-        memory = memory.pinned();
-    }
 
-    state.memory_repo.add(&memory).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            error_response("db_error", &e.to_string()),
-        )
-    })?;
+    state
+        .memory_repo
+        .add(&memory)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
 
-    Ok((StatusCode::CREATED, Json(MemoryItem::from(&memory))))
+    Ok((StatusCode::CREATED, Json(MemoryDto::from(&memory))))
 }
 
 /// Soft-delete a memory by ID
@@ -304,8 +363,9 @@ pub fn router(state: Arc<ApiState>) -> Router {
         // life.json sync endpoints (existing)
         .route("/export", get(export_memories))
         .route("/import", post(import_memories))
-        // CRUD endpoints
-        .route("/", get(list_memories).post(add_memory))
+        // Memory management CRUD
+        .route("/", get(crud_list_memories).post(create_memory))
+        .route("/search", get(search_memories))
         .route("/{id}", delete(delete_memory))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -317,6 +377,60 @@ pub fn router(state: Arc<ApiState>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{self, MemoryCategory, MemoryRepo};
+
+    fn make_repo() -> MemoryRepo {
+        let pool = db::init_memory().unwrap();
+        MemoryRepo::new(pool)
+    }
+
+    #[test]
+    fn list_handler_filters_by_user() {
+        let pool = db::init_memory().unwrap();
+        let repo = MemoryRepo::new(pool.clone());
+        let user_repo = crate::db::UserRepo::new(pool);
+
+        let alice = user_repo.find_or_create("alice_lhfbu").unwrap();
+        let bob = user_repo.find_or_create("bob_lhfbu").unwrap();
+
+        let m1 = crate::db::Memory::new(alice.id.clone(), MemoryCategory::Fact, "Alice fact".to_string());
+        let m2 = crate::db::Memory::new(bob.id.clone(), MemoryCategory::Fact, "Bob fact".to_string());
+        repo.add(&m1).unwrap();
+        repo.add(&m2).unwrap();
+
+        let alice_memories = repo.list(&alice.id, None).unwrap();
+        let bob_memories = repo.list(&bob.id, None).unwrap();
+        assert_eq!(alice_memories.len(), 1);
+        assert_eq!(bob_memories.len(), 1);
+        assert!(alice_memories[0].content.contains("Alice"));
+        assert!(bob_memories[0].content.contains("Bob"));
+    }
+
+    #[test]
+    fn delete_handler_soft_deletes() {
+        let pool = db::init_memory().unwrap();
+        let repo = MemoryRepo::new(pool.clone());
+        let user_repo = crate::db::UserRepo::new(pool);
+
+        let user = user_repo.find_or_create("user_dhsd_delete").unwrap();
+        let m = crate::db::Memory::new(user.id.clone(), MemoryCategory::General, "to delete".to_string());
+        repo.add(&m).unwrap();
+
+        let deleted = repo.delete(&m.id).unwrap();
+        assert!(deleted);
+
+        // Should not appear in list after soft-delete
+        let memories = repo.list(&user.id, None).unwrap();
+        assert!(memories.is_empty());
+    }
+
+    #[test]
+    fn memory_dto_omits_embedding() {
+        let m = crate::db::Memory::new("u1".to_string(), MemoryCategory::Fact, "test".to_string());
+        let dto = MemoryDto::from(&m);
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(!json.contains("embedding"), "DTO must not include embedding field");
+    }
 
     #[test]
     fn memory_item_from_memory() {
