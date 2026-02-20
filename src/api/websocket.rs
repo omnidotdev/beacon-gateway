@@ -452,7 +452,12 @@ async fn handle_chat_message(
             .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
         return Ok(());
     } else {
-        (state.synapse.clone(), None)
+        // Self-hosted: try locally stored keys before falling back to shared client
+        if let Some((client, model)) = resolve_local_key(state) {
+            (Some(client), Some(model))
+        } else {
+            (state.synapse.clone(), None)
+        }
     };
 
     let Some(synapse) = synapse_to_use else {
@@ -591,6 +596,38 @@ async fn handle_chat_message(
     }
 
     Ok(())
+}
+
+/// Resolve a provider client from the local SQLite key store (self-hosted path)
+///
+/// Checks providers in priority order (anthropic → openai → openrouter) and returns
+/// a `SynapseClient` configured with the first stored key found.
+///
+/// Returns `None` if no local key store is configured or no keys are stored.
+fn resolve_local_key(state: &Arc<ApiState>) -> Option<(Arc<SynapseClient>, String)> {
+    let store = state.local_key_store.as_ref()?;
+    let synapse_base_url = state
+        .synapse
+        .as_ref()
+        .map_or_else(|| "http://localhost:6000".to_string(), |c| c.base_url().to_string());
+
+    for (provider, default_model) in &[
+        ("anthropic", crate::daemon::DEFAULT_MODEL),
+        ("openai", "gpt-4o"),
+        ("openrouter", "gpt-4o"),
+    ] {
+        if let Ok(Some(stored)) = store.get(provider) {
+            let model = stored
+                .model_preference
+                .unwrap_or_else(|| (*default_model).to_string());
+            if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+                let client = client.with_api_key(stored.api_key);
+                tracing::debug!(provider, "resolved local provider key for chat");
+                return Some((Arc::new(client), model));
+            }
+        }
+    }
+    None
 }
 
 /// Resolve a per-user Synapse client based on their BYOK key or managed key
