@@ -2,4 +2,4 @@
 
 pub mod runner;
 
-pub use runner::{AgentRunConfig, run_agent_turn};
+pub use runner::{AgentNotifyEvent, AgentRunConfig, run_agent_turn};
