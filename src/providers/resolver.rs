@@ -21,6 +21,7 @@ struct SynapseProviderKey {
 #[serde(rename_all = "camelCase")]
 struct SynapseProviderKeysResponse {
     provider_keys: Vec<SynapseProviderKey>,
+    default_provider: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +33,7 @@ struct ResolveProviderKeysRequest {
 #[derive(Debug)]
 struct CachedUserKeys {
     keys: HashMap<String, ResolvedKey>,
+    default_provider: Option<String>,
     expires_at: Instant,
 }
 
@@ -90,9 +92,9 @@ impl KeyResolver {
 
         // Fetch all keys for this user from Synapse
         match self.fetch_from_synapse(identity_provider_id).await {
-            Ok(synapse_keys) => {
+            Ok(resp) => {
                 let mut keys_map: HashMap<String, ResolvedKey> = HashMap::new();
-                for k in &synapse_keys {
+                for k in &resp.provider_keys {
                     keys_map.insert(k.provider.clone(), ResolvedKey {
                         api_key: k.decrypted_key.clone(),
                         model_override: k.model_preference.clone(),
@@ -103,6 +105,7 @@ impl KeyResolver {
                 let mut cache = self.cache.write().await;
                 cache.insert(identity_provider_id.to_string(), CachedUserKeys {
                     keys: keys_map,
+                    default_provider: resp.default_provider.clone(),
                     expires_at: Instant::now() + self.ttl,
                 });
                 Ok(result.or_else(|| self.env_fallback(provider).unwrap_or(None)))
@@ -118,7 +121,7 @@ impl KeyResolver {
     async fn fetch_from_synapse(
         &self,
         identity_provider_id: &str,
-    ) -> crate::Result<Vec<SynapseProviderKey>> {
+    ) -> crate::Result<SynapseProviderKeysResponse> {
         let url = format!(
             "{}/internal/resolve-provider-keys",
             self.synapse_api_url.trim_end_matches('/')
@@ -143,7 +146,7 @@ impl KeyResolver {
             .json()
             .await
             .map_err(|e| crate::Error::Vault(format!("invalid synapse response: {e}")))?;
-        Ok(body.provider_keys)
+        Ok(body)
     }
 
     /// Fall back to env var key when Synapse is unreachable or user has no configured keys
@@ -163,6 +166,98 @@ impl KeyResolver {
         cache.remove(identity_provider_id);
     }
 
+    /// Select the best available provider key from a cached entry.
+    /// Respects `default_provider` if set and has a user key; otherwise falls
+    /// back to priority order: anthropic → openai → openrouter → omni_credits.
+    fn preferred_from_cache(&self, cached: &CachedUserKeys) -> Option<(String, ResolvedKey)> {
+        // Respect the user's explicit preference first
+        if let Some(ref default) = cached.default_provider {
+            if let Some(key) = cached.keys.get(default) {
+                if key.is_user_key {
+                    return Some((default.clone(), key.clone()));
+                }
+            }
+        }
+
+        // Fall back to priority order
+        for provider in &["anthropic", "openai", "openrouter", "omni_credits"] {
+            if let Some(key) = cached.keys.get(*provider) {
+                if key.is_user_key {
+                    return Some((provider.to_string(), key.clone()));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Resolve the user's preferred provider key.
+    ///
+    /// Checks the user's `defaultProvider` Synapse preference first, then falls
+    /// back to the priority order. Returns `None` if the user has no configured keys.
+    /// Falls back to env vars if Synapse is unreachable.
+    pub async fn resolve_preferred(
+        &self,
+        identity_provider_id: &str,
+    ) -> crate::Result<Option<(String, ResolvedKey)>> {
+        // Check cache
+        {
+            let cache = self.cache.read().await;
+            if let Some(cached) = cache.get(identity_provider_id) {
+                if cached.expires_at > Instant::now() {
+                    return Ok(self.preferred_from_cache(cached));
+                }
+            }
+        }
+
+        // Cache miss — fetch fresh
+        match self.fetch_from_synapse(identity_provider_id).await {
+            Ok(resp) => {
+                let mut keys_map: HashMap<String, ResolvedKey> = HashMap::new();
+                for k in &resp.provider_keys {
+                    keys_map.insert(k.provider.clone(), ResolvedKey {
+                        api_key: k.decrypted_key.clone(),
+                        model_override: k.model_preference.clone(),
+                        is_user_key: true,
+                    });
+                }
+                let cached = CachedUserKeys {
+                    keys: keys_map,
+                    default_provider: resp.default_provider.clone(),
+                    expires_at: Instant::now() + self.ttl,
+                };
+                let result = self.preferred_from_cache(&cached);
+                {
+                    let mut cache = self.cache.write().await;
+                    cache.insert(identity_provider_id.to_string(), cached);
+                }
+                Ok(result)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "synapse unreachable in resolve_preferred, using env fallback");
+                Ok(self.env_preferred())
+            }
+        }
+    }
+
+    /// Fall back to env var keys when Synapse is unreachable, using priority order
+    fn env_preferred(&self) -> Option<(String, ResolvedKey)> {
+        for (provider, key_opt) in &[
+            ("anthropic", &self.env_keys.anthropic),
+            ("openai", &self.env_keys.openai),
+            ("openrouter", &self.env_keys.openrouter),
+        ] {
+            if let Some(key) = key_opt {
+                return Some((provider.to_string(), ResolvedKey {
+                    api_key: key.clone(),
+                    model_override: None,
+                    is_user_key: false,
+                }));
+            }
+        }
+        None
+    }
+
     /// Return the list of configured provider names for a user
     pub async fn list_configured(&self, identity_provider_id: &str) -> Vec<String> {
         // Try cache first
@@ -176,10 +271,10 @@ impl KeyResolver {
         }
         // Fetch from Synapse
         match self.fetch_from_synapse(identity_provider_id).await {
-            Ok(keys) => {
-                let providers: Vec<String> = keys.iter().map(|k| k.provider.clone()).collect();
+            Ok(resp) => {
+                let providers: Vec<String> = resp.provider_keys.iter().map(|k| k.provider.clone()).collect();
                 let mut keys_map = HashMap::new();
-                for k in keys {
+                for k in resp.provider_keys {
                     keys_map.insert(k.provider.clone(), ResolvedKey {
                         api_key: k.decrypted_key,
                         model_override: k.model_preference,
@@ -189,6 +284,7 @@ impl KeyResolver {
                 let mut cache = self.cache.write().await;
                 cache.insert(identity_provider_id.to_string(), CachedUserKeys {
                     keys: keys_map,
+                    default_provider: resp.default_provider.clone(),
                     expires_at: Instant::now() + self.ttl,
                 });
                 providers
@@ -198,5 +294,113 @@ impl KeyResolver {
                 vec![]
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_resolver() -> KeyResolver {
+        KeyResolver {
+            synapse_api_url: "http://test".to_string(),
+            gateway_secret: "secret".to_string(),
+            client: reqwest::Client::new(),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            ttl: Duration::from_secs(300),
+            env_keys: ApiKeys::default(),
+        }
+    }
+
+    #[test]
+    fn preferred_from_cache_uses_default_provider() {
+        let mut keys = HashMap::new();
+        keys.insert("anthropic".to_string(), ResolvedKey {
+            api_key: "sk-ant".to_string(),
+            model_override: None,
+            is_user_key: true,
+        });
+        keys.insert("openai".to_string(), ResolvedKey {
+            api_key: "sk-openai".to_string(),
+            model_override: None,
+            is_user_key: true,
+        });
+
+        let cached = CachedUserKeys {
+            keys,
+            default_provider: Some("openai".to_string()),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        };
+
+        let resolver = make_resolver();
+        let result = resolver.preferred_from_cache(&cached);
+        assert!(result.is_some());
+        let (provider, _key) = result.unwrap();
+        assert_eq!(provider, "openai"); // defaultProvider wins over anthropic
+    }
+
+    #[test]
+    fn preferred_from_cache_falls_back_to_priority_when_no_default() {
+        let mut keys = HashMap::new();
+        keys.insert("openai".to_string(), ResolvedKey {
+            api_key: "sk-openai".to_string(),
+            model_override: None,
+            is_user_key: true,
+        });
+
+        let cached = CachedUserKeys {
+            keys,
+            default_provider: None,
+            expires_at: Instant::now() + Duration::from_secs(300),
+        };
+
+        let resolver = make_resolver();
+        let result = resolver.preferred_from_cache(&cached);
+        assert!(result.is_some());
+        let (provider, _key) = result.unwrap();
+        assert_eq!(provider, "openai");
+    }
+
+    #[test]
+    fn preferred_from_cache_returns_none_when_empty() {
+        let cached = CachedUserKeys {
+            keys: HashMap::new(),
+            default_provider: None,
+            expires_at: Instant::now() + Duration::from_secs(300),
+        };
+
+        let resolver = make_resolver();
+        let result = resolver.preferred_from_cache(&cached);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn preferred_from_cache_skips_non_user_key_for_default() {
+        // If default_provider points to an env fallback key, it should be skipped
+        // and fall through to the priority list
+        let mut keys = HashMap::new();
+        keys.insert("anthropic".to_string(), ResolvedKey {
+            api_key: "sk-ant-env".to_string(),
+            model_override: None,
+            is_user_key: false, // env fallback, not user key
+        });
+        keys.insert("openai".to_string(), ResolvedKey {
+            api_key: "sk-openai-user".to_string(),
+            model_override: None,
+            is_user_key: true,
+        });
+
+        let cached = CachedUserKeys {
+            keys,
+            default_provider: Some("anthropic".to_string()), // default is anthropic but it's env key
+            expires_at: Instant::now() + Duration::from_secs(300),
+        };
+
+        let resolver = make_resolver();
+        let result = resolver.preferred_from_cache(&cached);
+        assert!(result.is_some());
+        let (provider, _key) = result.unwrap();
+        // anthropic is skipped (not user key), falls to openai
+        assert_eq!(provider, "openai");
     }
 }
