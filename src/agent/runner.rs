@@ -145,6 +145,7 @@ pub async fn run_agent_turn(
                 .iter()
                 .map(|tc| synapse_client::ToolCall {
                     id: tc.id.clone(),
+                    tool_type: "function".to_owned(),
                     function: synapse_client::FunctionCall {
                         name: tc.name.clone(),
                         arguments: tc.arguments.clone(),
