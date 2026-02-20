@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Initialize the database schema
 ///
@@ -46,6 +46,9 @@ pub fn init(conn: &Connection) -> Result<()> {
     }
     if version < 10 {
         migrate_v10(conn)?;
+    }
+    if version < 11 {
+        migrate_v11(conn)?;
     }
 
     Ok(())
@@ -379,6 +382,26 @@ fn migrate_v10(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("migrated to schema v10 (knowledge packs)");
+    Ok(())
+}
+
+fn migrate_v11(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Gateway-local provider keys for self-hosted deployments
+        CREATE TABLE IF NOT EXISTS local_provider_keys (
+            provider TEXT PRIMARY KEY,
+            api_key TEXT NOT NULL,
+            model_preference TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        PRAGMA user_version = 11;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v11 (local provider keys)");
     Ok(())
 }
 
