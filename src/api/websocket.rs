@@ -13,14 +13,13 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use synapse_client::{ChatEvent, SynapseClient};
+use synapse_client::SynapseClient;
 use tokio::sync::mpsc;
 
 use super::ApiState;
+use crate::agent::{AgentRunConfig, run_agent_turn};
 use crate::api::feedback::{FeedbackAnswer, FeedbackManager};
 use crate::context::ContextBuilder;
-use crate::db::MessageRole;
-use crate::tools::executor::ToolKind;
 
 /// Optional query parameters for WebSocket connection
 #[derive(Debug, Deserialize)]
@@ -283,7 +282,7 @@ async fn handle_chat_message(
     session_id: &str,
     tx: mpsc::Sender<WsOutgoing>,
     gatekeeper_user_id: Option<&str>,
-    feedback: &Arc<FeedbackManager>,
+    _feedback: &Arc<FeedbackManager>,
 ) -> crate::Result<()> {
     // Use Gatekeeper identity if available, otherwise derive from session_id
     let user_id = if let Some(gk_id) = gatekeeper_user_id {
@@ -343,11 +342,6 @@ async fn handle_chat_message(
         .session_repo
         .find_or_create(&user_id, "web", session_id, &active_persona_id)
         .map_err(|e| crate::Error::Database(e.to_string()))?;
-
-    // Store user message (use session.id, not the client's session_id)
-    state
-        .session_repo
-        .add_message(&session.id, MessageRole::User, content)?;
 
     tracing::info!(
         active_persona_id = %active_persona_id,
@@ -451,260 +445,55 @@ async fn handle_chat_message(
 
     let model = model_override.unwrap_or_else(|| state.llm_model.clone());
 
-    let memory_tools = Arc::new(crate::tools::BuiltinMemoryTools::new(
-        state.memory_repo.clone(),
-        state.embedder.clone(),
-        user_id.clone(),
-    ));
-
-    // Fetch MCP tools from Synapse and plugins if available
-    let tools = if let Some(ref synapse) = state.synapse {
-        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), state.plugin_manager.clone())
-            .with_memory_tools(Arc::clone(&memory_tools));
-        executor.list_tools().await.ok()
+    // Build system prompt — skip in no-persona mode
+    let system_prompt = if active_persona_id == crate::NO_PERSONA_ID {
+        String::new()
     } else {
-        None
+        state.system_prompt.clone()
     };
 
-    // Build initial messages — skip system prompt in no-persona mode
-    let mut messages = if active_persona_id == crate::NO_PERSONA_ID {
-        vec![synapse_client::Message::user(&augmented_prompt)]
-    } else {
-        vec![
-            synapse_client::Message::system(&state.system_prompt),
-            synapse_client::Message::user(&augmented_prompt),
-        ]
+    let agent_config = AgentRunConfig {
+        prompt: augmented_prompt,
+        system_prompt,
+        model,
+        max_tokens: state.llm_max_tokens,
+        max_iterations: 10,
+        session_id: session.id.clone(),
+        user_id: user_id.clone(),
     };
 
-    // Multi-turn tool loop (max 10 rounds to prevent runaway)
-    let mut full_response = String::new();
-    for _turn in 0..10 {
-        let request = synapse_client::ChatRequest {
-            model: model.clone(),
-            messages: messages.clone(),
-            stream: true,
-            temperature: None,
-            top_p: None,
-            max_tokens: Some(state.llm_max_tokens),
-            stop: None,
-            tools: tools.clone(),
-            tool_choice: None,
-        };
-
-        let mut stream = match synapse.chat_completion_stream(&request).await {
-            Ok(s) => s,
-            Err(e) => {
-                let error = WsOutgoing::Error {
-                    code: "agent_error".to_string(),
-                    message: e.to_string(),
-                };
-                tx.send(error)
-                    .await
-                    .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
-                return Ok(());
-            }
-        };
-
-        // Accumulate tool calls from the stream
-        let mut turn_text = String::new();
-        let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
-        let mut finish_reason = None;
-
-        while let Some(event) = stream.next().await {
-            match event {
-                Ok(ChatEvent::ContentDelta(text)) => {
-                    turn_text.push_str(&text);
-                    let msg = WsOutgoing::ChatChunk { content: text };
-                    let _ = tx.try_send(msg);
-                }
-                Ok(ChatEvent::ToolCallStart { index, id, name }) => {
-                    let idx = index as usize;
-                    if idx >= pending_tool_calls.len() {
-                        pending_tool_calls.resize_with(idx + 1, PendingToolCall::default);
-                    }
-                    pending_tool_calls[idx].id = id;
-                    pending_tool_calls[idx].name = name;
-                }
-                Ok(ChatEvent::ToolCallDelta { index, arguments }) => {
-                    let idx = index as usize;
-                    if idx < pending_tool_calls.len() {
-                        pending_tool_calls[idx].arguments.push_str(&arguments);
-                    }
-                }
-                Ok(ChatEvent::Done { finish_reason: fr, .. }) => {
-                    finish_reason = fr;
-                    break;
-                }
-                Ok(ChatEvent::Error(e)) => {
-                    let error = WsOutgoing::Error {
-                        code: "agent_error".to_string(),
-                        message: e,
-                    };
-                    tx.send(error)
-                        .await
-                        .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
-                    return Ok(());
-                }
-                Err(e) => {
-                    let error = WsOutgoing::Error {
-                        code: "stream_error".to_string(),
-                        message: e.to_string(),
-                    };
-                    tx.send(error)
-                        .await
-                        .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
-                    return Ok(());
-                }
-            }
-        }
-
-        full_response.push_str(&turn_text);
-
-        // If the model requested tool calls, execute them and loop
-        if finish_reason.as_deref() == Some("tool_calls") && !pending_tool_calls.is_empty() {
-            // Add assistant message with tool calls to conversation
-            let tool_calls: Vec<synapse_client::ToolCall> = pending_tool_calls
-                .iter()
-                .map(|tc| synapse_client::ToolCall {
-                    id: tc.id.clone(),
-                    function: synapse_client::FunctionCall {
-                        name: tc.name.clone(),
-                        arguments: tc.arguments.clone(),
-                    },
-                })
-                .collect();
-
-            let assistant_content = if turn_text.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(turn_text)
+    let full_response = match run_agent_turn(state, agent_config).await {
+        Ok(text) => text,
+        Err(e) => {
+            let error = WsOutgoing::Error {
+                code: "agent_error".to_string(),
+                message: e.to_string(),
             };
-
-            messages.push(synapse_client::Message {
-                role: "assistant".to_owned(),
-                content: assistant_content,
-                tool_calls: Some(tool_calls),
-                tool_call_id: None,
-            });
-
-            let executor = Arc::new(
-                crate::tools::executor::ToolExecutor::new(
-                    Arc::clone(&synapse),
-                    state.plugin_manager.clone(),
-                )
-                .with_memory_tools(Arc::clone(&memory_tools)),
-            );
-
-            // Emit ToolStart for every tool immediately
-            for tc in &pending_tool_calls {
-                let _ = tx.try_send(WsOutgoing::ToolStart {
-                    tool_id: tc.id.clone(),
-                    name: tc.name.clone(),
-                });
-            }
-
-            // Drain ask_user calls first — they require user response before other tools run
-            let (ask_user_calls, rest): (Vec<_>, Vec<_>) = pending_tool_calls
-                .iter()
-                .partition(|tc| tc.name == "ask_user");
-
-            #[derive(serde::Deserialize, Default)]
-            struct AskArgs {
-                #[serde(default)]
-                question: String,
-                options: Option<Vec<String>>,
-                #[serde(default)]
-                multi_select: bool,
-            }
-
-            for tc in &ask_user_calls {
-                let ask: AskArgs = serde_json::from_str(&tc.arguments).unwrap_or_else(|e| {
-                    tracing::warn!(tool_id = %tc.id, error = %e, "malformed ask_user arguments, using defaults");
-                    AskArgs::default()
-                });
-                let req_id = uuid::Uuid::new_v4();
-
-                tx.send(WsOutgoing::AskUser {
-                    request_id: req_id,
-                    question: ask.question,
-                    options: ask.options,
-                    multi_select: ask.multi_select,
-                })
+            tx.send(error)
                 .await
                 .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
-
-                let answer = tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    feedback.register(req_id),
-                )
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .map_or_else(
-                    || "[timeout]".to_string(),
-                    |a| match a {
-                        crate::api::feedback::FeedbackAnswer::Text(s) => s,
-                        crate::api::feedback::FeedbackAnswer::Cancelled => "[cancelled]".to_string(),
-                        _ => "[no answer]".to_string(),
-                    },
-                );
-
-                messages.push(synapse_client::Message::tool(&tc.id, &answer));
-            }
-
-            // Remaining tools: reads run in parallel, everything else (including other interactive
-            // tool names not yet implemented) runs sequentially
-            let (reads, mutates): (Vec<_>, Vec<_>) = rest
-                .into_iter()
-                .partition(|tc| ToolKind::classify(&tc.name) == ToolKind::Read);
-
-            // Run read tools concurrently
-            let read_futs = reads.into_iter().map(|tc| {
-                let executor = Arc::clone(&executor);
-                let tool_id = tc.id.clone();
-                let name = tc.name.clone();
-                let args = tc.arguments.clone();
-                async move {
-                    let result = executor.execute(&name, &args).await;
-                    (tool_id, name, args, result)
-                }
-            });
-            let read_results = futures::future::join_all(read_futs).await;
-
-            // Run mutate tools sequentially
-            let mut mutate_results = Vec::new();
-            for tc in mutates {
-                let result = executor.execute(&tc.name, &tc.arguments).await;
-                mutate_results.push((tc.id.clone(), tc.name.clone(), tc.arguments.clone(), result));
-            }
-
-            // Emit ToolResult and push to conversation for all results
-            for (tool_id, name, args, result) in read_results.into_iter().chain(mutate_results) {
-                let (output, is_error) = match result {
-                    Ok(out) => (out, false),
-                    Err(e) => (format!("Error: {e}"), true),
-                };
-                let invocation = crate::tools::format_invocation(&name, &args);
-                let _ = tx.try_send(WsOutgoing::ToolResult {
-                    tool_id: tool_id.clone(),
-                    name: name.clone(),
-                    invocation,
-                    output: output.clone(),
-                    is_error,
-                });
-                messages.push(synapse_client::Message::tool(&tool_id, &output));
-            }
-
-            continue; // Next turn
+            return Ok(());
         }
+    };
 
-        break; // No tool calls, done
+    // Stream the full response as a single chunk so WS clients receive it
+    if !full_response.is_empty() {
+        let _ = tx.try_send(WsOutgoing::ChatChunk {
+            content: full_response.clone(),
+        });
     }
 
-    // Store assistant response
+    // Retrieve the stored assistant message ID for ChatComplete
+    // run_agent_turn already stored both user and assistant messages; fetch the last one
     let message = state
         .session_repo
-        .add_message(&session.id, MessageRole::Assistant, &full_response)?;
+        .get_messages(&session.id, 1)
+        .map_err(|e| crate::Error::Database(e.to_string()))
+        .and_then(|msgs| {
+            msgs.into_iter()
+                .next()
+                .ok_or_else(|| crate::Error::Database("no message stored".to_string()))
+        })?;
 
     // Send completion message
     let complete = WsOutgoing::ChatComplete {
@@ -731,14 +520,6 @@ async fn handle_chat_message(
     }
 
     Ok(())
-}
-
-/// In-progress tool call being assembled from streaming events
-#[derive(Default, Clone)]
-struct PendingToolCall {
-    id: String,
-    name: String,
-    arguments: String,
 }
 
 /// Resolve a per-user Synapse client based on their BYOK key or managed key
