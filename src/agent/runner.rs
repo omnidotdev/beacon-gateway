@@ -117,6 +117,8 @@ pub async fn run_agent_turn(
 
     let max_iter = config.max_iterations.min(20) as usize;
     let mut full_response = String::new();
+    let mut total_input_tokens: u32 = 0;
+    let mut total_output_tokens: u32 = 0;
 
     for _turn in 0..max_iter {
         let request = synapse_client::ChatRequest {
@@ -159,8 +161,12 @@ pub async fn run_agent_turn(
                         pending_tool_calls[idx].arguments.push_str(&arguments);
                     }
                 }
-                Ok(ChatEvent::Done { finish_reason: fr, .. }) => {
+                Ok(ChatEvent::Done { finish_reason: fr, usage }) => {
                     finish_reason = fr;
+                    if let Some(u) = usage {
+                        total_input_tokens = total_input_tokens.saturating_add(u.prompt_tokens);
+                        total_output_tokens = total_output_tokens.saturating_add(u.completion_tokens);
+                    }
                     break;
                 }
                 Ok(ChatEvent::Error(e)) => {
@@ -300,6 +306,25 @@ pub async fn run_agent_turn(
         }
 
         break;
+    }
+
+    if let Some(recorder) = &state.usage_recorder {
+        let idempotency_key = uuid::Uuid::new_v4().to_string();
+        let provider = state
+            .model_info
+            .as_ref()
+            .map(|m| m.provider.clone())
+            .unwrap_or_else(|| "unknown".to_owned());
+        recorder.record(synapse_billing::UsageEvent {
+            entity_type: "user".to_owned(),
+            entity_id: config.user_id.clone(),
+            model: config.model.clone(),
+            provider,
+            input_tokens: total_input_tokens,
+            output_tokens: total_output_tokens,
+            estimated_cost_usd: 0.0,
+            idempotency_key,
+        });
     }
 
     // Store user message and assistant response

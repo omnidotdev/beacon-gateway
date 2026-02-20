@@ -107,6 +107,8 @@ pub struct ApiState {
     pub ws_senders: Option<WsSenders>,
     /// Aether billing state for entitlement and usage-limit enforcement
     pub billing_state: Option<crate::billing::BillingState>,
+    /// Async usage recorder for post-turn token metering
+    pub usage_recorder: Option<synapse_billing::UsageRecorder>,
 }
 
 /// Configuration for building an API server
@@ -395,6 +397,18 @@ impl ApiServerBuilder {
             None
         };
 
+        let usage_recorder = billing_state.as_ref().map(|bs| {
+            let meter_keys = synapse_billing::MeterKeys {
+                input_tokens: std::env::var("AETHER_METER_INPUT_TOKENS")
+                    .unwrap_or_else(|_| "input_tokens".to_owned()),
+                output_tokens: std::env::var("AETHER_METER_OUTPUT_TOKENS")
+                    .unwrap_or_else(|_| "output_tokens".to_owned()),
+                requests: std::env::var("AETHER_METER_REQUESTS")
+                    .unwrap_or_else(|_| "requests".to_owned()),
+            };
+            synapse_billing::UsageRecorder::new((*bs.client).clone(), meter_keys)
+        });
+
         let state = Arc::new(ApiState {
             db: self.db,
             api_key: self.api_key,
@@ -438,6 +452,7 @@ impl ApiServerBuilder {
             rate_limiter,
             ws_senders: Some(Arc::new(RwLock::new(HashMap::new()))),
             billing_state,
+            usage_recorder,
         });
 
         ApiServer {
