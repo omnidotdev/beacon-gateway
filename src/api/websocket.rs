@@ -21,6 +21,7 @@ use super::ApiState;
 use crate::agent::{AgentNotifyEvent, AgentRunConfig, run_agent_turn};
 use crate::api::feedback::{FeedbackAnswer, FeedbackManager};
 use crate::context::ContextBuilder;
+use crate::events::{build_conversation_ended_event, publish};
 
 /// Optional query parameters for WebSocket connection
 #[derive(Debug, Deserialize)]
@@ -255,6 +256,18 @@ async fn handle_socket(
         senders.write().await.remove(&ws_push_key);
         tracing::debug!(key = %ws_push_key, "ws_push: deregistered sender");
     }
+
+    // Publish conversation ended event (best-effort)
+    // Derive org_id: use gatekeeper_user_id as fallback since sessions are user-scoped
+    let ended_org_id = gatekeeper_user_id
+        .as_deref()
+        .unwrap_or(&session_id)
+        .to_string();
+    publish(build_conversation_ended_event(
+        &session_id,
+        "web",
+        &ended_org_id,
+    ));
 
     tracing::info!(session_id = %session_id, "WebSocket disconnected");
 }
