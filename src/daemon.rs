@@ -264,6 +264,9 @@ impl Daemon {
             self.config.voice.stt_model.clone(),
         ));
 
+        // Construct local key store for self-hosted provider management
+        let local_key_store = crate::providers::LocalKeyStore::new(self.db.clone());
+
         // Start HTTP API server
         let persona_system_prompt = self.config.persona.system_prompt().map(String::from);
         let mut api_builder = ApiServerBuilder::new(
@@ -313,6 +316,8 @@ impl Daemon {
         if let Some(jwks) = jwt_cache {
             api_builder = api_builder.jwt_cache(jwks);
         }
+
+        api_builder = api_builder.local_key_store(local_key_store);
 
         let api_server = api_builder.build();
         let _api_handle = api_server.spawn();
