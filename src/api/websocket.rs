@@ -543,10 +543,9 @@ async fn handle_chat_message(
 /// Resolve a per-user Synapse client based on their BYOK key or managed key
 ///
 /// Resolution priority:
-/// 1. BYOK keys (anthropic, openai, openrouter from vault)
-/// 2. Cached Omni Credits key (from vault)
-/// 3. Auto-provision via Synapse API (if cloud mode + provisioner available)
-/// 4. Fallback: return None, caller uses shared `state.synapse`
+/// 1. User's preferred provider key (respects Synapse `defaultProvider` preference)
+/// 2. Auto-provision via Synapse API (if cloud mode + provisioner available)
+/// 3. Fallback: return None, caller uses shared `state.synapse`
 async fn resolve_user_synapse(
     resolver: &crate::providers::KeyResolver,
     user_id: &str,
@@ -560,16 +559,13 @@ async fn resolve_user_synapse(
             |c| c.base_url().to_string(),
         );
 
-    // Step 1: Try BYOK keys (Anthropic, OpenAI, OpenRouter)
-    for provider_name in &["anthropic", "openai", "openrouter"] {
-        if let Ok(Some(resolved)) = resolver.resolve(user_id, provider_name).await {
-            if !resolved.is_user_key {
-                continue; // Skip env fallbacks, handled by state.synapse
-            }
-
+    // Step 1: Use user's preferred provider key (respects Synapse defaultProvider preference)
+    // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
+    if let Ok(Some((provider_name, resolved))) = resolver.resolve_preferred(user_id).await {
+        if resolved.is_user_key {
             let model = resolved.model_override.unwrap_or_else(|| {
-                match *provider_name {
-                    "anthropic" => crate::daemon::DEFAULT_MODEL.to_string(),
+                match provider_name.as_str() {
+                    "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
                     _ => "gpt-4o".to_string(),
                 }
             });
@@ -581,19 +577,7 @@ async fn resolve_user_synapse(
         }
     }
 
-    // Step 2: Try cached Omni Credits key from vault
-    if let Ok(Some(resolved)) = resolver.resolve(user_id, "omni_credits").await {
-        if resolved.is_user_key {
-            let model = crate::daemon::DEFAULT_MODEL.to_string();
-
-            if let Ok(client) = SynapseClient::new(&synapse_base_url) {
-                let client = client.with_api_key(resolved.api_key);
-                return Some((Arc::new(client), model));
-            }
-        }
-    }
-
-    // Step 3: Auto-provision via Synapse API (cloud mode only)
+    // Step 2: Auto-provision via Synapse API (cloud mode only)
     if state.cloud_mode {
         if let Some(provisioner) = &state.key_provisioner {
             match provisioner.provision(user_id, None, None).await {
@@ -625,7 +609,7 @@ async fn resolve_user_synapse(
         }
     }
 
-    // Step 4: No personal key available, caller falls back to state.synapse
+    // Step 3: No personal key available, caller falls back to state.synapse
     None
 }
 

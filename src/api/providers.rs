@@ -96,9 +96,9 @@ fn provider_status(
     provider_str: &str,
     user_configured: &[String],
     state: &ApiState,
-) -> (ProviderStatus, bool) {
+) -> ProviderStatus {
     if user_configured.contains(&provider_str.to_string()) {
-        return (ProviderStatus::Configured, true);
+        return ProviderStatus::Configured;
     }
 
     let env_active = state
@@ -107,9 +107,9 @@ fn provider_status(
         .is_some_and(|m| m.provider == provider_str);
 
     if env_active {
-        (ProviderStatus::Configured, true)
+        ProviderStatus::Configured
     } else {
-        (ProviderStatus::NotConfigured, false)
+        ProviderStatus::NotConfigured
     }
 }
 
@@ -130,11 +130,22 @@ async fn list_providers(
         vec![]
     };
 
-    let (openai_status, openai_active) = provider_status("openai", &user_configured, &state);
-    let (anthropic_status, anthropic_active) =
-        provider_status("anthropic", &user_configured, &state);
-    let (openrouter_status, openrouter_active) =
-        provider_status("openrouter", &user_configured, &state);
+    let preferred_provider = if let Some(ref uid) = user_id {
+        if let Some(resolver) = &state.key_resolver {
+            resolver.resolve_preferred(uid).await
+                .ok()
+                .flatten()
+                .map(|(provider, _)| provider)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let openai_status = provider_status("openai", &user_configured, &state);
+    let anthropic_status = provider_status("anthropic", &user_configured, &state);
+    let openrouter_status = provider_status("openrouter", &user_configured, &state);
 
     let providers = vec![
         ProviderInfo {
@@ -142,7 +153,7 @@ async fn list_providers(
             name: "OpenAI".to_string(),
             description: "GPT-4o, GPT-4, and other OpenAI models".to_string(),
             status: openai_status,
-            active: openai_active,
+            active: preferred_provider.as_deref() == Some("openai"),
             api_key_url: Some("https://platform.openai.com/api-keys".to_string()),
             coming_soon: false,
             features: vec![
@@ -156,7 +167,7 @@ async fn list_providers(
             name: "Anthropic".to_string(),
             description: "Claude Opus 4.5, Sonnet 4.5, and other Claude models".to_string(),
             status: anthropic_status,
-            active: anthropic_active,
+            active: preferred_provider.as_deref() == Some("anthropic"),
             api_key_url: Some("https://console.anthropic.com/settings/keys".to_string()),
             coming_soon: false,
             features: vec![
@@ -170,7 +181,7 @@ async fn list_providers(
             name: "OpenRouter".to_string(),
             description: "Access 500+ models from all major providers with one API key".to_string(),
             status: openrouter_status,
-            active: openrouter_active,
+            active: preferred_provider.as_deref() == Some("openrouter"),
             api_key_url: Some("https://openrouter.ai/keys".to_string()),
             coming_soon: false,
             features: vec![
@@ -184,19 +195,16 @@ async fn list_providers(
             let provisioner_available = state.key_provisioner.is_some();
             let has_cached_key = user_configured.contains(&"omni_credits".to_string());
 
-            let (omni_status, omni_active, omni_coming_soon) = if synapse_available && provisioner_available {
+            let (omni_status, omni_coming_soon) = if synapse_available && provisioner_available {
                 if user_id.is_some() || has_cached_key {
-                    // Authenticated user with provisioner = fully configured
-                    (ProviderStatus::Configured, true, false)
+                    (ProviderStatus::Configured, false)
                 } else {
-                    // Not authenticated, sign in to activate
-                    (ProviderStatus::NotConfigured, false, false)
+                    (ProviderStatus::NotConfigured, false)
                 }
             } else if synapse_available {
-                // Synapse but no provisioner
-                (ProviderStatus::NotConfigured, false, false)
+                (ProviderStatus::NotConfigured, false)
             } else {
-                (ProviderStatus::ComingSoon, false, true)
+                (ProviderStatus::ComingSoon, true)
             };
 
             ProviderInfo {
@@ -204,7 +212,7 @@ async fn list_providers(
                 name: "Omni Credits".to_string(),
                 description: "Omni's AI router with smart model selection and MCP support. No API keys needed".to_string(),
                 status: omni_status,
-                active: omni_active,
+                active: preferred_provider.as_deref() == Some("omni_credits"),
                 api_key_url: None,
                 coming_soon: omni_coming_soon,
                 features: vec![
@@ -217,22 +225,17 @@ async fn list_providers(
         },
     ];
 
-    // Determine active provider: BYOK keys override Omni Credits.
-    // Mirror resolve_user_synapse priority: anthropic → openai → openrouter → omni_credits → env fallback
-    let has_byok = user_configured.iter().any(|p| p != "omni_credits");
-    let active_provider = if has_byok {
-        if user_configured.contains(&"anthropic".to_string()) {
-            Some(ProviderType::Anthropic)
-        } else if user_configured.contains(&"openai".to_string()) {
-            Some(ProviderType::Openai)
-        } else {
-            Some(ProviderType::Openrouter)
+    // Active provider is the user's explicit preference (from Synapse defaultProvider)
+    let active_provider = if let Some(ref pref) = preferred_provider {
+        match pref.as_str() {
+            "anthropic" => Some(ProviderType::Anthropic),
+            "openai" => Some(ProviderType::Openai),
+            "openrouter" => Some(ProviderType::Openrouter),
+            "omni_credits" => Some(ProviderType::OmniCredits),
+            _ => None,
         }
-    } else if user_configured.contains(&"omni_credits".to_string())
-        || (state.key_provisioner.is_some() && user_id.is_some())
-    {
-        Some(ProviderType::OmniCredits)
     } else {
+        // No user keys at all — fall back to env-configured model
         state.model_info.as_ref().map(|m| match m.provider.as_str() {
             "anthropic" => ProviderType::Anthropic,
             _ => ProviderType::Openai,
