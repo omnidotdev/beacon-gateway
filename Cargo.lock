@@ -3883,7 +3883,7 @@ dependencies = [
 [[package]]
 name = "synapse-billing"
 version = "0.1.0"
-source = "git+https://github.com/omnidotdev/synapse-gateway#fbbb45dad4f1263815fe230151d80844348f56f9"
+source = "git+https://github.com/omnidotdev/synapse-gateway#bf84fcbbb9ffc9d4a29e1c073c83c6b4694517c7"
 dependencies = [
  "reqwest 0.12.28",
  "secrecy 0.10.3",
@@ -3899,7 +3899,7 @@ dependencies = [
 [[package]]
 name = "synapse-client"
 version = "0.1.0"
-source = "git+https://github.com/omnidotdev/synapse-gateway#fbbb45dad4f1263815fe230151d80844348f56f9"
+source = "git+https://github.com/omnidotdev/synapse-gateway#bf84fcbbb9ffc9d4a29e1c073c83c6b4694517c7"
 dependencies = [
  "agent-core",
  "anyhow",
