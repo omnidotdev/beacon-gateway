@@ -379,11 +379,6 @@ mod tests {
     use super::*;
     use crate::db::{self, MemoryCategory, MemoryRepo};
 
-    fn make_repo() -> MemoryRepo {
-        let pool = db::init_memory().unwrap();
-        MemoryRepo::new(pool)
-    }
-
     #[test]
     fn list_handler_filters_by_user() {
         let pool = db::init_memory().unwrap();
