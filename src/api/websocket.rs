@@ -1,6 +1,7 @@
 //! WebSocket handler for real-time chat
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::{
@@ -486,7 +487,34 @@ async fn handle_chat_message(
         user_id: user_id.clone(),
     };
 
-    let full_response = match run_agent_turn(state, agent_config).await {
+    // Spawn keepalive heartbeat to prevent proxy timeout during LLM processing.
+    // Reverse proxies (Railway/nginx) close idle connections after ~30-60s; sending
+    // periodic Progress frames keeps the TCP connection alive.
+    let tx_heartbeat = tx.clone();
+    let heartbeat = tokio::spawn(async move {
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(20),
+            Duration::from_secs(20),
+        );
+        loop {
+            interval.tick().await;
+            if tx_heartbeat
+                .send(WsOutgoing::Progress {
+                    label: "thinking".to_string(),
+                    percent: None,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let agent_result = run_agent_turn(state, agent_config).await;
+    heartbeat.abort();
+
+    let full_response = match agent_result {
         Ok(text) => text,
         Err(e) => {
             let error = WsOutgoing::Error {
