@@ -29,6 +29,9 @@ pub struct AgentRunConfig {
     /// Optional channel to emit tool events to a WebSocket client
     /// Pass `None` for headless/non-WebSocket callers
     pub notify: Option<tokio::sync::mpsc::Sender<AgentNotifyEvent>>,
+    /// Per-request Synapse client override (BYOK or local key store)
+    /// Falls back to `state.synapse` when `None`
+    pub synapse_override: Option<Arc<synapse_client::SynapseClient>>,
 }
 
 /// In-progress tool call being assembled from streaming events
@@ -85,7 +88,7 @@ pub async fn run_agent_turn(
     state: &ApiState,
     config: AgentRunConfig,
 ) -> crate::Result<String> {
-    let Some(synapse) = state.synapse.clone() else {
+    let Some(synapse) = config.synapse_override.clone().or_else(|| state.synapse.clone()) else {
         return Err(crate::Error::Agent("no LLM provider configured".to_string()));
     };
 
@@ -353,6 +356,7 @@ mod tests {
             session_id: "sess_1".to_string(),
             user_id: "user_1".to_string(),
             notify: None,
+            synapse_override: None,
         };
         assert!(config.prompt.is_empty());
     }

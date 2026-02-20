@@ -508,6 +508,7 @@ async fn handle_chat_message(
         session_id: session.id.clone(),
         user_id: user_id.clone(),
         notify: Some(notify_tx),
+        synapse_override: Some(synapse),
     };
 
     // Spawn keepalive heartbeat to prevent proxy timeout during LLM processing.
