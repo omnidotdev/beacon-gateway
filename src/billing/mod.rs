@@ -78,7 +78,7 @@ impl BillingState {
 }
 
 /// Cache key for entitlement checks
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct EntitlementKey {
     entity_type: String,
     entity_id: String,
@@ -86,7 +86,7 @@ struct EntitlementKey {
 }
 
 /// Cache key for usage checks
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct UsageKey {
     entity_type: String,
     entity_id: String,
@@ -94,19 +94,29 @@ struct UsageKey {
 }
 
 /// Cached entitlement result
-#[derive(Clone)]
+///
+/// Both granted (`has_access: true`) and denied (`has_access: false`) outcomes
+/// are cached for the full TTL. This is intentional: it protects Aether from
+/// per-request load and is consistent with synapse-gateway's approach. The
+/// tradeoff is that a newly upgraded user may wait up to one TTL period before
+/// their entitlement is reflected.
+#[derive(Clone, Debug)]
 pub struct CachedEntitlement {
     pub has_access: bool,
 }
 
 /// Cached usage check result
-#[derive(Clone)]
+///
+/// `allowed: false` results are also cached for the full TTL so that
+/// exhausted-quota requests don't spam Aether. Users who add more quota will
+/// see it reflected after at most one TTL period.
+#[derive(Clone, Debug)]
 pub struct CachedUsage {
     pub allowed: bool,
 }
 
 /// TTL-based cache for entitlement and usage check results
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BillingCache {
     entitlements: Cache<EntitlementKey, CachedEntitlement>,
     usage: Cache<UsageKey, CachedUsage>,

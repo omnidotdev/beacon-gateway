@@ -321,6 +321,13 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Override the billing state (used in tests to inject a pre-configured state)
+    #[must_use]
+    pub fn billing_state(mut self, state: crate::billing::BillingState) -> Self {
+        self.billing_state = Some(state);
+        self
+    }
+
     /// Build the API server
     #[must_use]
     pub fn build(self) -> ApiServer {
@@ -369,10 +376,14 @@ impl ApiServerBuilder {
             None
         };
 
-        let billing_state = crate::billing::BillingState::from_env().unwrap_or_else(|e| {
-            tracing::error!(error = %e, "billing initialization failed, running without billing");
+        let billing_state = if self.cloud_mode {
+            crate::billing::BillingState::from_env().unwrap_or_else(|e| {
+                tracing::error!(error = %e, "billing initialization failed, running without billing");
+                None
+            })
+        } else {
             None
-        });
+        };
 
         let state = Arc::new(ApiState {
             db: self.db,
