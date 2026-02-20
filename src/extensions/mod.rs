@@ -9,7 +9,7 @@
 //! ```rust,ignore
 //! use beacon_gateway::extensions::{Extension, ExtensionRegistry};
 //!
-//! let mut registry = ExtensionRegistry::new("~/.beacon/extensions".into());
+//! let mut registry = ExtensionRegistry::new("~/.local/share/omni/beacon/extensions".into());
 //! registry.load_all()?;
 //!
 //! for ext in registry.list() {
@@ -84,7 +84,7 @@ pub struct ExtensionInfo {
 /// Extension registry for managing loaded extensions
 ///
 /// The registry handles loading, tracking, and querying extensions.
-/// Extensions are loaded from a configured directory (typically ~/.beacon/extensions/).
+/// Extensions are loaded from a configured directory (typically ~/.local/share/omni/beacon/extensions/).
 pub struct ExtensionRegistry {
     extensions: Vec<Box<dyn Extension>>,
     extension_dir: PathBuf,
@@ -223,12 +223,16 @@ impl ExtensionRegistry {
 
 impl Default for ExtensionRegistry {
     fn default() -> Self {
-        // Default to ~/.beacon/extensions/
-        let extension_dir = directories::BaseDirs::new()
-            .map_or_else(
-                || PathBuf::from(".beacon/extensions"),
-                |dirs| dirs.home_dir().join(".beacon/extensions"),
-            );
+        // Default to ~/.local/share/omni/beacon/extensions/
+        let extension_dir = directories::BaseDirs::new().map_or_else(
+            || PathBuf::from(".local/share/omni/beacon/extensions"),
+            |dirs| {
+                dirs.data_dir()
+                    .join("omni")
+                    .join("beacon")
+                    .join("extensions")
+            },
+        );
 
         Self::new(extension_dir)
     }

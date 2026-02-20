@@ -100,11 +100,16 @@ impl DeviceIdentity {
     /// Returns `~/.local/share/omni/beacon/identity/device.json`
     #[must_use]
     pub fn default_path() -> PathBuf {
-        directories::ProjectDirs::from("dev", "omni", "omni")
-            .map_or_else(
-                || PathBuf::from(".beacon/identity/device.json"),
-                |d| d.data_dir().join("beacon").join("identity").join("device.json"),
-            )
+        directories::BaseDirs::new().map_or_else(
+            || PathBuf::from(".local/share/omni/beacon/identity/device.json"),
+            |d| {
+                d.data_dir()
+                    .join("omni")
+                    .join("beacon")
+                    .join("identity")
+                    .join("device.json")
+            },
+        )
     }
 
     /// Sign a payload with the device's secret key

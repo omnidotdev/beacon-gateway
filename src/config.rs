@@ -219,9 +219,9 @@ pub struct SyncConfig {
 ///
 /// Uses `~/.cache/omni/beacon/personas/` on Linux
 pub fn persona_cache_dir() -> PathBuf {
-    let cache_dir = directories::ProjectDirs::from("dev", "omni", "omni").map_or_else(
-        || PathBuf::from(".cache/beacon/personas"),
-        |d| d.cache_dir().join("beacon").join("personas"),
+    let cache_dir = directories::BaseDirs::new().map_or_else(
+        || PathBuf::from(".cache/omni/beacon/personas"),
+        |d| d.cache_dir().join("omni").join("beacon").join("personas"),
     );
 
     if let Err(e) = std::fs::create_dir_all(&cache_dir) {
@@ -312,18 +312,23 @@ impl Config {
         }
 
         // Determine data directory (~/.local/share/omni/beacon on Linux)
-        let data_dir = directories::ProjectDirs::from("dev", "omni", "omni")
-            .map_or_else(|| PathBuf::from("."), |d| d.data_dir().join("beacon"));
+        let data_dir = directories::BaseDirs::new()
+            .map_or_else(|| PathBuf::from("."), |d| d.data_dir().join("omni").join("beacon"));
 
         // Ensure data dir exists
         std::fs::create_dir_all(&data_dir).ok();
 
-        // Extension directory (~/.beacon/extensions)
+        // Extension directory (~/.local/share/omni/beacon/extensions)
         let extension_dir = std::env::var("BEACON_EXTENSION_DIR").map_or_else(
             |_| {
                 directories::BaseDirs::new().map_or_else(
-                    || PathBuf::from(".beacon/extensions"),
-                    |dirs| dirs.home_dir().join(".beacon/extensions"),
+                    || PathBuf::from(".local/share/omni/beacon/extensions"),
+                    |dirs| {
+                        dirs.data_dir()
+                            .join("omni")
+                            .join("beacon")
+                            .join("extensions")
+                    },
                 )
             },
             PathBuf::from,
@@ -356,7 +361,7 @@ impl Config {
         // Gateway authentication configuration
         let auth = AuthConfig::from_env();
 
-        // Hooks configuration (from ~/.beacon/hooks.toml or defaults)
+        // Hooks configuration (from hooks.toml in data dir or defaults)
         let hooks = Self::load_hooks_config(&data_dir);
 
         // Identity service URL for JWT validation (JWKS endpoint)
@@ -379,9 +384,9 @@ impl Config {
         let knowledge_cache_dir = std::env::var("BEACON_KNOWLEDGE_CACHE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                directories::ProjectDirs::from("dev", "omni", "omni").map_or_else(
-                    || PathBuf::from(".cache/omni/knowledge"),
-                    |d| d.cache_dir().join("knowledge"),
+                directories::BaseDirs::new().map_or_else(
+                    || PathBuf::from(".cache/omni/beacon/knowledge"),
+                    |d| d.cache_dir().join("omni").join("beacon").join("knowledge"),
                 )
             });
 

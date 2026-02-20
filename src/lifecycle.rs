@@ -132,8 +132,9 @@ pub fn restart_service() -> Result<()> {
 #[must_use]
 pub fn log_path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| {
-        dirs.home_dir()
-            .join(".beacon")
+        dirs.data_dir()
+            .join("omni")
+            .join("beacon")
             .join("logs")
             .join("beacon.log")
     })
@@ -155,7 +156,7 @@ fn plist_path() -> PathBuf {
 #[cfg(target_os = "macos")]
 fn install_launchd(config: &ServiceConfig) -> Result<()> {
     let log_dir = directories::BaseDirs::new()
-        .map(|d| d.home_dir().join(".beacon/logs"))
+        .map(|d| d.data_dir().join("omni").join("beacon").join("logs"))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
 
     std::fs::create_dir_all(&log_dir)?;
@@ -283,7 +284,7 @@ fn service_file_path() -> PathBuf {
 #[cfg(target_os = "linux")]
 fn install_systemd(config: &ServiceConfig) -> Result<()> {
     let log_dir = directories::BaseDirs::new()
-        .map(|d| d.home_dir().join(".beacon/logs"))
+        .map(|d| d.data_dir().join("omni").join("beacon").join("logs"))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
 
     std::fs::create_dir_all(&log_dir)?;
