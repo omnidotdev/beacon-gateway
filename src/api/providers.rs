@@ -1,8 +1,8 @@
 //! Provider configuration API for BYOK (Bring Your Own Key)
 //!
-//! Lists available LLM providers and their status. Key management (adding/removing
-//! provider keys) is handled via the Synapse dashboard at `/dashboard/provider-keys`.
-//! Keys are resolved per-user at request time via the Synapse API.
+//! Lists available LLM providers and their status.
+//! - **Cloud**: key management is via the Synapse dashboard; keys resolved per-user at request time
+//! - **Self-hosted**: keys stored locally in SQLite via `POST /configure` and `DELETE /{provider}`
 
 use std::sync::Arc;
 
@@ -290,9 +290,38 @@ async fn list_providers(
 
 /// Configure a provider key locally (self-hosted deployments)
 async fn configure_provider(
+    headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
     Json(body): Json<ConfigureRequest>,
 ) -> Result<Json<ConfigureResponse>, (axum::http::StatusCode, Json<ConfigureResponse>)> {
+    if state.cloud_mode {
+        return Err((
+            axum::http::StatusCode::FORBIDDEN,
+            Json(ConfigureResponse {
+                success: false,
+                message: "local key management is not available in cloud mode".to_string(),
+            }),
+        ));
+    }
+
+    // Require BEACON_API_KEY if one is configured
+    if let Some(ref expected_key) = state.api_key {
+        let provided = headers
+            .get("x-api-key")
+            .or_else(|| headers.get("authorization"))
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.strip_prefix("Bearer ").unwrap_or(v));
+        if provided != Some(expected_key.as_str()) {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(ConfigureResponse {
+                    success: false,
+                    message: "invalid or missing API key".to_string(),
+                }),
+            ));
+        }
+    }
+
     let valid_providers = ["anthropic", "openai", "openrouter"];
     if !valid_providers.contains(&body.provider.as_str()) {
         return Err((
@@ -337,9 +366,38 @@ async fn configure_provider(
 
 /// Remove a locally configured provider key
 async fn remove_provider(
+    headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,
 ) -> Result<Json<ConfigureResponse>, (axum::http::StatusCode, Json<ConfigureResponse>)> {
+    if state.cloud_mode {
+        return Err((
+            axum::http::StatusCode::FORBIDDEN,
+            Json(ConfigureResponse {
+                success: false,
+                message: "local key management is not available in cloud mode".to_string(),
+            }),
+        ));
+    }
+
+    // Require BEACON_API_KEY if one is configured
+    if let Some(ref expected_key) = state.api_key {
+        let provided = headers
+            .get("x-api-key")
+            .or_else(|| headers.get("authorization"))
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.strip_prefix("Bearer ").unwrap_or(v));
+        if provided != Some(expected_key.as_str()) {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(ConfigureResponse {
+                    success: false,
+                    message: "invalid or missing API key".to_string(),
+                }),
+            ));
+        }
+    }
+
     let Some(store) = &state.local_key_store else {
         return Err((
             axum::http::StatusCode::SERVICE_UNAVAILABLE,

@@ -67,6 +67,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         rate_limiter: None,
         ws_senders: None,
         billing_state: None,
+        usage_recorder: None,
         active_persona: Arc::new(RwLock::new(beacon_gateway::api::ActivePersona {
             id: "test-persona".to_string(),
             system_prompt: None,
