@@ -26,6 +26,9 @@ pub struct AgentRunConfig {
     pub session_id: String,
     /// User ID for memory/context
     pub user_id: String,
+    /// Optional channel to emit tool events to a WebSocket client.
+    /// Pass `None` for headless/non-WebSocket callers
+    pub notify: Option<tokio::sync::mpsc::Sender<AgentNotifyEvent>>,
 }
 
 /// In-progress tool call being assembled from streaming events
@@ -34,6 +37,38 @@ struct PendingToolCall {
     id: String,
     name: String,
     arguments: String,
+}
+
+/// Tool lifecycle events emitted to WebSocket clients during agent execution.
+/// Kept in this module to avoid circular dependency with `api::websocket`
+#[derive(Debug, Clone)]
+pub enum AgentNotifyEvent {
+    /// Tool invocation started
+    ToolStart { tool_id: String, name: String },
+    /// Tool invocation completed
+    ToolResult {
+        tool_id: String,
+        name: String,
+        /// Short display summary extracted from arguments
+        invocation: String,
+        output: String,
+        is_error: bool,
+    },
+}
+
+/// Extract a short display label from tool arguments JSON.
+/// Tries common field names; falls back to truncated raw args
+fn summarize_invocation(name: &str, args: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(args) else {
+        return args.chars().take(60).collect();
+    };
+    for field in &["query", "path", "command", "url", "pattern", "glob"] {
+        if let Some(s) = v.get(field).and_then(|v| v.as_str()) {
+            let truncated: String = s.chars().take(60).collect();
+            return format!("{name}: {truncated}");
+        }
+    }
+    args.chars().take(60).collect()
 }
 
 #[allow(clippy::too_many_lines)]
