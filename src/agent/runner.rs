@@ -236,8 +236,28 @@ pub async fn run_agent_turn(
                 let tool_id = tc.id.clone();
                 let name = tc.name.clone();
                 let args = tc.arguments.clone();
+                let notify = config.notify.clone();
                 async move {
+                    if let Some(ref n) = notify {
+                        let _ = n.send(AgentNotifyEvent::ToolStart {
+                            tool_id: tool_id.clone(),
+                            name: name.clone(),
+                        }).await;
+                    }
                     let result = executor.execute(&name, &args).await;
+                    if let Some(ref n) = notify {
+                        let (output, is_error) = match &result {
+                            Ok(out) => (out.clone(), false),
+                            Err(e) => (format!("Error: {e}"), true),
+                        };
+                        let _ = n.send(AgentNotifyEvent::ToolResult {
+                            tool_id: tool_id.clone(),
+                            name: name.clone(),
+                            invocation: summarize_invocation(&name, &args),
+                            output,
+                            is_error,
+                        }).await;
+                    }
                     (tool_id, result)
                 }
             });
@@ -245,7 +265,26 @@ pub async fn run_agent_turn(
 
             let mut mutate_results = Vec::new();
             for tc in mutates {
+                if let Some(n) = &config.notify {
+                    let _ = n.send(AgentNotifyEvent::ToolStart {
+                        tool_id: tc.id.clone(),
+                        name: tc.name.clone(),
+                    }).await;
+                }
                 let result = executor.execute(&tc.name, &tc.arguments).await;
+                if let Some(n) = &config.notify {
+                    let (output, is_error) = match &result {
+                        Ok(out) => (out.clone(), false),
+                        Err(e) => (format!("Error: {e}"), true),
+                    };
+                    let _ = n.send(AgentNotifyEvent::ToolResult {
+                        tool_id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        invocation: summarize_invocation(&tc.name, &tc.arguments),
+                        output,
+                        is_error,
+                    }).await;
+                }
                 mutate_results.push((tc.id.clone(), result));
             }
 
@@ -291,5 +330,23 @@ mod tests {
             notify: None,
         };
         assert!(config.prompt.is_empty());
+    }
+
+    #[test]
+    fn summarize_invocation_extracts_query() {
+        let s = summarize_invocation("web_search", r#"{"query":"microcap gem"}"#);
+        assert_eq!(s, "web_search: microcap gem");
+    }
+
+    #[test]
+    fn summarize_invocation_extracts_path() {
+        let s = summarize_invocation("read_file", r#"{"path":"/home/user/file.txt"}"#);
+        assert_eq!(s, "read_file: /home/user/file.txt");
+    }
+
+    #[test]
+    fn summarize_invocation_falls_back_to_raw() {
+        let s = summarize_invocation("unknown", r#"{"foo":"bar"}"#);
+        assert_eq!(s, r#"{"foo":"bar"}"#);
     }
 }
