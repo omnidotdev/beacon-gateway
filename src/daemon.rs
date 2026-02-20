@@ -1440,7 +1440,8 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             .with_subject(&msg.sender_id),
         );
 
-        // TODO: publish beacon.conversation.ended when session close/expiry is implemented
+        // TODO: publish beacon.conversation.ended for daemon-managed channels (Discord, Slack, voice)
+        // Note: the web WebSocket channel publishes this event via websocket.rs
     }
 }
 

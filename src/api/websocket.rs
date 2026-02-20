@@ -258,7 +258,7 @@ async fn handle_socket(
     }
 
     // Publish conversation ended event (best-effort)
-    // Derive org_id: use gatekeeper_user_id as fallback since sessions are user-scoped
+    // Derive org_id from authenticated user ID, falling back to session_id for unauthenticated sessions
     let ended_org_id = gatekeeper_user_id
         .as_deref()
         .unwrap_or(&session_id)
