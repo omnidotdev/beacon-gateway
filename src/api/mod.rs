@@ -96,6 +96,7 @@ pub struct ApiState {
     pub plugin_manager: plugins::SharedPluginManager,
     pub key_resolver: Option<Arc<crate::providers::KeyResolver>>,
     pub key_provisioner: Option<Arc<crate::providers::KeyProvisioner>>,
+    pub local_key_store: Option<crate::providers::LocalKeyStore>,
     pub jwt_cache: Option<Arc<jwt::JwksCache>>,
     pub persona_knowledge: Vec<crate::persona::KnowledgeChunk>,
     pub max_context_tokens: usize,
@@ -132,6 +133,7 @@ pub struct ApiServerBuilder {
     model_info: Option<ModelInfo>,
     key_resolver: Option<Arc<crate::providers::KeyResolver>>,
     key_provisioner: Option<Arc<crate::providers::KeyProvisioner>>,
+    local_key_store: Option<crate::providers::LocalKeyStore>,
     jwt_cache: Option<Arc<jwt::JwksCache>>,
     persona_knowledge: Vec<crate::persona::KnowledgeChunk>,
     max_context_tokens: usize,
@@ -175,6 +177,7 @@ impl ApiServerBuilder {
             model_info: None,
             key_resolver: None,
             key_provisioner: None,
+            local_key_store: None,
             jwt_cache: None,
             persona_knowledge: Vec::new(),
             max_context_tokens: 8000,
@@ -276,6 +279,13 @@ impl ApiServerBuilder {
     #[must_use]
     pub fn key_provisioner(mut self, provisioner: Arc<crate::providers::KeyProvisioner>) -> Self {
         self.key_provisioner = Some(provisioner);
+        self
+    }
+
+    /// Set a local key store for self-hosted deployments
+    #[must_use]
+    pub fn local_key_store(mut self, store: crate::providers::LocalKeyStore) -> Self {
+        self.local_key_store = Some(store);
         self
     }
 
@@ -417,6 +427,7 @@ impl ApiServerBuilder {
             plugin_manager,
             key_resolver: self.key_resolver,
             key_provisioner: self.key_provisioner,
+            local_key_store: self.local_key_store,
             jwt_cache: self.jwt_cache,
             persona_knowledge: self.persona_knowledge,
             max_context_tokens: self.max_context_tokens,

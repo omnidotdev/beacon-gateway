@@ -11,6 +11,7 @@ pub struct StoredKey {
 }
 
 /// Gateway-local key store — used when Synapse is not configured
+#[derive(Clone)]
 pub struct LocalKeyStore {
     db: DbPool,
 }
