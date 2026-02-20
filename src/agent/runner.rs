@@ -288,6 +288,7 @@ mod tests {
             max_iterations: 10,
             session_id: "sess_1".to_string(),
             user_id: "user_1".to_string(),
+            notify: None,
         };
         assert!(config.prompt.is_empty());
     }

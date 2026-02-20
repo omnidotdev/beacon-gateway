@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Iggy HTTP REST API default port
@@ -25,6 +26,57 @@ const RETENTION_SECS: u64 = 90 * 24 * 60 * 60;
 
 /// Global publisher configuration
 static CONFIG: OnceLock<EventsConfig> = OnceLock::new();
+
+/// Cached Iggy bearer token — shared across all publish calls
+static TOKEN_CACHE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+fn token_cache() -> &'static RwLock<Option<String>> {
+    TOKEN_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+/// Retrieve the cached token, authenticating if the cache is empty.
+async fn cached_token(
+    client: &reqwest::Client,
+    config: &EventsConfig,
+) -> anyhow::Result<String> {
+    // Fast path: read-lock
+    {
+        let r = token_cache().read().await;
+        if let Some(t) = r.as_ref() {
+            return Ok(t.clone());
+        }
+    }
+    // Slow path: acquire write-lock and authenticate
+    let mut w = token_cache().write().await;
+    // Re-check after acquiring write lock (another task may have authenticated)
+    if let Some(t) = w.as_ref() {
+        return Ok(t.clone());
+    }
+    let t = login(client, config).await?;
+    *w = Some(t.clone());
+    Ok(t)
+}
+
+/// Invalidate the cached token so the next publish re-authenticates.
+async fn invalidate_token() {
+    *token_cache().write().await = None;
+}
+
+/// Authenticate against the Iggy HTTP API and return a bearer token.
+async fn login(client: &reqwest::Client, config: &EventsConfig) -> anyhow::Result<String> {
+    let resp: LoginResponse = client
+        .post(format!("{}/users/login", config.base_url))
+        .json(&LoginRequest {
+            username: &config.username,
+            password: &config.password,
+        })
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(resp.tokens.access.token)
+}
 
 /// Configuration for the Iggy HTTP publisher
 #[derive(Debug, Clone)]
@@ -267,35 +319,45 @@ struct IggyMessage {
 
 /// Send an event to the Iggy HTTP API.
 ///
+/// Uses a cached bearer token, re-authenticating on token expiry.
+///
 /// # Errors
 ///
-/// Returns an error if login, stream/topic provisioning, or message delivery fails.
+/// Returns an error if authentication, stream/topic provisioning, or message delivery fails.
 async fn send_event(config: &EventsConfig, event: &OmniEvent) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    let token = cached_token(&client, config).await?;
 
-    // Authenticate and obtain bearer token
-    let login_resp: LoginResponse = client
-        .post(format!("{}/users/login", config.base_url))
-        .json(&LoginRequest {
-            username: &config.username,
-            password: &config.password,
-        })
-        .send()
-        .await?
-        .json()
-        .await?;
-    let token = login_resp.tokens.access.token;
+    if let Err(e) = inner_send(&client, config, event, &token).await {
+        // Invalidate the cached token so the next publish re-authenticates
+        invalidate_token().await;
+        return Err(e);
+    }
 
+    Ok(())
+}
+
+/// Provision stream/topic and publish the encoded message.
+///
+/// # Errors
+///
+/// Returns an error if stream/topic creation or message delivery fails.
+async fn inner_send(
+    client: &reqwest::Client,
+    config: &EventsConfig,
+    event: &OmniEvent,
+    token: &str,
+) -> anyhow::Result<()> {
     // Ensure stream exists
     let stream_resp = client
         .get(format!("{}/streams/{STREAM_NAME}", config.base_url))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .send()
         .await?;
     if !stream_resp.status().is_success() {
         let _ = client
             .post(format!("{}/streams", config.base_url))
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .json(&CreateStreamRequest {
                 stream_id: 1,
                 name: STREAM_NAME,
@@ -311,7 +373,7 @@ async fn send_event(config: &EventsConfig, event: &OmniEvent) -> anyhow::Result<
             "{}/streams/{STREAM_NAME}/topics/{topic_id}",
             config.base_url
         ))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .send()
         .await?;
     if !topic_resp.status().is_success() {
@@ -320,7 +382,7 @@ async fn send_event(config: &EventsConfig, event: &OmniEvent) -> anyhow::Result<
                 "{}/streams/{STREAM_NAME}/topics",
                 config.base_url
             ))
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .json(&CreateTopicRequest {
                 name: topic_id,
                 partitions_count: TOPIC_PARTITIONS,
@@ -332,8 +394,7 @@ async fn send_event(config: &EventsConfig, event: &OmniEvent) -> anyhow::Result<
 
     // Encode payload as base64
     let payload_bytes = serde_json::to_vec(event)?;
-    let payload_b64 =
-        base64::engine::general_purpose::STANDARD.encode(payload_bytes);
+    let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload_bytes);
 
     // Publish message
     let send_resp = client
@@ -341,7 +402,7 @@ async fn send_event(config: &EventsConfig, event: &OmniEvent) -> anyhow::Result<
             "{}/streams/{STREAM_NAME}/topics/{topic_id}/messages",
             config.base_url
         ))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .json(&SendMessagesRequest {
             partitioning: Partitioning { kind: "balanced" },
             messages: vec![IggyMessage {

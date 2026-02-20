@@ -340,6 +340,7 @@ async fn handle_agent_run(state: &ApiState, callback: &VortexCallback) -> crate:
         max_iterations,
         session_id: session.id.clone(),
         user_id: user.id.clone(),
+        notify: None,
     };
 
     let result = run_agent_turn(state, agent_config).await?;
