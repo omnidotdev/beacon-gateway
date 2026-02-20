@@ -21,13 +21,14 @@ pub mod voice;
 pub mod webhooks;
 pub mod websocket;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
 use synapse_client::SynapseClient;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, RwLock}; // Mutex still used for Canvas
+use tokio::sync::{Mutex, RwLock, mpsc}; // Mutex still used for Canvas
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -53,6 +54,9 @@ pub struct ActivePersona {
     pub id: String,
     pub system_prompt: Option<String>,
 }
+
+/// Shared sender registry for active WebSocket connections
+pub type WsSenders = Arc<RwLock<HashMap<String, mpsc::Sender<websocket::WsOutgoing>>>>;
 
 /// Shared state for API handlers
 #[derive(Clone)]
@@ -98,6 +102,8 @@ pub struct ApiState {
     pub knowledge_cache_dir: PathBuf,
     pub cloud_mode: bool,
     pub rate_limiter: Option<rate_limit::SharedLimiter>,
+    /// Active WebSocket senders keyed by user ID, for proactive `ws_push` delivery
+    pub ws_senders: Option<WsSenders>,
 }
 
 /// Configuration for building an API server
@@ -399,6 +405,7 @@ impl ApiServerBuilder {
             }),
             cloud_mode: self.cloud_mode,
             rate_limiter,
+            ws_senders: Some(Arc::new(RwLock::new(HashMap::new()))),
         });
 
         ApiServer {

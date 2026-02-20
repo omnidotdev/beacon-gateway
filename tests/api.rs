@@ -64,6 +64,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         knowledge_cache_dir: std::path::PathBuf::from("/tmp/test-knowledge-cache"),
         cloud_mode: false,
         rate_limiter: None,
+        ws_senders: None,
         active_persona: Arc::new(RwLock::new(beacon_gateway::api::ActivePersona {
             id: "test-persona".to_string(),
             system_prompt: None,
