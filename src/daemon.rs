@@ -1139,12 +1139,18 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             };
 
         // Publish beacon.conversation.started for new sessions (best-effort)
-        if session_repo.message_count(&session.id).unwrap_or(1) == 0 {
-            crate::events::publish(crate::events::build_conversation_started_event(
-                &session.id,
-                channel_name,
-                &msg.sender_id,
-            ));
+        match session_repo.message_count(&session.id) {
+            Ok(0) => {
+                crate::events::publish(crate::events::build_conversation_started_event(
+                    &session.id,
+                    channel_name,
+                    &msg.sender_id,
+                ));
+            }
+            Ok(_) => {} // existing session, don't re-publish started
+            Err(e) => {
+                tracing::warn!("failed to check message count for session {}: {}", session.id, e);
+            }
         }
 
         // Extract thread_id for threading support
