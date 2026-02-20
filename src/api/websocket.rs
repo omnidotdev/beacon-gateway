@@ -18,7 +18,7 @@ use synapse_client::SynapseClient;
 use tokio::sync::mpsc;
 
 use super::ApiState;
-use crate::agent::{AgentRunConfig, run_agent_turn};
+use crate::agent::{AgentNotifyEvent, AgentRunConfig, run_agent_turn};
 use crate::api::feedback::{FeedbackAnswer, FeedbackManager};
 use crate::context::ContextBuilder;
 
@@ -477,6 +477,23 @@ async fn handle_chat_message(
         state.system_prompt.clone()
     };
 
+    // Bridge: forward AgentNotifyEvent → WsOutgoing::ToolStart/ToolResult to client
+    let (notify_tx, mut notify_rx) = mpsc::channel::<AgentNotifyEvent>(32);
+    let tx_notify = tx.clone();
+    let notify_bridge = tokio::spawn(async move {
+        while let Some(event) = notify_rx.recv().await {
+            let ws_msg = match event {
+                AgentNotifyEvent::ToolStart { tool_id, name } => {
+                    WsOutgoing::ToolStart { tool_id, name }
+                }
+                AgentNotifyEvent::ToolResult { tool_id, name, invocation, output, is_error } => {
+                    WsOutgoing::ToolResult { tool_id, name, invocation, output, is_error }
+                }
+            };
+            let _ = tx_notify.send(ws_msg).await;
+        }
+    });
+
     let agent_config = AgentRunConfig {
         prompt: augmented_prompt,
         system_prompt,
@@ -485,7 +502,7 @@ async fn handle_chat_message(
         max_iterations: 10,
         session_id: session.id.clone(),
         user_id: user_id.clone(),
-        notify: None,
+        notify: Some(notify_tx),
     };
 
     // Spawn keepalive heartbeat to prevent proxy timeout during LLM processing.
@@ -514,6 +531,7 @@ async fn handle_chat_message(
 
     let agent_result = run_agent_turn(state, agent_config).await;
     heartbeat.abort();
+    notify_bridge.abort();
 
     let full_response = match agent_result {
         Ok(text) => text,
