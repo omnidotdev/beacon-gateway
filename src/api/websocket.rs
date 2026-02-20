@@ -37,6 +37,9 @@ pub enum WsIncoming {
         /// Override the active persona for this message
         #[serde(default)]
         persona_id: Option<String>,
+        /// Override the model for this message
+        #[serde(default)]
+        model_override: Option<String>,
     },
     /// Client answer to an `ask_user` / permission / `location_request` event
     AgentResponse {
@@ -273,8 +276,8 @@ async fn handle_message(
                 .await
                 .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
         }
-        WsIncoming::Chat { content, persona_id } => {
-            handle_chat_message(&content, persona_id, state, session_id, tx, gatekeeper_user_id, feedback).await?;
+        WsIncoming::Chat { content, persona_id, model_override } => {
+            handle_chat_message(&content, persona_id, model_override, state, session_id, tx, gatekeeper_user_id, feedback).await?;
         }
         WsIncoming::AgentResponse { request_id, answer } => {
             let fb_answer = match answer.as_str() {
@@ -296,6 +299,7 @@ async fn handle_message(
 async fn handle_chat_message(
     content: &str,
     persona_id_override: Option<String>,
+    msg_model_override: Option<String>,
     state: &Arc<ApiState>,
     session_id: &str,
     tx: mpsc::Sender<WsOutgoing>,
@@ -461,7 +465,9 @@ async fn handle_chat_message(
         return Ok(());
     };
 
-    let model = model_override.unwrap_or_else(|| state.llm_model.clone());
+    let model = msg_model_override
+        .or(model_override)
+        .unwrap_or_else(|| state.llm_model.clone());
 
     // Build system prompt — skip in no-persona mode
     let system_prompt = if active_persona_id == crate::NO_PERSONA_ID {
