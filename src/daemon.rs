@@ -1440,8 +1440,13 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             .with_subject(&msg.sender_id),
         );
 
-        // TODO: publish beacon.conversation.ended for daemon-managed channels (Discord, Slack, voice)
-        // Note: the web WebSocket channel publishes this event via websocket.rs
+        // Publish beacon.conversation.ended event (best-effort)
+        // For daemon channels, one request-response exchange = one conversation
+        crate::events::publish(crate::events::build_conversation_ended_event(
+            &session.id,
+            channel_name,
+            &msg.sender_id,
+        ));
     }
 }
 
