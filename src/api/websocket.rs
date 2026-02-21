@@ -488,6 +488,12 @@ async fn handle_chat_message(
         .or(model_override)
         .unwrap_or_else(|| state.llm_model.clone());
 
+    tracing::info!(
+        model = %model,
+        default = %state.llm_model,
+        "handle_chat_message: resolved model"
+    );
+
     // Build system prompt — skip in no-persona mode
     let system_prompt = if active_persona_id == crate::NO_PERSONA_ID {
         String::new()
