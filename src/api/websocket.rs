@@ -574,9 +574,11 @@ async fn handle_chat_message(
 
     // Stream the full response as a single chunk so WS clients receive it
     if !full_response.is_empty() {
-        let _ = tx.try_send(WsOutgoing::ChatChunk {
+        tx.send(WsOutgoing::ChatChunk {
             content: full_response.clone(),
-        });
+        })
+        .await
+        .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
     }
 
     // Retrieve the stored assistant message ID for ChatComplete
