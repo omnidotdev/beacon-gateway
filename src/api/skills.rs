@@ -13,7 +13,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{auth::require_api_key, ApiState};
-use crate::skills::{ManifoldClient, Skill, SkillPriority, SkillSource};
+use crate::skills::{
+    ManifoldClient, Skill, SkillPriority, SkillSnapshot, SkillSource, SnapshotEntry,
+};
 
 // --- Request/Response types ---
 
@@ -50,6 +52,7 @@ pub enum SkillSourceResponse {
     Local,
     Manifold { namespace: String, repository: String },
     Bundled,
+    Plugin,
 }
 
 impl From<&SkillSource> for SkillSourceResponse {
@@ -64,6 +67,7 @@ impl From<&SkillSource> for SkillSourceResponse {
                 repository: repository.clone(),
             },
             SkillSource::Bundled => Self::Bundled,
+            SkillSource::Plugin => Self::Plugin,
         }
     }
 }
@@ -354,6 +358,8 @@ async fn install_local(
             primary_env: None,
             command_dispatch: None,
             command_tool: None,
+            install: vec![],
+            requires_config: vec![],
         },
         content: req.content,
         source: SkillSource::Local,
@@ -583,6 +589,156 @@ async fn list_commands(
     Ok(Json(commands))
 }
 
+/// Response for install-deps endpoint
+#[derive(Serialize)]
+pub struct InstallDepsResponse {
+    pub skill_id: String,
+    pub result: crate::skills::SkillInstallResult,
+}
+
+/// Install dependencies for a skill
+async fn install_deps(
+    State(state): State<Arc<ApiState>>,
+    Path(skill_id): Path<String>,
+) -> Result<Json<InstallDepsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let skill = state
+        .skill_repo
+        .get(&skill_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))?;
+
+    let specs = &skill.skill.metadata.install;
+    if specs.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            error_response("no_install_specs", "Skill has no install specifications"),
+        ));
+    }
+
+    let prefs = &state.skills_config.install_prefs;
+    let spec = crate::skills::install::select_install_spec(specs, prefs)
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                error_response("no_compatible_spec", "No compatible install spec for this platform"),
+            )
+        })?;
+
+    let result = crate::skills::install::execute_install(spec, prefs)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("install_error", &e.to_string())))?;
+
+    Ok(Json(InstallDepsResponse {
+        skill_id,
+        result,
+    }))
+}
+
+/// Export a snapshot of all installed skills
+async fn get_snapshot(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<SkillSnapshot>, (StatusCode, Json<ErrorResponse>)> {
+    let skills = state
+        .skill_repo
+        .list()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+
+    let entries: Vec<SnapshotEntry> = skills
+        .iter()
+        .map(|s| SnapshotEntry {
+            name: s.skill.metadata.name.clone(),
+            version: s.skill.metadata.version.clone(),
+            source: s.skill.source.clone(),
+            enabled: s.enabled,
+            priority: s.priority.as_db().to_string(),
+            api_key: s.api_key.clone(),
+            skill_env: s.skill_env.clone(),
+        })
+        .collect();
+
+    Ok(Json(SkillSnapshot {
+        version: "1".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        skills: entries,
+    }))
+}
+
+/// Import a snapshot, installing missing skills
+async fn import_snapshot(
+    State(state): State<Arc<ApiState>>,
+    Json(snapshot): Json<SkillSnapshot>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let mut imported = 0;
+    let mut skipped = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    let client = ManifoldClient::new(&state.manifold_url);
+
+    for entry in &snapshot.skills {
+        // Skip if already installed
+        if state.skill_repo.get_by_name(&entry.name).ok().flatten().is_some() {
+            skipped += 1;
+            continue;
+        }
+
+        // Only Manifold-sourced skills can be fetched remotely
+        let SkillSource::Manifold { namespace, .. } = &entry.source else {
+            tracing::info!(
+                name = %entry.name,
+                source = ?entry.source,
+                "snapshot entry requires local install, skipping"
+            );
+            skipped += 1;
+            continue;
+        };
+
+        // Fetch from Manifold
+        let skill = match client.get_skill(namespace, &entry.name).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(name = %entry.name, error = %e, "failed to fetch skill from Manifold");
+                errors.push(format!("{}: {e}", entry.name));
+                continue;
+            }
+        };
+
+        // Install with snapshot priority
+        let priority = SkillPriority::from_db(&entry.priority);
+        match state.skill_repo.install_with_priority(&skill, priority, None) {
+            Ok(installed) => {
+                // Apply api_key and env from snapshot
+                let has_config = entry.api_key.is_some() || !entry.skill_env.is_empty();
+                if has_config {
+                    let env = if entry.skill_env.is_empty() { None } else { Some(&entry.skill_env) };
+                    let _ = state.skill_repo.update_skill_config(
+                        &installed.skill.id,
+                        entry.api_key.as_deref(),
+                        env,
+                    );
+                }
+
+                // Apply enabled state
+                if !entry.enabled {
+                    let _ = state.skill_repo.set_enabled(&installed.skill.id, false);
+                }
+
+                imported += 1;
+            }
+            Err(e) => {
+                tracing::warn!(name = %entry.name, error = %e, "failed to install skill from snapshot");
+                errors.push(format!("{}: {e}", entry.name));
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "total": snapshot.skills.len(),
+    })))
+}
+
 /// Build the skills router
 pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
@@ -592,9 +748,11 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/search", get(search_skills))
         .route("/install", post(install_skill))
         .route("/install/local", post(install_local))
+        .route("/snapshot", get(get_snapshot).post(import_snapshot))
         .route("/{skill_id}", get(get_skill).patch(update_skill).delete(uninstall_skill))
         .route("/{skill_id}/enabled", patch(set_enabled))
         .route("/{skill_id}/priority", patch(set_priority))
+        .route("/{skill_id}/install-deps", post(install_deps))
         .layer(middleware::from_fn_with_state(state.clone(), require_api_key))
         .with_state(state)
 }

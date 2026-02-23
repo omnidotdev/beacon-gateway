@@ -9,6 +9,152 @@ fn default_true() -> bool {
     true
 }
 
+/// How a skill dependency should be installed
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallKind {
+    Brew,
+    Node,
+    Go,
+    Uv,
+    Download,
+}
+
+/// A single install specification for a skill dependency
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInstallSpec {
+    pub kind: InstallKind,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Expected binaries after install
+    #[serde(default)]
+    pub bins: Vec<String>,
+    /// Per-spec OS filter
+    #[serde(default)]
+    pub os: Vec<String>,
+    /// Homebrew formula
+    #[serde(default)]
+    pub formula: Option<String>,
+    /// Node / uv package name
+    #[serde(default)]
+    pub package: Option<String>,
+    /// Go module path
+    #[serde(default)]
+    pub module: Option<String>,
+    /// Download URL
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Archive format: "tar.gz", "tar.bz2", "zip"
+    #[serde(default)]
+    pub archive: Option<String>,
+    /// Strip leading path components when extracting
+    #[serde(default)]
+    pub strip_components: Option<u32>,
+    /// Target directory for extracted binaries
+    #[serde(default)]
+    pub target_dir: Option<String>,
+}
+
+/// Preferred Node.js package manager
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeManager {
+    #[default]
+    Npm,
+    Pnpm,
+    Yarn,
+    Bun,
+}
+
+/// User preferences for install automation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInstallPreferences {
+    #[serde(default = "default_true")]
+    pub prefer_brew: bool,
+    #[serde(default)]
+    pub node_manager: NodeManager,
+}
+
+impl Default for SkillInstallPreferences {
+    fn default() -> Self {
+        Self {
+            prefer_brew: true,
+            node_manager: NodeManager::default(),
+        }
+    }
+}
+
+/// Result of executing an install command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInstallResult {
+    pub ok: bool,
+    pub message: String,
+    #[serde(default)]
+    pub stdout: String,
+    #[serde(default)]
+    pub stderr: String,
+    pub code: Option<i32>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// Filter for agent-level skill visibility
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillFilter {
+    /// Patterns to include (empty = all)
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// Patterns to exclude
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+impl SkillFilter {
+    /// Check whether a skill name passes this filter
+    #[must_use]
+    pub fn allows(&self, name: &str) -> bool {
+        let included = self.include.is_empty()
+            || self.include.iter().any(|p| pattern_matches(p, name));
+        let excluded = self.exclude.iter().any(|p| pattern_matches(p, name));
+        included && !excluded
+    }
+}
+
+/// Match a pattern against a name (supports `*`, `prefix*`, `*suffix`, exact)
+fn pattern_matches(pattern: &str, name: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return name.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return name.ends_with(suffix);
+    }
+    pattern == name
+}
+
+/// Workspace snapshot of all installed skills
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillSnapshot {
+    pub version: String,
+    pub created_at: String,
+    pub skills: Vec<SnapshotEntry>,
+}
+
+/// A single skill entry within a snapshot
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotEntry {
+    pub name: String,
+    pub version: Option<String>,
+    pub source: SkillSource,
+    pub enabled: bool,
+    pub priority: String,
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub skill_env: HashMap<String, String>,
+}
+
 /// Skill metadata from SKILL.md frontmatter
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillMetadata {
@@ -55,6 +201,12 @@ pub struct SkillMetadata {
     /// Target tool name for dispatch
     #[serde(default, rename = "command-tool")]
     pub command_tool: Option<String>,
+    /// Install automation specs for dependencies
+    #[serde(default)]
+    pub install: Vec<SkillInstallSpec>,
+    /// Config paths that must be satisfied for eligibility (e.g. "voice.enabled")
+    #[serde(default)]
+    pub requires_config: Vec<String>,
 }
 
 /// A loaded skill with content
@@ -79,6 +231,8 @@ pub enum SkillSource {
     },
     /// Bundled with Beacon
     Bundled,
+    /// Loaded from a plugin
+    Plugin,
 }
 
 /// Skill priority determines placement in the system prompt hierarchy
@@ -187,4 +341,77 @@ pub fn deduplicate_command_name(name: &str, existing: &[String]) -> String {
         }
     }
     format!("{base}_{}", uuid::Uuid::new_v4().as_simple())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_empty_allows_all() {
+        let filter = SkillFilter::default();
+        assert!(filter.allows("anything"));
+        assert!(filter.allows("weather"));
+    }
+
+    #[test]
+    fn filter_include_only() {
+        let filter = SkillFilter {
+            include: vec!["weather".to_string(), "clock".to_string()],
+            exclude: vec![],
+        };
+        assert!(filter.allows("weather"));
+        assert!(filter.allows("clock"));
+        assert!(!filter.allows("pirate"));
+    }
+
+    #[test]
+    fn filter_exclude() {
+        let filter = SkillFilter {
+            include: vec![],
+            exclude: vec!["pirate".to_string()],
+        };
+        assert!(filter.allows("weather"));
+        assert!(!filter.allows("pirate"));
+    }
+
+    #[test]
+    fn filter_glob() {
+        let filter = SkillFilter {
+            include: vec!["dev-*".to_string()],
+            exclude: vec!["*-beta".to_string()],
+        };
+        assert!(filter.allows("dev-tools"));
+        assert!(filter.allows("dev-lint"));
+        assert!(!filter.allows("prod-tools"));
+        assert!(!filter.allows("dev-beta")); // excluded by *-beta
+    }
+
+    #[test]
+    fn filter_wildcard_include() {
+        let filter = SkillFilter {
+            include: vec!["*".to_string()],
+            exclude: vec!["secret".to_string()],
+        };
+        assert!(filter.allows("anything"));
+        assert!(!filter.allows("secret"));
+    }
+
+    #[test]
+    fn pattern_matches_exact() {
+        assert!(pattern_matches("hello", "hello"));
+        assert!(!pattern_matches("hello", "world"));
+    }
+
+    #[test]
+    fn pattern_matches_prefix() {
+        assert!(pattern_matches("dev-*", "dev-tools"));
+        assert!(!pattern_matches("dev-*", "prod-tools"));
+    }
+
+    #[test]
+    fn pattern_matches_suffix() {
+        assert!(pattern_matches("*-beta", "tool-beta"));
+        assert!(!pattern_matches("*-beta", "tool-release"));
+    }
 }

@@ -127,6 +127,25 @@ impl PluginManager {
             .collect()
     }
 
+    /// Collect skill directories from enabled plugins that declare `skills_dir`
+    ///
+    /// Returns `(plugin_path/skills_dir)` for each match. The caller should
+    /// scan these with `SkillSource::Plugin`.
+    #[must_use]
+    pub fn skill_dirs(&self) -> Vec<PathBuf> {
+        self.plugins
+            .values()
+            .filter(|p| p.enabled)
+            .filter_map(|p| {
+                p.manifest
+                    .skills_dir
+                    .as_ref()
+                    .map(|dir| p.path.join(dir))
+            })
+            .filter(|p| p.is_dir())
+            .collect()
+    }
+
     /// Number of loaded plugins
     #[must_use]
     pub fn len(&self) -> usize {
@@ -270,5 +289,56 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert!(second.is_empty()); // Already loaded
         assert_eq!(manager.len(), 1);
+    }
+
+    #[test]
+    fn skill_dirs_from_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Plugin with skills_dir
+        let p1_dir = dir.path().join("p1");
+        std::fs::create_dir(&p1_dir).unwrap();
+        let skills_dir = p1_dir.join("my-skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+        std::fs::write(
+            p1_dir.join("omni.plugin.json"),
+            r#"{"id":"omni.p1","name":"P1","version":"1.0.0","kind":"skill","skills_dir":"my-skills"}"#,
+        )
+        .unwrap();
+
+        // Plugin without skills_dir
+        let p2_dir = dir.path().join("p2");
+        std::fs::create_dir(&p2_dir).unwrap();
+        std::fs::write(
+            p2_dir.join("omni.plugin.json"),
+            r#"{"id":"omni.p2","name":"P2","version":"1.0.0","kind":"tool"}"#,
+        )
+        .unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.load_all(&[dir.path().to_path_buf()]);
+
+        let skill_dirs = manager.skill_dirs();
+        assert_eq!(skill_dirs.len(), 1);
+        assert_eq!(skill_dirs[0], skills_dir);
+    }
+
+    #[test]
+    fn skill_dirs_skips_missing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Plugin with skills_dir that doesn't exist on disk
+        let p_dir = dir.path().join("p");
+        std::fs::create_dir(&p_dir).unwrap();
+        std::fs::write(
+            p_dir.join("omni.plugin.json"),
+            r#"{"id":"omni.p","name":"P","version":"1.0.0","kind":"skill","skills_dir":"nonexistent"}"#,
+        )
+        .unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.load_all(&[dir.path().to_path_buf()]);
+
+        assert!(manager.skill_dirs().is_empty());
     }
 }

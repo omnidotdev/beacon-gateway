@@ -28,6 +28,9 @@ pub struct PluginManifest {
     /// Entry point (relative path to executable or script)
     #[serde(default)]
     pub entry: Option<String>,
+    /// Relative path to a skills directory within the plugin
+    #[serde(default)]
+    pub skills_dir: Option<String>,
 }
 
 /// Plugin category

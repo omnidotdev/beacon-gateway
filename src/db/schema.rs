@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 14;
+pub const SCHEMA_VERSION: i32 = 16;
 
 /// Initialize the database schema
 ///
@@ -58,6 +58,12 @@ pub fn init(conn: &Connection) -> Result<()> {
     }
     if version < 14 {
         migrate_v14(conn)?;
+    }
+    if version < 15 {
+        migrate_v15(conn)?;
+    }
+    if version < 16 {
+        migrate_v16(conn)?;
     }
 
     Ok(())
@@ -162,7 +168,7 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
             tags TEXT NOT NULL DEFAULT '[]',
             permissions TEXT NOT NULL DEFAULT '[]',
             content TEXT NOT NULL,
-            source_type TEXT NOT NULL CHECK(source_type IN ('local', 'manifold', 'bundled')),
+            source_type TEXT NOT NULL CHECK(source_type IN ('local', 'manifold', 'bundled', 'plugin')),
             source_namespace TEXT,
             source_repository TEXT,
             enabled INTEGER NOT NULL DEFAULT 1,
@@ -470,6 +476,92 @@ fn migrate_v14(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("migrated to schema v14 (OS, bins, dispatch, per-skill env)");
+    Ok(())
+}
+
+fn migrate_v15(conn: &Connection) -> Result<()> {
+    // Recreate table to update CHECK constraint (add 'plugin' source_type)
+    // and add install_specs column
+    conn.execute_batch(
+        r"
+        -- Recreate installed_skills with updated source_type CHECK and new column
+        CREATE TABLE IF NOT EXISTS installed_skills_new (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            version TEXT,
+            author TEXT,
+            tags TEXT NOT NULL DEFAULT '[]',
+            permissions TEXT NOT NULL DEFAULT '[]',
+            content TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK(source_type IN ('local', 'manifold', 'bundled', 'plugin')),
+            source_namespace TEXT,
+            source_repository TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            priority TEXT NOT NULL DEFAULT 'standard',
+            always_include INTEGER NOT NULL DEFAULT 0,
+            user_invocable INTEGER NOT NULL DEFAULT 1,
+            disable_model_invocation INTEGER NOT NULL DEFAULT 0,
+            emoji TEXT,
+            requires_env TEXT NOT NULL DEFAULT '[]',
+            command_name TEXT,
+            user_id TEXT,
+            os TEXT NOT NULL DEFAULT '[]',
+            requires_bins TEXT NOT NULL DEFAULT '[]',
+            requires_any_bins TEXT NOT NULL DEFAULT '[]',
+            primary_env TEXT,
+            command_dispatch_tool TEXT,
+            api_key TEXT,
+            skill_env TEXT NOT NULL DEFAULT '{}',
+            install_specs TEXT NOT NULL DEFAULT '[]'
+        );
+
+        INSERT OR IGNORE INTO installed_skills_new
+            SELECT id, name, description, version, author, tags, permissions,
+                   content, source_type, source_namespace, source_repository,
+                   enabled, installed_at, COALESCE(updated_at, datetime('now')),
+                   COALESCE(priority, 'standard'),
+                   COALESCE(always_include, 0), COALESCE(user_invocable, 1),
+                   COALESCE(disable_model_invocation, 0), emoji,
+                   COALESCE(requires_env, '[]'), command_name, user_id,
+                   COALESCE(os, '[]'), COALESCE(requires_bins, '[]'),
+                   COALESCE(requires_any_bins, '[]'), primary_env,
+                   command_dispatch_tool, api_key,
+                   COALESCE(skill_env, '{}'), '[]'
+            FROM installed_skills;
+
+        DROP TABLE installed_skills;
+        ALTER TABLE installed_skills_new RENAME TO installed_skills;
+
+        -- Re-create indices
+        CREATE INDEX IF NOT EXISTS idx_skills_name ON installed_skills(name);
+        CREATE INDEX IF NOT EXISTS idx_skills_enabled ON installed_skills(enabled);
+        CREATE INDEX IF NOT EXISTS idx_skills_source ON installed_skills(source_type);
+        CREATE INDEX IF NOT EXISTS idx_skills_priority ON installed_skills(priority);
+        CREATE INDEX IF NOT EXISTS idx_skills_command ON installed_skills(command_name);
+        CREATE INDEX IF NOT EXISTS idx_skills_user ON installed_skills(user_id);
+
+        PRAGMA user_version = 15;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v15 (skill install specs, plugin source type)");
+    Ok(())
+}
+
+fn migrate_v16(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Config-based eligibility paths
+        ALTER TABLE installed_skills ADD COLUMN requires_config TEXT NOT NULL DEFAULT '[]';
+
+        PRAGMA user_version = 16;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v16 (config-based eligibility)");
     Ok(())
 }
 

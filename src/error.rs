@@ -119,4 +119,8 @@ pub enum Error {
     /// Tool execution error
     #[error("tool error: {0}")]
     Tool(String),
+
+    /// Skill install automation error
+    #[error("install error: {0}")]
+    Install(String),
 }

@@ -2,10 +2,12 @@
 
 use crate::skills::{InstalledSkill, SkillPriority};
 
-/// Budget constraints for skill inclusion in the system prompt
+/// Budget constraints and runtime context for skill inclusion in the system prompt
 pub struct PromptBudget {
     pub max_skills: usize,
     pub max_chars: usize,
+    /// Whether voice is enabled (for `requires_config: ["voice.enabled"]`)
+    pub voice_enabled: bool,
 }
 
 /// Check whether all required env vars are set
@@ -43,6 +45,19 @@ pub fn check_bins_requirement(bins: &[String]) -> bool {
 #[must_use]
 pub fn check_any_bins_requirement(bins: &[String]) -> bool {
     bins.is_empty() || bins.iter().any(|b| crate::skills::has_binary(b))
+}
+
+/// Check if config-based eligibility requirements are met
+///
+/// Known config paths are checked against runtime state.
+/// Unknown paths fail closed (treated as not satisfied).
+#[must_use]
+pub fn check_config_requirement(paths: &[String], voice_enabled: bool) -> bool {
+    paths.iter().all(|path| match path.as_str() {
+        "voice.enabled" => voice_enabled,
+        // Unknown paths fail closed
+        _ => false,
+    })
 }
 
 /// Compact a path by replacing the home directory prefix with ~
@@ -84,6 +99,7 @@ pub fn build_system_prompt_with_budget(
                 && check_os_requirement(&s.skill.metadata.os)
                 && check_bins_requirement(&s.skill.metadata.requires_bins)
                 && check_any_bins_requirement(&s.skill.metadata.requires_any_bins)
+                && check_config_requirement(&s.skill.metadata.requires_config, budget.voice_enabled)
         })
         .collect();
 
@@ -317,6 +333,8 @@ mod tests {
                     primary_env: None,
                     command_dispatch: None,
                     command_tool: None,
+                    install: vec![],
+                    requires_config: vec![],
                 },
                 content: content.to_string(),
                 source: SkillSource::Local,
@@ -416,6 +434,7 @@ mod tests {
         let budget = PromptBudget {
             max_skills: 1,
             max_chars: 100,
+            voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &skills, &budget);
         assert!(result.contains("standard content"));
@@ -429,6 +448,7 @@ mod tests {
         let budget = PromptBudget {
             max_skills: 50,
             max_chars: 30_000,
+            voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
         assert!(!result.contains("secret content"));
@@ -441,6 +461,7 @@ mod tests {
         let budget = PromptBudget {
             max_skills: 0,
             max_chars: 0,
+            voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
         assert!(result.contains("always content"));
@@ -453,6 +474,7 @@ mod tests {
         let budget = PromptBudget {
             max_skills: 50,
             max_chars: 30_000,
+            voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
         assert!(!result.contains("gated content"));
@@ -516,6 +538,7 @@ mod tests {
         let budget = PromptBudget {
             max_skills: 50,
             max_chars: 30_000,
+            voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
         assert!(!result.contains("os gated content"));
@@ -528,8 +551,49 @@ mod tests {
         let budget = PromptBudget {
             max_skills: 50,
             max_chars: 30_000,
+            voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
         assert!(!result.contains("bin gated content"));
+    }
+
+    #[test]
+    fn config_requirement_voice_enabled() {
+        assert!(check_config_requirement(&["voice.enabled".to_string()], true));
+        assert!(!check_config_requirement(&["voice.enabled".to_string()], false));
+    }
+
+    #[test]
+    fn config_requirement_unknown_fails_closed() {
+        assert!(!check_config_requirement(&["unknown.path".to_string()], true));
+    }
+
+    #[test]
+    fn config_requirement_empty_passes() {
+        assert!(check_config_requirement(&[], false));
+    }
+
+    #[test]
+    fn config_requirement_filters_from_budget_prompt() {
+        let mut skill = make_skill("voice_skill", "voice gated content", SkillPriority::Standard);
+        skill.skill.metadata.requires_config = vec!["voice.enabled".to_string()];
+
+        // With voice disabled, skill should be excluded
+        let budget_no_voice = PromptBudget {
+            max_skills: 50,
+            max_chars: 30_000,
+            voice_enabled: false,
+        };
+        let result = build_system_prompt_with_budget("Orin", "", &[skill.clone()], &budget_no_voice);
+        assert!(!result.contains("voice gated content"));
+
+        // With voice enabled, skill should be included
+        let budget_voice = PromptBudget {
+            max_skills: 50,
+            max_chars: 30_000,
+            voice_enabled: true,
+        };
+        let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget_voice);
+        assert!(result.contains("voice gated content"));
     }
 }

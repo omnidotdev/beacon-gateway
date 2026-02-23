@@ -143,6 +143,18 @@ pub struct SkillsFileConfig {
     pub personal_dir: Option<String>,
     /// Bundled skill allowlist (empty = all)
     pub allow_bundled: Option<Vec<String>>,
+    /// Prefer Homebrew for install automation
+    pub prefer_brew: Option<bool>,
+    /// Node package manager preference ("npm", "pnpm", "yarn", "bun")
+    pub node_manager: Option<String>,
+    /// Max candidate directories to scan per root
+    pub max_candidates_per_root: Option<usize>,
+    /// Max skills to load per source directory
+    pub max_skills_per_source: Option<usize>,
+    /// Skill include patterns for agent-level filtering
+    pub skill_include: Option<Vec<String>>,
+    /// Skill exclude patterns for agent-level filtering
+    pub skill_exclude: Option<Vec<String>>,
 }
 
 /// Load the TOML config file from the standard path

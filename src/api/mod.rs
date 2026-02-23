@@ -112,6 +112,10 @@ pub struct ApiState {
     pub usage_recorder: Option<synapse_billing::UsageRecorder>,
     /// Skills system configuration
     pub skills_config: crate::config::SkillsConfig,
+    /// Agent-level skill filter
+    pub skill_filter: crate::skills::SkillFilter,
+    /// Whether voice input/output is enabled (for config-based eligibility)
+    pub voice_enabled: bool,
 }
 
 impl ApiState {
@@ -121,16 +125,24 @@ impl ApiState {
     /// Falls back to the static `system_prompt` when no skills are installed.
     #[must_use]
     pub fn system_prompt_with_skills(&self, user_id: Option<&str>) -> String {
-        let skills = self
+        let all_skills = self
             .skill_repo
             .list_enabled_for_user(user_id)
             .unwrap_or_default();
+
+        // Apply agent-level skill filter
+        let skills: Vec<crate::skills::InstalledSkill> = all_skills
+            .into_iter()
+            .filter(|s| self.skill_filter.allows(&s.skill.metadata.name))
+            .collect();
+
         if skills.is_empty() {
             return self.system_prompt.clone();
         }
         let budget = crate::prompt::PromptBudget {
             max_skills: self.skills_config.max_skills_in_prompt,
             max_chars: self.skills_config.max_skills_prompt_chars,
+            voice_enabled: self.voice_enabled,
         };
         crate::prompt::build_system_prompt_with_budget(
             &self.persona_name,
@@ -175,6 +187,7 @@ pub struct ApiServerBuilder {
     cloud_mode: bool,
     billing_state: Option<crate::billing::BillingState>,
     skills_config: crate::config::SkillsConfig,
+    voice_enabled: bool,
 }
 
 impl ApiServerBuilder {
@@ -222,6 +235,7 @@ impl ApiServerBuilder {
             cloud_mode: false,
             billing_state: None,
             skills_config: crate::config::SkillsConfig::default(),
+            voice_enabled: false,
         }
     }
 
@@ -295,6 +309,7 @@ impl ApiServerBuilder {
         self.tts_model.clone_from(&config.tts_model);
         self.tts_voice.clone_from(&config.tts_voice);
         self.tts_speed = config.tts_speed;
+        self.voice_enabled = config.enabled;
         self
     }
 
@@ -496,6 +511,8 @@ impl ApiServerBuilder {
             ws_senders: Some(Arc::new(RwLock::new(HashMap::new()))),
             billing_state,
             usage_recorder,
+            skill_filter: self.skills_config.skill_filter.clone(),
+            voice_enabled: self.voice_enabled,
             skills_config: self.skills_config,
         });
 

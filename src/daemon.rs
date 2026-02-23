@@ -138,7 +138,27 @@ impl Daemon {
         // Initialize Synapse AI router client
         let (synapse, model_info) = self.init_synapse().await;
 
-        // Discover and sync skills from all roots
+        // Get tool policy from persona
+        let tool_policy = Arc::new(self.config.persona.tool_policy());
+
+        // Initialize plugin manager (before skill discovery so plugin skills are included)
+        let plugin_manager: crate::api::plugins::SharedPluginManager = {
+            let mut pm = crate::plugins::PluginManager::new();
+            let dirs = crate::plugins::default_plugin_dirs();
+            let loaded = pm.load_all(&dirs);
+            if !loaded.is_empty() {
+                tracing::info!(count = loaded.len(), plugins = ?loaded, "loaded plugins");
+            }
+            Arc::new(tokio::sync::Mutex::new(pm))
+        };
+
+        // Collect plugin skill directories before taking the lock
+        let plugin_skill_dirs = {
+            let pm = plugin_manager.lock().await;
+            pm.skill_dirs()
+        };
+
+        // Discover and sync skills from all roots (including plugin skills)
         let skill_repo = SkillRepo::new(self.db.clone());
         {
             let mut registry = crate::skills::SkillRegistry::new(
@@ -152,6 +172,19 @@ impl Daemon {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "skill discovery failed");
+                }
+            }
+            // Scan plugin skill directories
+            if !plugin_skill_dirs.is_empty() {
+                match registry.scan_plugin_dirs(&plugin_skill_dirs, &self.config.skills) {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!(count, "discovered plugin skills");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "plugin skill discovery failed");
+                    }
                 }
             }
             if let Err(e) = crate::skills::sync_discovered_skills(&skill_repo, &registry) {
@@ -202,20 +235,6 @@ impl Daemon {
             } else {
                 None
             };
-
-        // Get tool policy from persona
-        let tool_policy = Arc::new(self.config.persona.tool_policy());
-
-        // Initialize plugin manager
-        let plugin_manager: crate::api::plugins::SharedPluginManager = {
-            let mut pm = crate::plugins::PluginManager::new();
-            let dirs = crate::plugins::default_plugin_dirs();
-            let loaded = pm.load_all(&dirs);
-            if !loaded.is_empty() {
-                tracing::info!(count = loaded.len(), plugins = ?loaded, "loaded plugins");
-            }
-            Arc::new(tokio::sync::Mutex::new(pm))
-        };
 
         // Resolve knowledge packs from Manifold and merge with inline chunks
         let resolved_knowledge = if !self.config.persona.knowledge.packs.is_empty() {

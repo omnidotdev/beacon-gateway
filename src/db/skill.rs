@@ -66,6 +66,7 @@ impl SkillRepo {
                 repository,
             } => ("manifold", Some(namespace.as_str()), Some(repository.as_str())),
             SkillSource::Bundled => ("bundled", None, None),
+            SkillSource::Plugin => ("plugin", None, None),
         };
 
         // Compute command_dispatch_tool from metadata
@@ -76,6 +77,11 @@ impl SkillRepo {
                 None
             };
 
+        let install_specs_json =
+            serde_json::to_string(&skill.metadata.install).unwrap_or_else(|_| "[]".to_string());
+        let requires_config_json =
+            serde_json::to_string(&skill.metadata.requires_config).unwrap_or_else(|_| "[]".to_string());
+
         conn.execute(
             r"
             INSERT INTO installed_skills (
@@ -84,10 +90,12 @@ impl SkillRepo {
                 enabled, priority, always_include, user_invocable,
                 disable_model_invocation, emoji, requires_env, command_name, user_id,
                 os, requires_bins, requires_any_bins, primary_env,
-                command_dispatch_tool, api_key, skill_env
+                command_dispatch_tool, api_key, skill_env,
+                install_specs, requires_config
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, NULL, '{}'
+                ?20, ?21, ?22, ?23, ?24, NULL, '{}',
+                ?25, ?26
             )
             ",
             rusqlite::params![
@@ -115,6 +123,8 @@ impl SkillRepo {
                 requires_any_bins_json,
                 skill.metadata.primary_env,
                 command_dispatch_tool,
+                install_specs_json,
+                requires_config_json,
             ],
         )?;
 
@@ -173,7 +183,8 @@ impl SkillRepo {
         always_include, user_invocable, disable_model_invocation,
         emoji, requires_env, command_name, user_id,
         os, requires_bins, requires_any_bins, primary_env,
-        command_dispatch_tool, api_key, skill_env
+        command_dispatch_tool, api_key, skill_env,
+        install_specs, requires_config
     ";
 
     /// Get an installed skill by ID
@@ -375,6 +386,11 @@ impl SkillRepo {
                     } else {
                         None
                     };
+                let install_specs_json =
+                    serde_json::to_string(&skill.metadata.install).unwrap_or_else(|_| "[]".to_string());
+                let requires_config_json =
+                    serde_json::to_string(&skill.metadata.requires_config).unwrap_or_else(|_| "[]".to_string());
+
                 conn.execute(
                     r"
                     UPDATE installed_skills
@@ -383,8 +399,9 @@ impl SkillRepo {
                         emoji = ?6, requires_env = ?7,
                         os = ?8, requires_bins = ?9, requires_any_bins = ?10,
                         primary_env = ?11, command_dispatch_tool = ?12,
+                        install_specs = ?13, requires_config = ?14,
                         updated_at = datetime('now')
-                    WHERE id = ?13
+                    WHERE id = ?15
                     ",
                     rusqlite::params![
                         skill.content,
@@ -399,6 +416,8 @@ impl SkillRepo {
                         requires_any_bins_json,
                         skill.metadata.primary_env,
                         command_dispatch_tool,
+                        install_specs_json,
+                        requires_config_json,
                         existing.skill.id,
                     ],
                 )?;
@@ -574,7 +593,15 @@ impl SkillRepo {
         let os: Vec<String> = serde_json::from_str(&os_json).unwrap_or_default();
         let requires_bins: Vec<String> = serde_json::from_str(&requires_bins_json).unwrap_or_default();
         let requires_any_bins: Vec<String> = serde_json::from_str(&requires_any_bins_json).unwrap_or_default();
+        // v15/v16 columns
+        let install_specs_json: String = row.get::<_, Option<String>>(28)?
+            .unwrap_or_else(|| "[]".to_string());
+        let requires_config_json: String = row.get::<_, Option<String>>(29)?
+            .unwrap_or_else(|| "[]".to_string());
+
         let skill_env: HashMap<String, String> = serde_json::from_str(&skill_env_json).unwrap_or_default();
+        let install: Vec<crate::skills::SkillInstallSpec> = serde_json::from_str(&install_specs_json).unwrap_or_default();
+        let requires_config: Vec<String> = serde_json::from_str(&requires_config_json).unwrap_or_default();
 
         let source = match source_type.as_str() {
             "manifold" => SkillSource::Manifold {
@@ -582,6 +609,7 @@ impl SkillRepo {
                 repository: source_repository.unwrap_or_default(),
             },
             "bundled" => SkillSource::Bundled,
+            "plugin" => SkillSource::Plugin,
             _ => SkillSource::Local,
         };
 
@@ -609,6 +637,8 @@ impl SkillRepo {
                     primary_env,
                     command_dispatch: None,
                     command_tool: None,
+                    install,
+                    requires_config,
                 },
                 content,
                 source,
@@ -651,6 +681,8 @@ mod tests {
                 primary_env: None,
                 command_dispatch: None,
                 command_tool: None,
+                install: vec![],
+                requires_config: vec![],
             },
             content: "# Test Skill\n\nThis is a test.".to_string(),
             source: SkillSource::Local,
@@ -711,5 +743,35 @@ mod tests {
         repo.set_enabled(&installed.skill.id, true).unwrap();
         let enabled = repo.list_enabled().unwrap();
         assert_eq!(enabled.len(), 1);
+    }
+
+    #[test]
+    fn test_install_specs_db_roundtrip() {
+        let pool = init_memory().unwrap();
+        let repo = SkillRepo::new(pool);
+
+        let mut skill = test_skill();
+        skill.metadata.install = vec![crate::skills::SkillInstallSpec {
+            kind: crate::skills::InstallKind::Brew,
+            label: Some("jq".to_string()),
+            bins: vec!["jq".to_string()],
+            os: vec!["darwin".to_string(), "linux".to_string()],
+            formula: Some("jq".to_string()),
+            package: None,
+            module: None,
+            url: None,
+            archive: None,
+            strip_components: None,
+            target_dir: None,
+        }];
+        skill.metadata.requires_config = vec!["voice.enabled".to_string()];
+
+        let installed = repo.install(&skill).unwrap();
+        let fetched = repo.get(&installed.skill.id).unwrap().unwrap();
+
+        assert_eq!(fetched.skill.metadata.install.len(), 1);
+        assert_eq!(fetched.skill.metadata.install[0].kind, crate::skills::InstallKind::Brew);
+        assert_eq!(fetched.skill.metadata.install[0].formula.as_deref(), Some("jq"));
+        assert_eq!(fetched.skill.metadata.requires_config, vec!["voice.enabled"]);
     }
 }

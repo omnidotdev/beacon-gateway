@@ -226,6 +226,14 @@ pub struct SkillsConfig {
     pub personal_dir: PathBuf,
     /// Bundled skill allowlist. Empty = all allowed
     pub allow_bundled: Vec<String>,
+    /// Install automation preferences
+    pub install_prefs: crate::skills::SkillInstallPreferences,
+    /// Max candidate directories to scan per root
+    pub max_candidates_per_root: usize,
+    /// Max skills to load per source directory
+    pub max_skills_per_source: usize,
+    /// Agent-level skill filter (include/exclude patterns)
+    pub skill_filter: crate::skills::SkillFilter,
 }
 
 impl Default for SkillsConfig {
@@ -238,6 +246,10 @@ impl Default for SkillsConfig {
             extra_dirs: Vec::new(),
             personal_dir: default_personal_dir(),
             allow_bundled: Vec::new(),
+            install_prefs: crate::skills::SkillInstallPreferences::default(),
+            max_candidates_per_root: 1000,
+            max_skills_per_source: 200,
+            skill_filter: crate::skills::SkillFilter::default(),
         }
     }
 }
@@ -538,6 +550,48 @@ impl Config {
                 .or_else(|| toml_skills.allow_bundled.clone())
                 .unwrap_or(default.allow_bundled);
 
+            let prefer_brew = std::env::var("BEACON_SKILLS_PREFER_BREW")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .or(toml_skills.prefer_brew)
+                .unwrap_or(default.install_prefs.prefer_brew);
+
+            let node_manager = std::env::var("BEACON_SKILLS_NODE_MANAGER")
+                .ok()
+                .or_else(|| toml_skills.node_manager.clone())
+                .and_then(|s| match s.to_lowercase().as_str() {
+                    "npm" => Some(crate::skills::NodeManager::Npm),
+                    "pnpm" => Some(crate::skills::NodeManager::Pnpm),
+                    "yarn" => Some(crate::skills::NodeManager::Yarn),
+                    "bun" => Some(crate::skills::NodeManager::Bun),
+                    _ => None,
+                })
+                .unwrap_or(default.install_prefs.node_manager);
+
+            let max_candidates_per_root = std::env::var("BEACON_MAX_CANDIDATES_PER_ROOT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .or(toml_skills.max_candidates_per_root)
+                .unwrap_or(default.max_candidates_per_root);
+
+            let max_skills_per_source = std::env::var("BEACON_MAX_SKILLS_PER_SOURCE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .or(toml_skills.max_skills_per_source)
+                .unwrap_or(default.max_skills_per_source);
+
+            let skill_include = std::env::var("BEACON_SKILLS_INCLUDE")
+                .ok()
+                .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+                .or_else(|| toml_skills.skill_include.clone())
+                .unwrap_or_default();
+
+            let skill_exclude = std::env::var("BEACON_SKILLS_EXCLUDE")
+                .ok()
+                .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+                .or_else(|| toml_skills.skill_exclude.clone())
+                .unwrap_or_default();
+
             SkillsConfig {
                 managed_dir: std::env::var("BEACON_SKILLS_DIR")
                     .map(PathBuf::from)
@@ -559,6 +613,16 @@ impl Config {
                 extra_dirs,
                 personal_dir,
                 allow_bundled,
+                install_prefs: crate::skills::SkillInstallPreferences {
+                    prefer_brew,
+                    node_manager,
+                },
+                max_candidates_per_root,
+                max_skills_per_source,
+                skill_filter: crate::skills::SkillFilter {
+                    include: skill_include,
+                    exclude: skill_exclude,
+                },
             }
         };
 

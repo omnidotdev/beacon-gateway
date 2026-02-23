@@ -1,12 +1,14 @@
 //! Skills system for extensible agent capabilities
 
+pub mod install;
 mod manifold;
 mod types;
 
 pub use manifold::ManifoldClient;
 pub use types::{
-    InstalledSkill, Skill, SkillMetadata, SkillPriority, SkillSource,
-    deduplicate_command_name, has_binary, sanitize_command_name,
+    InstalledSkill, InstallKind, NodeManager, Skill, SkillFilter, SkillInstallPreferences,
+    SkillInstallResult, SkillInstallSpec, SkillMetadata, SkillPriority, SkillSnapshot,
+    SkillSource, SnapshotEntry, deduplicate_command_name, has_binary, sanitize_command_name,
 };
 
 use std::collections::HashMap;
@@ -18,6 +20,36 @@ use crate::{Error, Result};
 const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("concise", include_str!("../../skills/concise/SKILL.md")),
 ];
+
+/// Limits applied during directory scanning
+#[derive(Debug, Clone)]
+pub struct ScanLimits {
+    pub max_skill_file_bytes: usize,
+    pub max_candidates_per_root: usize,
+    pub max_skills_per_source: usize,
+}
+
+impl Default for ScanLimits {
+    fn default() -> Self {
+        Self {
+            max_skill_file_bytes: 256_000,
+            max_candidates_per_root: 1000,
+            max_skills_per_source: 200,
+        }
+    }
+}
+
+impl ScanLimits {
+    /// Build from a `SkillsConfig`
+    #[must_use]
+    pub fn from_config(config: &crate::config::SkillsConfig) -> Self {
+        Self {
+            max_skill_file_bytes: config.max_skill_file_bytes,
+            max_candidates_per_root: config.max_candidates_per_root,
+            max_skills_per_source: config.max_skills_per_source,
+        }
+    }
+}
 
 /// Skill registry for discovery and management
 #[derive(Debug, Default)]
@@ -73,6 +105,7 @@ impl SkillRegistry {
     /// Returns an error if a directory cannot be read
     pub fn discover_all_roots(&mut self, config: &crate::config::SkillsConfig) -> Result<usize> {
         let mut count = 0;
+        let limits = ScanLimits::from_config(config);
 
         // 1. Bundled (filtered by allowlist)
         count += self.load_bundled(&config.allow_bundled);
@@ -80,20 +113,37 @@ impl SkillRegistry {
         // 2. Extra dirs
         for dir in &config.extra_dirs {
             if dir.is_dir() {
-                count += self.scan_directory(dir)?;
+                count += self.scan_directory_with_limits(dir, &limits)?;
             }
         }
 
         // 3. Managed dir
         if config.managed_dir.is_dir() {
-            count += self.scan_directory(&config.managed_dir)?;
+            count += self.scan_directory_with_limits(&config.managed_dir, &limits)?;
         }
 
         // 4. Personal agent dir
         if config.personal_dir.is_dir() {
-            count += self.scan_directory(&config.personal_dir)?;
+            count += self.scan_directory_with_limits(&config.personal_dir, &limits)?;
         }
 
+        Ok(count)
+    }
+
+    /// Scan plugin skill directories, tagging discoveries as `SkillSource::Plugin`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a directory cannot be read
+    pub fn scan_plugin_dirs(&mut self, dirs: &[PathBuf], config: &crate::config::SkillsConfig) -> Result<usize> {
+        let limits = ScanLimits::from_config(config);
+        let mut count = 0;
+        for dir in dirs {
+            if !dir.is_dir() {
+                continue;
+            }
+            count += self.scan_directory_with_source(dir, &limits, SkillSource::Plugin)?;
+        }
         Ok(count)
     }
 
@@ -141,23 +191,87 @@ impl SkillRegistry {
         Ok(count)
     }
 
-    /// Scan a directory for SKILL.md files
+    /// Scan a directory for SKILL.md files with safety limits
     fn scan_directory(&mut self, dir: &Path) -> Result<usize> {
+        self.scan_directory_with_limits(dir, &ScanLimits::default())
+    }
+
+    /// Scan a directory for SKILL.md files with explicit safety limits
+    fn scan_directory_with_limits(&mut self, dir: &Path, limits: &ScanLimits) -> Result<usize> {
+        self.scan_directory_with_source(dir, limits, SkillSource::Local)
+    }
+
+    /// Scan a directory with explicit limits and source tag
+    fn scan_directory_with_source(&mut self, dir: &Path, limits: &ScanLimits, source: SkillSource) -> Result<usize> {
+        let count = self.scan_directory_inner(dir, limits, &source)?;
+
+        // Nested root detection: if zero skills found, check for `dir/skills/`
+        if count == 0 {
+            let nested = dir.join("skills");
+            if nested.is_dir() {
+                tracing::debug!(
+                    parent = %dir.display(),
+                    nested = %nested.display(),
+                    "no skills found in root, trying nested skills/ dir"
+                );
+                return self.scan_directory_inner(&nested, limits, &source);
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Inner scan with limits enforcement
+    fn scan_directory_inner(&mut self, dir: &Path, limits: &ScanLimits, source: &SkillSource) -> Result<usize> {
         let mut count = 0;
+        let mut candidates_scanned = 0;
         let entries = std::fs::read_dir(dir).map_err(|e| Error::Skill(e.to_string()))?;
 
         for entry in entries.flatten() {
+            if candidates_scanned >= limits.max_candidates_per_root {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    limit = limits.max_candidates_per_root,
+                    "max candidates per root reached, stopping scan"
+                );
+                break;
+            }
+
             let path = entry.path();
             if !path.is_dir() {
                 continue;
             }
+
+            candidates_scanned += 1;
 
             let skill_file = path.join("SKILL.md");
             if !skill_file.exists() {
                 continue;
             }
 
-            match load_skill_file(&skill_file) {
+            // File size check
+            if let Ok(meta) = std::fs::metadata(&skill_file) {
+                if meta.len() as usize > limits.max_skill_file_bytes {
+                    tracing::warn!(
+                        path = %skill_file.display(),
+                        size = meta.len(),
+                        limit = limits.max_skill_file_bytes,
+                        "skill file exceeds size limit, skipping"
+                    );
+                    continue;
+                }
+            }
+
+            if count >= limits.max_skills_per_source {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    limit = limits.max_skills_per_source,
+                    "max skills per source reached, stopping scan"
+                );
+                break;
+            }
+
+            match load_skill_file_with_source(&skill_file, source.clone()) {
                 Ok(skill) => {
                     self.skills.insert(skill.id.clone(), skill);
                     count += 1;
@@ -195,8 +309,8 @@ impl SkillRegistry {
     }
 }
 
-/// Load a skill from a SKILL.md file
-fn load_skill_file(path: &Path) -> Result<Skill> {
+/// Load a skill from a SKILL.md file with an explicit source tag
+fn load_skill_file_with_source(path: &Path, source: SkillSource) -> Result<Skill> {
     let content = std::fs::read_to_string(path).map_err(|e| Error::Skill(e.to_string()))?;
 
     let (metadata, body) = parse_frontmatter(&content)?;
@@ -212,7 +326,7 @@ fn load_skill_file(path: &Path) -> Result<Skill> {
         id,
         metadata,
         content: body,
-        source: SkillSource::Local,
+        source,
     })
 }
 
@@ -327,7 +441,7 @@ pub fn sync_discovered_skills(
                 skill_repo.upsert_bundled(skill, SkillPriority::Standard)?;
                 synced += 1;
             }
-            SkillSource::Local | SkillSource::Manifold { .. } => {
+            SkillSource::Local | SkillSource::Manifold { .. } | SkillSource::Plugin => {
                 // Only install if not already present
                 if skill_repo.get_by_name(&skill.metadata.name)?.is_none() {
                     skill_repo.install(skill)?;
