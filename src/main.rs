@@ -82,6 +82,8 @@ enum Command {
         #[arg(short, long)]
         follow: bool,
     },
+    /// Interactive first-run setup
+    Setup,
 }
 
 #[tokio::main]
@@ -123,6 +125,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Command::Uninstall => cmd_uninstall(),
             Command::Status => cmd_status(),
             Command::Logs { lines, follow } => cmd_logs(lines, follow),
+            Command::Setup => beacon_gateway::setup::run_setup(),
         };
     }
 
@@ -265,6 +268,19 @@ async fn test_tts(persona: &str, text: &str) -> anyhow::Result<()> {
 
     let config = Config::load(persona)?;
 
+    #[cfg(feature = "embedded-synapse")]
+    let synapse = if !config.cloud_mode {
+        let synapse_cfg =
+            beacon_gateway::config::synapse_bridge::build_synapse_config(&config);
+        synapse_client::SynapseClient::embedded(synapse_cfg)
+            .await
+            .map_err(|e| anyhow::anyhow!("embedded synapse init failed: {e}"))?
+    } else {
+        synapse_client::SynapseClient::new(&config.synapse_url)
+            .map_err(|e| anyhow::anyhow!("failed to create Synapse client: {e}"))?
+    };
+
+    #[cfg(not(feature = "embedded-synapse"))]
     let synapse = synapse_client::SynapseClient::new(&config.synapse_url)
         .map_err(|e| anyhow::anyhow!("failed to create Synapse client: {e}"))?;
 
@@ -276,7 +292,7 @@ async fn test_tts(persona: &str, text: &str) -> anyhow::Result<()> {
         speed: Some(config.voice.tts_speed),
     };
 
-    println!("Synthesizing speech via Synapse ({})...", config.synapse_url);
+    println!("Synthesizing speech...");
     let mp3_data = synapse
         .synthesize(&request)
         .await

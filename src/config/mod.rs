@@ -1,5 +1,9 @@
 //! Configuration management for Beacon gateway
 
+pub mod file;
+#[cfg(feature = "embedded-synapse")]
+pub mod synapse_bridge;
+
 use std::path::PathBuf;
 
 use crate::hooks::HooksConfig;
@@ -251,20 +255,33 @@ impl Config {
     ///
     /// Returns error if persona file cannot be loaded
     pub fn load_with_options(persona_id: &str, disable_voice: bool) -> Result<Self> {
+        // Load optional TOML config file (env > toml > default)
+        let fc = file::load_config_file();
+
         // Load persona with priority: env override → Manifold → cache → embedded
         let persona = Self::load_persona_with_priority(persona_id)?;
         let cache_dir = persona_cache_dir();
 
-        // Load API keys from environment
+        // Load API keys (env > toml > None)
         let api_keys = ApiKeys {
-            openai: std::env::var("OPENAI_API_KEY").ok(),
-            anthropic: std::env::var("ANTHROPIC_API_KEY").ok(),
-            openrouter: std::env::var("OPENROUTER_API_KEY").ok(),
-            elevenlabs: std::env::var("ELEVENLABS_API_KEY").ok(),
-            deepgram: std::env::var("DEEPGRAM_API_KEY").ok(),
-            discord: std::env::var("DISCORD_TOKEN").ok(),
-            slack: std::env::var("SLACK_BOT_TOKEN").ok(),
-            telegram: std::env::var("TELEGRAM_BOT_TOKEN").ok(),
+            openai: std::env::var("OPENAI_API_KEY").ok().or(fc.api_keys.openai),
+            anthropic: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .or(fc.api_keys.anthropic),
+            openrouter: std::env::var("OPENROUTER_API_KEY")
+                .ok()
+                .or(fc.api_keys.openrouter),
+            elevenlabs: std::env::var("ELEVENLABS_API_KEY")
+                .ok()
+                .or(fc.api_keys.elevenlabs),
+            deepgram: std::env::var("DEEPGRAM_API_KEY")
+                .ok()
+                .or(fc.api_keys.deepgram),
+            discord: std::env::var("DISCORD_TOKEN").ok().or(fc.api_keys.discord),
+            slack: std::env::var("SLACK_BOT_TOKEN").ok().or(fc.api_keys.slack),
+            telegram: std::env::var("TELEGRAM_BOT_TOKEN")
+                .ok()
+                .or(fc.api_keys.telegram),
             whatsapp: std::env::var("WHATSAPP_TOKEN").ok(),
             whatsapp_phone_id: std::env::var("WHATSAPP_PHONE_ID").ok(),
             signal_api_url: std::env::var("SIGNAL_API_URL").ok(),
@@ -281,12 +298,13 @@ impl Config {
                 .map(std::path::PathBuf::from),
         };
 
-        // API server config
+        // API server config (env > toml > default)
         let api_server = ApiServerConfig {
             port: std::env::var("BEACON_API_PORT")
                 .or_else(|_| std::env::var("PORT"))
                 .ok()
                 .and_then(|s| s.parse().ok())
+                .or(fc.server.port)
                 .unwrap_or(18790),
             api_key: std::env::var("BEACON_API_KEY").ok(),
             manifold_url: std::env::var("MANIFOLD_URL").ok(),
@@ -294,17 +312,26 @@ impl Config {
             static_dir: std::env::var("BEACON_STATIC_DIR").ok().map(PathBuf::from),
         };
 
-        // Voice config (routes through Synapse for STT/TTS)
+        // Voice config (env > toml > persona > default)
         let tts_voice = persona.tts_voice().unwrap_or("alloy").to_string();
         let tts_speed = f64::from(persona.tts_speed());
+        let voice_enabled = if disable_voice {
+            false
+        } else {
+            fc.voice.enabled.unwrap_or(true)
+        };
         let voice = VoiceConfig {
-            enabled: !disable_voice,
+            enabled: voice_enabled,
             stt_model: std::env::var("BEACON_STT_MODEL")
-                .unwrap_or_else(|_| "whisper-1".to_string()),
+                .ok()
+                .or(fc.voice.stt_model)
+                .unwrap_or_else(|| "whisper-1".to_string()),
             tts_model: std::env::var("BEACON_TTS_MODEL")
-                .unwrap_or_else(|_| "tts-1".to_string()),
-            tts_voice,
-            tts_speed,
+                .ok()
+                .or(fc.voice.tts_model)
+                .unwrap_or_else(|| "tts-1".to_string()),
+            tts_voice: fc.voice.tts_voice.unwrap_or(tts_voice),
+            tts_speed: fc.voice.tts_speed.unwrap_or(tts_speed),
         };
 
         if disable_voice {
@@ -337,17 +364,31 @@ impl Config {
         // Find life.json for local user
         let life_json_path = Self::find_life_json();
 
-        // LLM provider preference (anthropic or openai)
-        let llm_provider = std::env::var("BEACON_LLM_PROVIDER").ok();
+        // LLM provider preference (env > toml > None)
+        let llm_provider = std::env::var("BEACON_LLM_PROVIDER")
+            .ok()
+            .or(fc.llm.provider);
 
-        // iMessage config (macOS only)
+        // iMessage config (env > toml > default)
+        let imessage_toml = fc.channels.imessage.unwrap_or_default();
         let imessage = IMessageConfig {
             enabled: std::env::var("IMESSAGE_ENABLED")
-                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
-            cli_path: std::env::var("IMESSAGE_CLI_PATH").ok(),
-            db_path: std::env::var("IMESSAGE_DB_PATH").ok(),
-            region: std::env::var("IMESSAGE_REGION").ok(),
-            service: std::env::var("IMESSAGE_SERVICE").ok(),
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .or(imessage_toml.enabled)
+                .unwrap_or(false),
+            cli_path: std::env::var("IMESSAGE_CLI_PATH")
+                .ok()
+                .or(imessage_toml.cli_path),
+            db_path: std::env::var("IMESSAGE_DB_PATH")
+                .ok()
+                .or(imessage_toml.db_path),
+            region: std::env::var("IMESSAGE_REGION")
+                .ok()
+                .or(imessage_toml.region),
+            service: std::env::var("IMESSAGE_SERVICE")
+                .ok()
+                .or(imessage_toml.service),
         };
 
         // DM security policy (open, pairing, allowlist)
@@ -371,14 +412,21 @@ impl Config {
         let synapse_api_url = std::env::var("SYNAPSE_API_URL").ok();
         let synapse_gateway_secret = std::env::var("SYNAPSE_GATEWAY_SECRET").ok();
 
-        // Synapse AI router
+        // Synapse AI router (env > toml > default)
         let synapse_url = std::env::var("SYNAPSE_URL")
-            .unwrap_or_else(|_| "http://localhost:6000".to_string());
+            .ok()
+            .or(fc.server.synapse_url)
+            .unwrap_or_else(|| "http://localhost:6000".to_string());
         let llm_model = std::env::var("BEACON_LLM_MODEL")
-            .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
+            .ok()
+            .or(fc.llm.model)
+            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
 
         let cloud_mode = std::env::var("BEACON_CLOUD_MODE")
-            .is_ok_and(|v| v == "true" || v == "1");
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .or(fc.server.cloud_mode)
+            .unwrap_or(false);
 
         // Knowledge pack cache directory
         let knowledge_cache_dir = std::env::var("BEACON_KNOWLEDGE_CACHE_DIR")
@@ -612,8 +660,8 @@ impl Config {
 
     /// Embedded default persona data for when no local files or Manifold are available
     const EMBEDDED_PERSONAS: &[(&str, &str)] = &[
-        ("orin", include_str!("../personas/orin.json")),
-        ("microcap", include_str!("../personas/microcap.json")),
+        ("orin", include_str!("../../personas/orin.json")),
+        ("microcap", include_str!("../../personas/microcap.json")),
     ];
 
     /// Load an embedded persona compiled into the binary

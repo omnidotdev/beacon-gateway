@@ -52,6 +52,7 @@ pub mod providers;
 pub mod relay;
 pub mod security;
 pub mod skills;
+pub mod setup;
 pub mod sync;
 pub mod tools;
 pub mod voice;

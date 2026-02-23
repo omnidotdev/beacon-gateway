@@ -20,6 +20,10 @@ path = "src/main.rs"
 name = "beacon_gateway"
 path = "src/lib.rs"
 
+[features]
+default = ["embedded-synapse"]
+embedded-synapse = ["synapse-client/embedded", "dep:synapse-config", "dep:indexmap"]
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -57,6 +61,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Config
 directories = "6"
+dialoguer = "0.11"
 
 # Rate limiting
 governor = "0.8"
@@ -104,10 +109,12 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 
 # Synapse AI router client
-synapse-client = { git = "https://github.com/omnidotdev/synapse-gateway", features = ["agent-core"] }
+synapse-client = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-client", features = ["agent-core"] }
+synapse-config = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-config", optional = true }
+indexmap = { version = "2", optional = true }
 
 # Synapse billing client (Aether entitlement + usage metering)
-synapse-billing = { git = "https://github.com/omnidotdev/synapse-gateway" }
+synapse-billing = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-billing" }
 
 # Secret key handling
 secrecy = "0.10"

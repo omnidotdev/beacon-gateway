@@ -67,8 +67,29 @@ impl Daemon {
     /// Initialize the Synapse AI router client
     ///
     /// Returns (client, model_info) - client is None only if the URL is invalid.
-    /// Synapse handles provider routing internally.
-    fn init_synapse(&self) -> (Option<Arc<SynapseClient>>, Option<ModelInfo>) {
+    /// In embedded mode (default), runs LLM/STT/TTS in-process.
+    /// In cloud mode or without the feature, connects to a remote Synapse server.
+    async fn init_synapse(&self) -> (Option<Arc<SynapseClient>>, Option<ModelInfo>) {
+        #[cfg(feature = "embedded-synapse")]
+        if !self.config.cloud_mode {
+            let synapse_cfg =
+                crate::config::synapse_bridge::build_synapse_config(&self.config);
+            match SynapseClient::embedded(synapse_cfg).await {
+                Ok(client) => {
+                    let model_id = &self.config.llm_model;
+                    tracing::info!(model = %model_id, "embedded synapse initialized");
+                    let model_info = ModelInfo {
+                        model_id: model_id.clone(),
+                        provider: "embedded".to_string(),
+                    };
+                    return (Some(Arc::new(client)), Some(model_info));
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "embedded synapse failed, falling back to HTTP");
+                }
+            }
+        }
+
         match SynapseClient::new(&self.config.synapse_url) {
             Ok(client) => {
                 let model_id = &self.config.llm_model;
@@ -115,7 +136,7 @@ impl Daemon {
         }
 
         // Initialize Synapse AI router client
-        let (synapse, model_info) = self.init_synapse();
+        let (synapse, model_info) = self.init_synapse().await;
         let system_prompt = build_system_prompt(&self.config);
         let model_id = self.config.llm_model.clone();
 
