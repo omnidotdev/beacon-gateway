@@ -61,6 +61,19 @@ pub struct InstallSkillRequest {
 }
 
 #[derive(Deserialize)]
+pub struct InstallLocalRequest {
+    pub name: String,
+    pub description: String,
+    pub content: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
     #[serde(default = "default_namespace")]
@@ -223,6 +236,40 @@ async fn install_skill(
     Ok((StatusCode::CREATED, Json(skill_to_response(&installed))))
 }
 
+/// Install a local skill directly (no Manifold fetch)
+async fn install_local(
+    State(state): State<Arc<ApiState>>,
+    Json(req): Json<InstallLocalRequest>,
+) -> Result<(StatusCode, Json<SkillResponse>), (StatusCode, Json<ErrorResponse>)> {
+    if let Ok(Some(_)) = state.skill_repo.get_by_name(&req.name) {
+        return Err((
+            StatusCode::CONFLICT,
+            error_response("already_installed", "Skill is already installed"),
+        ));
+    }
+
+    let skill = Skill {
+        id: String::new(),
+        metadata: crate::skills::SkillMetadata {
+            name: req.name,
+            description: req.description,
+            version: req.version,
+            author: req.author,
+            tags: req.tags,
+            permissions: vec![],
+        },
+        content: req.content,
+        source: SkillSource::Local,
+    };
+
+    let installed = state
+        .skill_repo
+        .install(&skill)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+
+    Ok((StatusCode::CREATED, Json(skill_to_response(&installed))))
+}
+
 /// Uninstall a skill
 async fn uninstall_skill(
     State(state): State<Arc<ApiState>>,
@@ -270,6 +317,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/", get(list_installed))
         .route("/search", get(search_skills))
         .route("/install", post(install_skill))
+        .route("/install/local", post(install_local))
         .route("/{skill_id}", get(get_skill))
         .route("/{skill_id}", delete(uninstall_skill))
         .route("/{skill_id}/enabled", patch(set_enabled))
