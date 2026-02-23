@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 11;
+pub const SCHEMA_VERSION: i32 = 14;
 
 /// Initialize the database schema
 ///
@@ -49,6 +49,15 @@ pub fn init(conn: &Connection) -> Result<()> {
     }
     if version < 11 {
         migrate_v11(conn)?;
+    }
+    if version < 12 {
+        migrate_v12(conn)?;
+    }
+    if version < 13 {
+        migrate_v13(conn)?;
+    }
+    if version < 14 {
+        migrate_v14(conn)?;
     }
 
     Ok(())
@@ -402,6 +411,65 @@ fn migrate_v11(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("migrated to schema v11 (local provider keys)");
+    Ok(())
+}
+
+fn migrate_v12(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Add priority column to installed_skills for prompt hierarchy
+        ALTER TABLE installed_skills ADD COLUMN priority TEXT NOT NULL DEFAULT 'standard';
+
+        CREATE INDEX IF NOT EXISTS idx_skills_priority ON installed_skills(priority);
+
+        PRAGMA user_version = 12;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v12 (skill priority)");
+    Ok(())
+}
+
+fn migrate_v13(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Extended skill metadata and per-user scoping
+        ALTER TABLE installed_skills ADD COLUMN always_include INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE installed_skills ADD COLUMN user_invocable INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE installed_skills ADD COLUMN disable_model_invocation INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE installed_skills ADD COLUMN emoji TEXT;
+        ALTER TABLE installed_skills ADD COLUMN requires_env TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE installed_skills ADD COLUMN command_name TEXT;
+        ALTER TABLE installed_skills ADD COLUMN user_id TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_skills_command ON installed_skills(command_name);
+        CREATE INDEX IF NOT EXISTS idx_skills_user ON installed_skills(user_id);
+
+        PRAGMA user_version = 13;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v13 (extended skill metadata + per-user scoping)");
+    Ok(())
+}
+
+fn migrate_v14(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- OS, binary, dispatch, and env fields for skills
+        ALTER TABLE installed_skills ADD COLUMN os TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE installed_skills ADD COLUMN requires_bins TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE installed_skills ADD COLUMN requires_any_bins TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE installed_skills ADD COLUMN primary_env TEXT;
+        ALTER TABLE installed_skills ADD COLUMN command_dispatch_tool TEXT;
+        ALTER TABLE installed_skills ADD COLUMN api_key TEXT;
+        ALTER TABLE installed_skills ADD COLUMN skill_env TEXT NOT NULL DEFAULT '{}';
+
+        PRAGMA user_version = 14;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v14 (OS, bins, dispatch, per-skill env)");
     Ok(())
 }
 

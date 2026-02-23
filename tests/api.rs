@@ -31,6 +31,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         db,
         api_key: Some("test-api-key".to_string()),
         persona_id: "test-persona".to_string(),
+        persona_name: "TestBot".to_string(),
         persona_system_prompt: None,
         persona_cache_dir: std::path::PathBuf::from("/tmp/test-persona-cache"),
         synapse: None,
@@ -68,6 +69,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         ws_senders: None,
         billing_state: None,
         usage_recorder: None,
+        skills_config: beacon_gateway::config::SkillsConfig::default(),
         active_persona: Arc::new(RwLock::new(beacon_gateway::api::ActivePersona {
             id: "test-persona".to_string(),
             system_prompt: None,

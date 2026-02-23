@@ -4,12 +4,20 @@ mod manifold;
 mod types;
 
 pub use manifold::ManifoldClient;
-pub use types::{InstalledSkill, Skill, SkillMetadata, SkillSource};
+pub use types::{
+    InstalledSkill, Skill, SkillMetadata, SkillPriority, SkillSource,
+    deduplicate_command_name, has_binary, sanitize_command_name,
+};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
+
+/// Skills compiled into the binary (lowest precedence)
+const BUNDLED_SKILLS: &[(&str, &str)] = &[
+    ("concise", include_str!("../../skills/concise/SKILL.md")),
+];
 
 /// Skill registry for discovery and management
 #[derive(Debug, Default)]
@@ -26,6 +34,95 @@ impl SkillRegistry {
             skills: HashMap::new(),
             cache_dir,
         }
+    }
+
+    /// Discover all skills: bundled (lowest precedence) then managed directories
+    ///
+    /// Managed directory skills override bundled skills by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a directory cannot be read
+    pub fn discover_all(&mut self, managed_dirs: &[PathBuf]) -> Result<usize> {
+        let mut count = 0;
+
+        // Load bundled skills first (lowest precedence)
+        count += self.load_bundled(&[]);
+
+        // Load managed directory skills (override bundled by name)
+        for dir in managed_dirs {
+            if !dir.is_dir() {
+                continue;
+            }
+            count += self.scan_directory(dir)?;
+        }
+
+        Ok(count)
+    }
+
+    /// Discover skills from all roots with precedence ordering
+    ///
+    /// Precedence (later overrides earlier by name):
+    /// 1. Bundled (filtered by `allow_bundled`)
+    /// 2. Extra dirs
+    /// 3. Managed dir
+    /// 4. Personal agent dir (`~/.agents/skills/`)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a directory cannot be read
+    pub fn discover_all_roots(&mut self, config: &crate::config::SkillsConfig) -> Result<usize> {
+        let mut count = 0;
+
+        // 1. Bundled (filtered by allowlist)
+        count += self.load_bundled(&config.allow_bundled);
+
+        // 2. Extra dirs
+        for dir in &config.extra_dirs {
+            if dir.is_dir() {
+                count += self.scan_directory(dir)?;
+            }
+        }
+
+        // 3. Managed dir
+        if config.managed_dir.is_dir() {
+            count += self.scan_directory(&config.managed_dir)?;
+        }
+
+        // 4. Personal agent dir
+        if config.personal_dir.is_dir() {
+            count += self.scan_directory(&config.personal_dir)?;
+        }
+
+        Ok(count)
+    }
+
+    /// Load bundled skills, optionally filtered by allowlist
+    fn load_bundled(&mut self, allow_bundled: &[String]) -> usize {
+        let mut count = 0;
+        for (name, raw) in BUNDLED_SKILLS {
+            // If allowlist is non-empty, skip skills not in it
+            if !allow_bundled.is_empty() && !allow_bundled.iter().any(|a| a == name) {
+                tracing::debug!(name, "bundled skill filtered by allowlist");
+                continue;
+            }
+            match parse_frontmatter(raw) {
+                Ok((metadata, body)) => {
+                    let skill = Skill {
+                        id: (*name).to_string(),
+                        metadata,
+                        content: body,
+                        source: SkillSource::Bundled,
+                    };
+                    self.skills.insert(skill.id.clone(), skill);
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(name, error = %e, "failed to parse bundled skill");
+                }
+            }
+        }
+        count
     }
 
     /// Discover skills from local directories
@@ -139,6 +236,112 @@ fn parse_frontmatter(content: &str) -> Result<(SkillMetadata, String)> {
         serde_yaml::from_str(frontmatter).map_err(|e| Error::Skill(e.to_string()))?;
 
     Ok((metadata, body))
+}
+
+/// What to do when a slash command is resolved
+#[derive(Debug)]
+pub enum SlashCommandAction {
+    /// Inject skill content into system prompt (existing behavior)
+    InjectPrompt {
+        skill: InstalledSkill,
+        remaining: String,
+    },
+    /// Dispatch directly to a tool
+    DispatchTool {
+        skill: InstalledSkill,
+        tool_name: String,
+        arguments: String,
+    },
+}
+
+/// Resolve a slash command from user input
+///
+/// Parses `/command_name` from the start of input, looks up via `SkillRepo`,
+/// and returns the matching action if found.
+///
+/// # Errors
+///
+/// Returns error if database lookup fails
+pub fn resolve_slash_command(
+    input: &str,
+    skill_repo: &crate::db::SkillRepo,
+    user_id: Option<&str>,
+) -> Result<Option<SlashCommandAction>> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return Ok(None);
+    }
+
+    // Extract command name (first word after /)
+    let after_slash = &trimmed[1..];
+    let command_end = after_slash
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(after_slash.len());
+    let command = &after_slash[..command_end];
+
+    if command.is_empty() {
+        return Ok(None);
+    }
+
+    // Look up in database
+    let skill = skill_repo.get_by_command_name(command, user_id)?;
+
+    match skill {
+        Some(s) if s.enabled && s.skill.metadata.user_invocable => {
+            let remaining = after_slash[command_end..].trim().to_string();
+
+            if let Some(ref tool_name) = s.command_dispatch_tool {
+                Ok(Some(SlashCommandAction::DispatchTool {
+                    tool_name: tool_name.clone(),
+                    arguments: remaining,
+                    skill: s,
+                }))
+            } else {
+                Ok(Some(SlashCommandAction::InjectPrompt {
+                    skill: s,
+                    remaining,
+                }))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Sync discovered skills into the database at startup
+///
+/// - Bundled skills: upsert content (preserve user's enabled/priority)
+/// - Managed/local skills: install if not already present by name
+/// - Generates `command_name` for user-invocable skills
+///
+/// # Errors
+///
+/// Returns error if database operations fail
+pub fn sync_discovered_skills(
+    skill_repo: &crate::db::SkillRepo,
+    registry: &SkillRegistry,
+) -> Result<usize> {
+    let mut synced = 0;
+    for skill in registry.skills.values() {
+        match skill.source {
+            SkillSource::Bundled => {
+                skill_repo.upsert_bundled(skill, SkillPriority::Standard)?;
+                synced += 1;
+            }
+            SkillSource::Local | SkillSource::Manifold { .. } => {
+                // Only install if not already present
+                if skill_repo.get_by_name(&skill.metadata.name)?.is_none() {
+                    skill_repo.install(skill)?;
+                    synced += 1;
+                }
+            }
+        }
+    }
+
+    if synced > 0 {
+        tracing::info!(count = synced, "synced discovered skills to database");
+    }
+
+    Ok(synced)
 }
 
 #[cfg(test)]

@@ -33,6 +33,10 @@ pub struct BeaconConfigFile {
     /// Server/runtime configuration
     #[serde(default)]
     pub server: ServerFileConfig,
+
+    /// Skills system configuration
+    #[serde(default)]
+    pub skills: SkillsFileConfig,
 }
 
 /// LLM-related configuration
@@ -120,6 +124,25 @@ pub struct ServerFileConfig {
 
     /// Cloud mode toggle
     pub cloud_mode: Option<bool>,
+}
+
+/// Skills system configuration
+#[derive(Debug, Default, Deserialize)]
+pub struct SkillsFileConfig {
+    /// Path to managed skills directory
+    pub managed_dir: Option<String>,
+    /// Max skills in prompt
+    pub max_skills_in_prompt: Option<usize>,
+    /// Max total chars from skills in prompt
+    pub max_skills_prompt_chars: Option<usize>,
+    /// Max bytes per individual skill file
+    pub max_skill_file_bytes: Option<usize>,
+    /// Additional skill directories to scan
+    pub extra_dirs: Option<Vec<String>>,
+    /// Personal agent skills directory
+    pub personal_dir: Option<String>,
+    /// Bundled skill allowlist (empty = all)
+    pub allow_bundled: Option<Vec<String>>,
 }
 
 /// Load the TOML config file from the standard path

@@ -59,12 +59,8 @@ impl BuiltContext {
     pub fn format_prompt(&self, current_message: &str) -> String {
         let mut parts = Vec::new();
 
-        // Add persona system prompt if present
-        if let Some(persona_prompt) = &self.persona_prompt {
-            if !persona_prompt.is_empty() {
-                parts.push(format!("<persona>\n{persona_prompt}\n</persona>"));
-            }
-        }
+        // Persona prompt lives in the system message only (via build_system_prompt).
+        // It is NOT injected here to avoid drowning out skills and other instructions.
 
         // Add knowledge context if present
         if !self.knowledge_context.is_empty() {
@@ -553,13 +549,10 @@ mod tests {
         };
 
         let prompt = ctx.format_prompt("what is mcg?");
-        assert!(prompt.contains("<persona>"));
+        // Persona is no longer injected into the user prompt (it lives in system message)
+        assert!(!prompt.contains("<persona>"));
         assert!(prompt.contains("<knowledge>"));
         assert!(prompt.contains("## Token"));
-        // Knowledge should come after persona, before user-context
-        let persona_pos = prompt.find("<persona>").unwrap();
-        let knowledge_pos = prompt.find("<knowledge>").unwrap();
-        assert!(knowledge_pos > persona_pos);
     }
 
     #[test]

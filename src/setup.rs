@@ -189,6 +189,7 @@ pub fn run_setup() -> anyhow::Result<()> {
             synapse_url: existing.server.synapse_url,
             cloud_mode: existing.server.cloud_mode,
         },
+        skills: existing.skills,
     };
 
     write_config(&config_path, &config_file)?;

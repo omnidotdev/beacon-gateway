@@ -82,6 +82,9 @@ pub struct Config {
 
     /// Memory sync configuration (optional, disabled by default)
     pub sync: Option<SyncConfig>,
+
+    /// Skills system configuration
+    pub skills: SkillsConfig,
 }
 
 /// HTTP API server configuration
@@ -204,6 +207,55 @@ pub struct ApiKeys {
 
     /// Google Chat service account JSON file path
     pub google_chat_service_account: Option<std::path::PathBuf>,
+}
+
+/// Skills system configuration
+#[derive(Debug, Clone)]
+pub struct SkillsConfig {
+    /// Directory for managed (filesystem) skills
+    pub managed_dir: PathBuf,
+    /// Max skills included in the system prompt
+    pub max_skills_in_prompt: usize,
+    /// Max total chars from skills in the system prompt
+    pub max_skills_prompt_chars: usize,
+    /// Max bytes per individual skill file
+    pub max_skill_file_bytes: usize,
+    /// Additional skill directories to scan (lowest precedence after bundled)
+    pub extra_dirs: Vec<PathBuf>,
+    /// Personal agent skills directory (~/.agents/skills/)
+    pub personal_dir: PathBuf,
+    /// Bundled skill allowlist. Empty = all allowed
+    pub allow_bundled: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            managed_dir: default_skills_dir(),
+            max_skills_in_prompt: 50,
+            max_skills_prompt_chars: 30_000,
+            max_skill_file_bytes: 256_000,
+            extra_dirs: Vec::new(),
+            personal_dir: default_personal_dir(),
+            allow_bundled: Vec::new(),
+        }
+    }
+}
+
+/// Default managed skills directory: `~/.config/omni/beacon/skills/`
+fn default_skills_dir() -> PathBuf {
+    directories::BaseDirs::new().map_or_else(
+        || PathBuf::from(".config/omni/beacon/skills"),
+        |d| d.config_dir().join("omni").join("beacon").join("skills"),
+    )
+}
+
+/// Default personal agent skills directory: `~/.agents/skills/`
+fn default_personal_dir() -> PathBuf {
+    directories::BaseDirs::new().map_or_else(
+        || PathBuf::from(".agents/skills"),
+        |d| d.home_dir().join(".agents").join("skills"),
+    )
 }
 
 /// Memory sync configuration
@@ -453,6 +505,63 @@ impl Config {
             }
         });
 
+        // Skills configuration (env > toml > default)
+        let skills = {
+            let default = SkillsConfig::default();
+            let toml_skills = &fc.skills;
+
+            let extra_dirs = std::env::var("BEACON_SKILLS_EXTRA_DIRS")
+                .ok()
+                .map(|s| s.split(',').map(|p| PathBuf::from(p.trim())).collect())
+                .or_else(|| {
+                    toml_skills.extra_dirs.as_ref().map(|dirs| {
+                        dirs.iter().map(|p| PathBuf::from(p)).collect()
+                    })
+                })
+                .unwrap_or(default.extra_dirs);
+
+            let personal_dir = std::env::var("BEACON_SKILLS_PERSONAL_DIR")
+                .map(PathBuf::from)
+                .or_else(|_| {
+                    toml_skills.personal_dir.as_ref().map(PathBuf::from).ok_or(())
+                })
+                .unwrap_or(default.personal_dir);
+
+            let allow_bundled = std::env::var("BEACON_ALLOW_BUNDLED")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .map(|n| n.trim().to_string())
+                        .filter(|n| !n.is_empty())
+                        .collect()
+                })
+                .or_else(|| toml_skills.allow_bundled.clone())
+                .unwrap_or(default.allow_bundled);
+
+            SkillsConfig {
+                managed_dir: std::env::var("BEACON_SKILLS_DIR")
+                    .map(PathBuf::from)
+                    .or_else(|_| toml_skills.managed_dir.as_ref().map(PathBuf::from).ok_or(()))
+                    .unwrap_or(default.managed_dir),
+                max_skills_in_prompt: std::env::var("BEACON_MAX_SKILLS_PROMPT")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .or(toml_skills.max_skills_in_prompt)
+                    .unwrap_or(default.max_skills_in_prompt),
+                max_skills_prompt_chars: std::env::var("BEACON_MAX_SKILLS_CHARS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .or(toml_skills.max_skills_prompt_chars)
+                    .unwrap_or(default.max_skills_prompt_chars),
+                max_skill_file_bytes: toml_skills
+                    .max_skill_file_bytes
+                    .unwrap_or(default.max_skill_file_bytes),
+                extra_dirs,
+                personal_dir,
+                allow_bundled,
+            }
+        };
+
         Ok(Self {
             persona,
             persona_cache_dir: cache_dir,
@@ -476,6 +585,7 @@ impl Config {
             cloud_mode,
             knowledge_cache_dir,
             sync,
+            skills,
         })
     }
 

@@ -494,12 +494,66 @@ async fn handle_chat_message(
         "handle_chat_message: resolved model"
     );
 
+    // Resolve slash command if present
+    let slash_action =
+        crate::skills::resolve_slash_command(content, &state.skill_repo, gatekeeper_user_id)
+            .unwrap_or(None);
+
+    // Handle tool dispatch: execute tool directly and return result without LLM
+    if let Some(crate::skills::SlashCommandAction::DispatchTool { tool_name, arguments, .. }) = &slash_action {
+        let executor = crate::tools::executor::ToolExecutor::new(
+            Arc::clone(&synapse),
+            state.plugin_manager.clone(),
+        );
+        let result = executor
+            .execute(tool_name, arguments)
+            .await
+            .unwrap_or_else(|e| format!("Error: {e}"));
+
+        tx.send(WsOutgoing::ChatChunk { content: result })
+            .await
+            .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+
+        let complete = WsOutgoing::ChatComplete {
+            message_id: uuid::Uuid::new_v4().to_string(),
+        };
+        tx.send(complete)
+            .await
+            .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
+
+        return Ok(());
+    }
+
+    // Extract content and slash skill for prompt injection path
+    let injected_remaining: Option<String>;
+    let slash_skill;
+    let content = match slash_action {
+        Some(crate::skills::SlashCommandAction::InjectPrompt { skill, remaining }) => {
+            slash_skill = Some(skill);
+            injected_remaining = Some(remaining);
+            injected_remaining.as_deref().unwrap()
+        }
+        _ => {
+            slash_skill = None;
+            content
+        }
+    };
+
     // Build system prompt — skip in no-persona mode
-    let system_prompt = if active_persona_id == crate::NO_PERSONA_ID {
+    // Uses per-request skill loading to pick up newly installed/toggled skills
+    let mut system_prompt = if active_persona_id == crate::NO_PERSONA_ID {
         String::new()
     } else {
-        state.system_prompt.clone()
+        state.system_prompt_with_skills(gatekeeper_user_id)
     };
+
+    // Append invoked slash skill to system prompt
+    if let Some(ref skill) = slash_skill {
+        system_prompt.push_str(&format!(
+            "\n\n<skill name=\"{}\" invoked=\"true\">\n{}\n</skill>",
+            skill.skill.metadata.name, skill.skill.content
+        ));
+    }
 
     // Bridge: forward AgentNotifyEvent → WsOutgoing::ToolStart/ToolResult to client
     let (notify_tx, mut notify_rx) = mpsc::channel::<AgentNotifyEvent>(32);

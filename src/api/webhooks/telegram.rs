@@ -279,7 +279,7 @@ pub async fn handle_update(
     let request = synapse_client::ChatRequest {
         model: state.llm_model.clone(),
         messages: vec![
-            synapse_client::Message::system(&state.system_prompt),
+            synapse_client::Message::system(&state.system_prompt_with_skills(None)),
             synapse_client::Message::user(&augmented_prompt),
         ],
         stream: false,

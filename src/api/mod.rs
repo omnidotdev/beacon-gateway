@@ -64,6 +64,7 @@ pub struct ApiState {
     pub db: DbPool,
     pub api_key: Option<String>,
     pub persona_id: String,
+    pub persona_name: String,
     pub persona_system_prompt: Option<String>,
     pub active_persona: Arc<RwLock<ActivePersona>>,
     pub persona_cache_dir: PathBuf,
@@ -109,6 +110,35 @@ pub struct ApiState {
     pub billing_state: Option<crate::billing::BillingState>,
     /// Async usage recorder for post-turn token metering
     pub usage_recorder: Option<synapse_billing::UsageRecorder>,
+    /// Skills system configuration
+    pub skills_config: crate::config::SkillsConfig,
+}
+
+impl ApiState {
+    /// Build the system prompt with current enabled skills loaded from the database
+    ///
+    /// Uses budget-aware inclusion with per-user scoping.
+    /// Falls back to the static `system_prompt` when no skills are installed.
+    #[must_use]
+    pub fn system_prompt_with_skills(&self, user_id: Option<&str>) -> String {
+        let skills = self
+            .skill_repo
+            .list_enabled_for_user(user_id)
+            .unwrap_or_default();
+        if skills.is_empty() {
+            return self.system_prompt.clone();
+        }
+        let budget = crate::prompt::PromptBudget {
+            max_skills: self.skills_config.max_skills_in_prompt,
+            max_chars: self.skills_config.max_skills_prompt_chars,
+        };
+        crate::prompt::build_system_prompt_with_budget(
+            &self.persona_name,
+            self.persona_system_prompt.as_deref().unwrap_or_default(),
+            &skills,
+            &budget,
+        )
+    }
 }
 
 /// Configuration for building an API server
@@ -116,6 +146,7 @@ pub struct ApiServerBuilder {
     db: DbPool,
     api_key: Option<String>,
     persona_id: String,
+    persona_name: String,
     persona_system_prompt: Option<String>,
     persona_cache_dir: PathBuf,
     port: u16,
@@ -143,6 +174,7 @@ pub struct ApiServerBuilder {
     plugin_manager: Option<plugins::SharedPluginManager>,
     cloud_mode: bool,
     billing_state: Option<crate::billing::BillingState>,
+    skills_config: crate::config::SkillsConfig,
 }
 
 impl ApiServerBuilder {
@@ -151,6 +183,7 @@ impl ApiServerBuilder {
     pub fn new(
         db: DbPool,
         persona_id: String,
+        persona_name: String,
         persona_system_prompt: Option<String>,
         persona_cache_dir: PathBuf,
         port: u16,
@@ -160,6 +193,7 @@ impl ApiServerBuilder {
             db,
             api_key: None,
             persona_id,
+            persona_name,
             persona_system_prompt,
             persona_cache_dir,
             port,
@@ -187,6 +221,7 @@ impl ApiServerBuilder {
             plugin_manager: None,
             cloud_mode: false,
             billing_state: None,
+            skills_config: crate::config::SkillsConfig::default(),
         }
     }
 
@@ -340,6 +375,13 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Set the skills configuration
+    #[must_use]
+    pub fn skills_config(mut self, config: crate::config::SkillsConfig) -> Self {
+        self.skills_config = config;
+        self
+    }
+
     /// Build the API server
     #[must_use]
     pub fn build(self) -> ApiServer {
@@ -413,6 +455,7 @@ impl ApiServerBuilder {
             db: self.db,
             api_key: self.api_key,
             persona_id: self.persona_id,
+            persona_name: self.persona_name,
             persona_system_prompt: self.persona_system_prompt,
             active_persona,
             persona_cache_dir: self.persona_cache_dir,
@@ -453,6 +496,7 @@ impl ApiServerBuilder {
             ws_senders: Some(Arc::new(RwLock::new(HashMap::new()))),
             billing_state,
             usage_recorder,
+            skills_config: self.skills_config,
         });
 
         ApiServer {

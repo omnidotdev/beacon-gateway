@@ -48,6 +48,7 @@ pub mod media;
 pub mod nodes;
 pub mod persona;
 pub mod plugins;
+pub mod prompt;
 pub mod providers;
 pub mod relay;
 pub mod security;

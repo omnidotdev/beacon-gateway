@@ -18,7 +18,6 @@ use crate::channels::{
 use crate::channels::IMessageChannel;
 use crate::context::{ContextBuilder, ContextConfig};
 use crate::db::{self, DbPool, MessageRole, SessionRepo, SkillRepo, UserRepo};
-use crate::skills::InstalledSkill;
 use crate::security::{DmPolicy, PairingManager};
 use crate::voice::{
     AudioCapture, AudioPlayback, SAMPLE_RATE, WakeWordDetector,
@@ -139,14 +138,38 @@ impl Daemon {
         // Initialize Synapse AI router client
         let (synapse, model_info) = self.init_synapse().await;
 
-        // Load enabled skills for system prompt injection
+        // Discover and sync skills from all roots
         let skill_repo = SkillRepo::new(self.db.clone());
+        {
+            let mut registry = crate::skills::SkillRegistry::new(
+                self.config.skills.managed_dir.clone(),
+            );
+            match registry.discover_all_roots(&self.config.skills) {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!(count, "discovered skills");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "skill discovery failed");
+                }
+            }
+            if let Err(e) = crate::skills::sync_discovered_skills(&skill_repo, &registry) {
+                tracing::warn!(error = %e, "skill sync failed");
+            }
+        }
+
+        // Load enabled skills for system prompt injection
         let enabled_skills = skill_repo.list_enabled().unwrap_or_default();
         if !enabled_skills.is_empty() {
             tracing::info!(count = enabled_skills.len(), "loaded enabled skills");
         }
 
-        let system_prompt = build_system_prompt(&self.config, &enabled_skills);
+        let system_prompt = crate::prompt::build_system_prompt(
+            self.config.persona.name(),
+            self.config.persona.system_prompt().unwrap_or_default(),
+            &enabled_skills,
+        );
         let model_id = self.config.llm_model.clone();
 
         // Initialize BYOK key resolver if Synapse API is configured
@@ -302,6 +325,7 @@ impl Daemon {
         let mut api_builder = ApiServerBuilder::new(
             self.db.clone(),
             self.config.persona.id().to_string(),
+            self.config.persona.name().to_string(),
             persona_system_prompt,
             self.config.persona_cache_dir.clone(),
             self.config.api_server.port,
@@ -314,7 +338,8 @@ impl Daemon {
         .max_context_tokens(self.config.persona.memory.max_context_tokens)
         .knowledge_cache_dir(self.config.knowledge_cache_dir.clone())
         .plugin_manager(plugin_manager.clone())
-        .cloud_mode(self.config.cloud_mode);
+        .cloud_mode(self.config.cloud_mode)
+        .skills_config(self.config.skills.clone());
 
         if let Some(provisioner) = key_provisioner {
             api_builder = api_builder.key_provisioner(provisioner);
@@ -1604,49 +1629,6 @@ async fn speak(
         .await
         .map_err(|e| Error::Tts(e.to_string()))?;
     playback.play_mp3(&audio).await
-}
-
-/// Build system prompt with optional skill instructions
-fn build_system_prompt(config: &Config, skills: &[InstalledSkill]) -> String {
-    let persona_prompt = config.persona.system_prompt().unwrap_or_default();
-    let name = config.persona.name();
-
-    let mut prompt = if persona_prompt.is_empty() {
-        format!("You are {name}. Keep responses concise and conversational.")
-    } else {
-        format!(
-            "{persona_prompt}\n\nYour name is {name}. Keep responses concise and conversational."
-        )
-    };
-
-    let skills_section = format_skills_prompt(skills);
-    if !skills_section.is_empty() {
-        prompt.push_str("\n\n");
-        prompt.push_str(&skills_section);
-    }
-
-    prompt
-}
-
-/// Format enabled skills into a system prompt section
-fn format_skills_prompt(skills: &[InstalledSkill]) -> String {
-    let enabled: Vec<&InstalledSkill> = skills.iter().filter(|s| s.enabled).collect();
-    if enabled.is_empty() {
-        return String::new();
-    }
-
-    let mut sections = Vec::new();
-    for skill in &enabled {
-        sections.push(format!(
-            "<skill name=\"{}\">\n{}\n</skill>",
-            skill.skill.metadata.name, skill.skill.content
-        ));
-    }
-
-    format!(
-        "<skills>\nThe following skills extend your capabilities. Follow their instructions when relevant.\n\n{}\n</skills>",
-        sections.join("\n\n")
-    )
 }
 
 /// Extract command after wake word
