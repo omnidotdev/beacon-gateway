@@ -109,12 +109,12 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 
 # Synapse AI router client
-synapse-client = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-client", features = ["agent-core"] }
-synapse-config = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-config", optional = true }
+synapse-client = { git = "https://github.com/omnidotdev/synapse-gateway", features = ["agent-core"] }
+synapse-config = { git = "https://github.com/omnidotdev/synapse-gateway", optional = true }
 indexmap = { version = "2", optional = true }
 
 # Synapse billing client (Aether entitlement + usage metering)
-synapse-billing = { path = "../../../synapse-stack/services/synapse-gateway/crates/synapse-billing" }
+synapse-billing = { git = "https://github.com/omnidotdev/synapse-gateway" }
 
 # Secret key handling
 secrecy = "0.10"

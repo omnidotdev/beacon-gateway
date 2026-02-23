@@ -4968,6 +4968,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 [[package]]
 name = "stt"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5014,6 +5015,7 @@ dependencies = [
 [[package]]
 name = "synapse-billing"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "reqwest 0.12.28",
  "secrecy 0.10.3",
@@ -5029,6 +5031,7 @@ dependencies = [
 [[package]]
 name = "synapse-client"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "agent-core",
  "anyhow",
@@ -5052,6 +5055,7 @@ dependencies = [
 [[package]]
 name = "synapse-config"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "anyhow",
  "duration-str",
@@ -5070,6 +5074,7 @@ dependencies = [
 [[package]]
 name = "synapse-core"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "http 1.4.0",
  "jwt-compact",
@@ -5083,6 +5088,7 @@ dependencies = [
 [[package]]
 name = "synapse-llm"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5118,6 +5124,7 @@ dependencies = [
 [[package]]
 name = "synapse-ratelimit"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "anyhow",
  "deadpool",
@@ -5135,6 +5142,7 @@ dependencies = [
 [[package]]
 name = "synapse-routing"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "dashmap 6.1.0",
  "regex",
@@ -5149,6 +5157,7 @@ dependencies = [
 [[package]]
 name = "synapse-telemetry"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "anyhow",
  "opentelemetry",
@@ -5818,6 +5827,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tts"
 version = "0.1.0"
+source = "git+https://github.com/omnidotdev/synapse-gateway#1f457989e822b1b06b3b72656dd12b3a739552af"
 dependencies = [
  "anyhow",
  "async-trait",

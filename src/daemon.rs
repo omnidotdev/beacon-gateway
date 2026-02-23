@@ -17,7 +17,8 @@ use crate::channels::{
 #[cfg(target_os = "macos")]
 use crate::channels::IMessageChannel;
 use crate::context::{ContextBuilder, ContextConfig};
-use crate::db::{self, DbPool, MessageRole, SessionRepo, UserRepo};
+use crate::db::{self, DbPool, MessageRole, SessionRepo, SkillRepo, UserRepo};
+use crate::skills::InstalledSkill;
 use crate::security::{DmPolicy, PairingManager};
 use crate::voice::{
     AudioCapture, AudioPlayback, SAMPLE_RATE, WakeWordDetector,
@@ -137,7 +138,15 @@ impl Daemon {
 
         // Initialize Synapse AI router client
         let (synapse, model_info) = self.init_synapse().await;
-        let system_prompt = build_system_prompt(&self.config);
+
+        // Load enabled skills for system prompt injection
+        let skill_repo = SkillRepo::new(self.db.clone());
+        let enabled_skills = skill_repo.list_enabled().unwrap_or_default();
+        if !enabled_skills.is_empty() {
+            tracing::info!(count = enabled_skills.len(), "loaded enabled skills");
+        }
+
+        let system_prompt = build_system_prompt(&self.config, &enabled_skills);
         let model_id = self.config.llm_model.clone();
 
         // Initialize BYOK key resolver if Synapse API is configured
@@ -1597,20 +1606,47 @@ async fn speak(
     playback.play_mp3(&audio).await
 }
 
-/// Build system prompt
-fn build_system_prompt(config: &Config) -> String {
+/// Build system prompt with optional skill instructions
+fn build_system_prompt(config: &Config, skills: &[InstalledSkill]) -> String {
     let persona_prompt = config.persona.system_prompt().unwrap_or_default();
     let name = config.persona.name();
 
-    if persona_prompt.is_empty() {
+    let mut prompt = if persona_prompt.is_empty() {
         format!("You are {name}. Keep responses concise and conversational.")
     } else {
         format!(
-            "{persona_prompt}
-
-Your name is {name}. Keep responses concise and conversational."
+            "{persona_prompt}\n\nYour name is {name}. Keep responses concise and conversational."
         )
+    };
+
+    let skills_section = format_skills_prompt(skills);
+    if !skills_section.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(&skills_section);
     }
+
+    prompt
+}
+
+/// Format enabled skills into a system prompt section
+fn format_skills_prompt(skills: &[InstalledSkill]) -> String {
+    let enabled: Vec<&InstalledSkill> = skills.iter().filter(|s| s.enabled).collect();
+    if enabled.is_empty() {
+        return String::new();
+    }
+
+    let mut sections = Vec::new();
+    for skill in &enabled {
+        sections.push(format!(
+            "<skill name=\"{}\">\n{}\n</skill>",
+            skill.skill.metadata.name, skill.skill.content
+        ));
+    }
+
+    format!(
+        "<skills>\nThe following skills extend your capabilities. Follow their instructions when relevant.\n\n{}\n</skills>",
+        sections.join("\n\n")
+    )
 }
 
 /// Extract command after wake word
