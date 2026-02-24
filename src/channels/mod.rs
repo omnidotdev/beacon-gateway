@@ -26,6 +26,29 @@ pub use whatsapp::{WhatsAppChannel, WhatsAppWebhook};
 
 use crate::Result;
 
+/// Feature a channel adapter may support
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChannelCapability {
+    /// Real-time token streaming
+    Streaming,
+    /// Message reactions (emoji)
+    Reactions,
+    /// Inline keyboard / button attachments
+    InlineKeyboards,
+    /// Sending media (images, audio, video, files)
+    MediaSend,
+    /// Editing previously sent messages
+    MessageEdit,
+    /// Deleting previously sent messages
+    MessageDelete,
+    /// Voice-to-text transcription
+    VoiceTranscribe,
+    /// Forum / topic threads
+    ForumTopics,
+    /// Sticker messages
+    Stickers,
+}
+
 /// Type of attachment
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentKind {
@@ -220,6 +243,11 @@ impl OutgoingMessage {
 pub trait Channel: Send + Sync {
     /// Get the channel name
     fn name(&self) -> &'static str;
+
+    /// Declare which capabilities this channel supports
+    fn capabilities(&self) -> &'static [ChannelCapability] {
+        &[]
+    }
 
     /// Connect to the channel
     async fn connect(&mut self) -> Result<()>;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use beacon_gateway::{
     ToolPolicy, ToolPolicyConfig, ToolProfile,
-    channels::{Channel, ChannelRegistry, IncomingMessage, OutgoingMessage},
+    channels::{Channel, ChannelCapability, ChannelRegistry, IncomingMessage, OutgoingMessage},
     db::{Memory, MemoryCategory, MemoryRepo, MessageRole, SessionRepo, UserRepo},
 };
 use tokio::sync::Mutex;
@@ -311,4 +311,69 @@ async fn test_pinned_memories_come_first() {
     assert_eq!(context.len(), 2);
     assert!(context[0].pinned);
     assert!(!context[1].pinned);
+}
+
+#[tokio::test]
+async fn test_channel_capabilities_default_empty() {
+    let channel = MockChannel::new("test");
+
+    // Default implementation returns an empty slice
+    assert!(channel.capabilities().is_empty());
+}
+
+#[tokio::test]
+async fn test_channel_capability_equality() {
+    // Verify enum derives work correctly
+    let a = ChannelCapability::Streaming;
+    let b = ChannelCapability::Streaming;
+    let c = ChannelCapability::Reactions;
+
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
+/// Mock channel that declares specific capabilities
+struct CapableChannel;
+
+#[async_trait]
+impl Channel for CapableChannel {
+    fn name(&self) -> &'static str {
+        "capable"
+    }
+
+    fn capabilities(&self) -> &'static [ChannelCapability] {
+        &[
+            ChannelCapability::Streaming,
+            ChannelCapability::Reactions,
+            ChannelCapability::MediaSend,
+        ]
+    }
+
+    async fn connect(&mut self) -> beacon_gateway::Result<()> {
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> beacon_gateway::Result<()> {
+        Ok(())
+    }
+
+    async fn send(&self, _message: OutgoingMessage) -> beacon_gateway::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn test_channel_declares_capabilities() {
+    let channel = CapableChannel;
+
+    let caps = channel.capabilities();
+    assert_eq!(caps.len(), 3);
+    assert!(caps.contains(&ChannelCapability::Streaming));
+    assert!(caps.contains(&ChannelCapability::Reactions));
+    assert!(caps.contains(&ChannelCapability::MediaSend));
+    assert!(!caps.contains(&ChannelCapability::Stickers));
 }
