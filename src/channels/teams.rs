@@ -366,6 +366,8 @@ impl TeamsChannel {
             is_dm,
             reply_to: activity.reply_to_id.clone(),
             attachments,
+            thread_id: None,
+            callback_data: None,
         };
 
         if let Some(tx) = &self.message_tx {

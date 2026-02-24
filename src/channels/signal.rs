@@ -133,6 +133,8 @@ impl SignalChannel {
             is_dm: true,
             reply_to: None,
             attachments,
+            thread_id: None,
+            callback_data: None,
         };
 
         if let Some(tx) = &self.message_tx {

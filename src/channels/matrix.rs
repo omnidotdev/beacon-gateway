@@ -400,6 +400,8 @@ impl MatrixChannel {
                                         is_dm: false,
                                         reply_to,
                                         attachments,
+                                        thread_id: None,
+                                        callback_data: None,
                                     };
 
                                     if let Some(tx) = &message_tx {

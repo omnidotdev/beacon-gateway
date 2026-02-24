@@ -1091,6 +1091,11 @@ async fn check_pairing<C: Channel>(
                             channel_id: msg.channel_id.clone(),
                             content: "Pairing successful! You can now send messages.".to_string(),
                             reply_to: None,
+                            thread_id: None,
+                            keyboard: None,
+                            media: vec![],
+                            edit_target: None,
+                            voice_note: false,
                         };
                         if let Err(e) = channel.send(response).await {
                             tracing::warn!(error = %e, "failed to send pairing success message");
@@ -1115,6 +1120,11 @@ async fn check_pairing<C: Channel>(
                             "Please enter the pairing code to start messaging.\n\nYour code: {code}\n\n(This code expires in 10 minutes)"
                         ),
                         reply_to: None,
+                        thread_id: None,
+                        keyboard: None,
+                        media: vec![],
+                        edit_target: None,
+                        voice_note: false,
                     };
                     if let Err(e) = channel.send(response).await {
                         tracing::warn!(error = %e, "failed to send pairing code");
@@ -1189,6 +1199,11 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 channel_id: msg.channel_id.clone(),
                 content: reply.clone(),
                 reply_to: Some(msg.id.clone()),
+                thread_id: None,
+                keyboard: None,
+                media: vec![],
+                edit_target: None,
+                voice_note: false,
             };
             if let Err(e) = channel.send(outgoing).await {
                 tracing::error!(error = %e, "hook reply send error");
@@ -1363,6 +1378,11 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                     channel_id: msg.channel_id.clone(),
                     content: hook_reply,
                     reply_to: Some(msg.id.clone()),
+                    thread_id: None,
+                    keyboard: None,
+                    media: vec![],
+                    edit_target: None,
+                    voice_note: false,
                 };
                 if let Err(e) = channel.send(outgoing).await {
                     tracing::error!(error = %e, "hook reply send error");
@@ -1489,6 +1509,11 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             channel_id: msg.channel_id.clone(),
             content: response,
             reply_to: thread_id.map(String::from).or_else(|| Some(msg.id.clone())),
+            thread_id: None,
+            keyboard: None,
+            media: vec![],
+            edit_target: None,
+            voice_note: false,
         };
 
         if let Err(e) = channel.send(outgoing).await {

@@ -168,6 +168,8 @@ impl SlackChannel {
                 is_dm: msg.channel_type.as_deref() == Some("im"),
                 reply_to: msg.thread_ts.clone(),
                 attachments,
+                thread_id: None,
+                callback_data: None,
             };
 
             if let Some(tx) = &self.message_tx {

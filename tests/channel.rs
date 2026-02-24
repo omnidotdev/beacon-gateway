@@ -84,6 +84,11 @@ async fn test_mock_channel_send() {
         channel_id: "channel-123".to_string(),
         content: "Hello, world!".to_string(),
         reply_to: None,
+        thread_id: None,
+        keyboard: None,
+        media: vec![],
+        edit_target: None,
+        voice_note: false,
     };
 
     channel.send(message.clone()).await.unwrap();
@@ -240,6 +245,8 @@ async fn test_incoming_message_structure() {
         is_dm: true,
         reply_to: None,
         attachments: vec![],
+        thread_id: None,
+        callback_data: None,
     };
 
     assert!(msg.is_dm);
@@ -376,4 +383,31 @@ async fn test_channel_declares_capabilities() {
     assert!(caps.contains(&ChannelCapability::Reactions));
     assert!(caps.contains(&ChannelCapability::MediaSend));
     assert!(!caps.contains(&ChannelCapability::Stickers));
+}
+
+#[test]
+fn incoming_message_has_thread_and_callback() {
+    let msg = IncomingMessage {
+        id: "1".into(),
+        channel_id: "ch".into(),
+        sender_id: "s".into(),
+        sender_name: "sender".into(),
+        content: "hello".into(),
+        is_dm: true,
+        reply_to: None,
+        attachments: vec![],
+        thread_id: Some("t1".into()),
+        callback_data: None,
+    };
+    assert_eq!(msg.thread_id.as_deref(), Some("t1"));
+}
+
+#[test]
+fn outgoing_message_has_new_fields() {
+    let msg = OutgoingMessage::text("ch".into(), "hi".into());
+    assert!(!msg.voice_note);
+    assert!(msg.keyboard.is_none());
+    assert!(msg.media.is_empty());
+    assert!(msg.edit_target.is_none());
+    assert!(msg.thread_id.is_none());
 }

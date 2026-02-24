@@ -150,6 +150,53 @@ pub struct IncomingMessage {
 
     /// Attachments on the message
     pub attachments: Vec<Attachment>,
+
+    /// Forum topic or thread ID
+    pub thread_id: Option<String>,
+
+    /// Inline keyboard callback data (when user clicks a button)
+    pub callback_data: Option<String>,
+}
+
+/// Interactive inline keyboard
+#[derive(Debug, Clone)]
+pub struct InlineKeyboard {
+    pub rows: Vec<Vec<InlineButton>>,
+}
+
+/// A button in an inline keyboard
+#[derive(Debug, Clone)]
+pub struct InlineButton {
+    pub label: String,
+    pub callback_data: String,
+}
+
+/// Media to send with a message
+#[derive(Debug, Clone)]
+pub struct MediaAttachment {
+    pub kind: MediaKind,
+    pub data: MediaData,
+    pub filename: Option<String>,
+    pub caption: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+/// Type of media being sent
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Photo,
+    Document,
+    Audio,
+    Video,
+    Voice,
+}
+
+/// Source of media data
+#[derive(Debug, Clone)]
+pub enum MediaData {
+    Bytes(Vec<u8>),
+    Url(String),
+    FileId(String),
 }
 
 /// A message to send to a channel
@@ -163,6 +210,21 @@ pub struct OutgoingMessage {
 
     /// Optional reply-to message ID
     pub reply_to: Option<String>,
+
+    /// Forum topic or thread ID
+    pub thread_id: Option<String>,
+
+    /// Interactive inline keyboard
+    pub keyboard: Option<InlineKeyboard>,
+
+    /// Media attachments to send
+    pub media: Vec<MediaAttachment>,
+
+    /// Message ID to edit instead of sending new
+    pub edit_target: Option<String>,
+
+    /// Send as voice note (TTS output)
+    pub voice_note: bool,
 }
 
 impl OutgoingMessage {
@@ -173,6 +235,11 @@ impl OutgoingMessage {
             channel_id,
             content,
             reply_to: None,
+            thread_id: None,
+            keyboard: None,
+            media: vec![],
+            edit_target: None,
+            voice_note: false,
         }
     }
 
@@ -183,6 +250,11 @@ impl OutgoingMessage {
             channel_id,
             content,
             reply_to: Some(reply_to),
+            thread_id: None,
+            keyboard: None,
+            media: vec![],
+            edit_target: None,
+            voice_note: false,
         }
     }
 

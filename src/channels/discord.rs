@@ -322,6 +322,8 @@ impl EventHandler for DiscordHandler {
             is_dm,
             reply_to,
             attachments,
+            thread_id: None,
+            callback_data: None,
         };
 
         if let Some(tx) = self.message_tx.lock().await.as_ref() {

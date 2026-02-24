@@ -154,6 +154,8 @@ impl WhatsAppChannel {
                             is_dm: true,
                             reply_to: msg.context.as_ref().map(|c| c.id.clone()),
                             attachments,
+                            thread_id: None,
+                            callback_data: None,
                         };
 
                         if let Some(tx) = &self.message_tx {

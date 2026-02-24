@@ -440,6 +440,8 @@ impl GoogleChatChannel {
             is_dm,
             reply_to: message.thread.as_ref().map(|t| t.name.clone()),
             attachments,
+            thread_id: None,
+            callback_data: None,
         };
 
         if let Some(tx) = &self.message_tx {
