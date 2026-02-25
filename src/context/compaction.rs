@@ -101,7 +101,7 @@ impl SessionCompactor {
         &self,
         session_id: &str,
         session_repo: &SessionRepo,
-        memory_repo: &MemoryRepo,
+        _memory_repo: &MemoryRepo,
         indexer: Option<&Indexer>,
         user_id: &str,
     ) -> Result<CompactionResult> {

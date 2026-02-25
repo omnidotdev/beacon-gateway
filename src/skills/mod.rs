@@ -19,7 +19,7 @@ use crate::{Error, Result};
 
 /// Skills compiled into the binary (lowest precedence)
 const BUNDLED_SKILLS: &[(&str, &str)] = &[
-    ("concise", include_str!("../../skills/concise/SKILL.md")),
+    ("concise", "---\nname: concise\ndescription: Keep responses brief and direct\nalways: true\nuser_invocable: false\ntags:\n  - behavior\n---\n\nPrefer short, direct answers. Avoid filler phrases and unnecessary preamble.\n"),
 ];
 
 /// Limits applied during directory scanning
