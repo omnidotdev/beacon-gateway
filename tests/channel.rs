@@ -8,10 +8,12 @@ use async_trait::async_trait;
 use beacon_gateway::{
     ToolPolicy, ToolPolicyConfig, ToolProfile,
     channels::{
-        Channel, ChannelCapability, ChannelRegistry, IncomingMessage, OutgoingMessage,
-        TelegramChannel, TelegramRateLimiter,
+        BotCommand, Channel, ChannelCapability, ChannelRegistry, IncomingMessage, OutgoingMessage,
+        TelegramChannel, TelegramRateLimiter, UpdateDedup, should_skip_group_message,
     },
+    config::{ReactionLevel, TelegramConfig},
     db::{Memory, MemoryCategory, MemoryRepo, MessageRole, SessionRepo, UserRepo},
+    tools::loop_detection::{LoopDetector, LoopSeverity},
 };
 use tokio::sync::Mutex;
 
@@ -414,10 +416,14 @@ async fn channel_streaming_defaults_are_noop() {
 }
 
 #[test]
-fn telegram_has_no_capabilities_yet() {
+fn telegram_has_expected_capabilities() {
     let channel = TelegramChannel::new("fake_token".into());
     let caps = channel.capabilities();
-    assert!(caps.is_empty());
+    assert!(caps.contains(&ChannelCapability::MessageEdit));
+    assert!(caps.contains(&ChannelCapability::MessageDelete));
+    assert!(caps.contains(&ChannelCapability::Streaming));
+    assert!(caps.contains(&ChannelCapability::Reactions));
+    assert!(caps.contains(&ChannelCapability::ForumTopics));
 }
 
 #[test]
@@ -455,4 +461,231 @@ async fn telegram_rate_limiter_allows_different_chats() {
     let limiter = TelegramRateLimiter::new(Duration::from_millis(800));
     assert!(limiter.check("chat_123"));
     assert!(limiter.check("chat_456"));
+}
+
+// --- Dedup tests ---
+
+#[test]
+fn dedup_detects_duplicates() {
+    let mut dedup = UpdateDedup::default();
+    assert!(!dedup.is_duplicate("update:123"));
+    assert!(dedup.is_duplicate("update:123"));
+}
+
+#[test]
+fn dedup_allows_different_keys() {
+    let mut dedup = UpdateDedup::default();
+    assert!(!dedup.is_duplicate("update:1"));
+    assert!(!dedup.is_duplicate("update:2"));
+    assert!(!dedup.is_duplicate("update:3"));
+}
+
+#[test]
+fn dedup_respects_max_size() {
+    let mut dedup = UpdateDedup::default();
+    // Fill past capacity — should not panic
+    for i in 0..2100 {
+        dedup.is_duplicate(&format!("key:{i}"));
+    }
+    // Recent entries should still be tracked
+    assert!(dedup.is_duplicate("key:2099"));
+}
+
+// --- Loop detection integration tests ---
+
+#[test]
+fn loop_detector_no_false_positives() {
+    let mut detector = LoopDetector::default();
+    for i in 0..9 {
+        let severity = detector.record(
+            &format!("tool_{i}"),
+            &format!("{{\"arg\": {i}}}"),
+            &format!("result_{i}"),
+        );
+        assert_eq!(severity, LoopSeverity::None);
+    }
+}
+
+#[test]
+fn loop_detector_generic_repeat_warning() {
+    let mut detector = LoopDetector::default();
+    let mut hit_warning = false;
+    for i in 0..15 {
+        let severity = detector.record("web_search", "{\"q\": \"test\"}", &format!("r{i}"));
+        if severity >= LoopSeverity::Warning {
+            hit_warning = true;
+        }
+    }
+    assert!(hit_warning);
+}
+
+#[test]
+fn loop_detector_circuit_breaker() {
+    let mut detector = LoopDetector::default();
+    let mut hit_breaker = false;
+    for _ in 0..30 {
+        let severity = detector.record("shell", "{\"cmd\": \"ls\"}", "files");
+        if severity == LoopSeverity::CircuitBreaker {
+            hit_breaker = true;
+        }
+    }
+    assert!(hit_breaker);
+}
+
+// --- BotCommand tests ---
+
+#[test]
+fn bot_command_serialization() {
+    let cmd = BotCommand {
+        command: "help".to_string(),
+        description: "Show help".to_string(),
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert!(json.contains("\"command\":\"help\""));
+    assert!(json.contains("\"description\":\"Show help\""));
+}
+
+// --- Thread mapping tests ---
+
+#[test]
+fn incoming_message_thread_from_polling() {
+    let msg = IncomingMessage {
+        id: "1".into(),
+        channel_id: "ch".into(),
+        sender_id: "s".into(),
+        sender_name: "sender".into(),
+        content: "hello".into(),
+        is_dm: false,
+        reply_to: None,
+        attachments: vec![],
+        thread_id: Some("42".into()),
+        callback_data: None,
+    };
+    assert_eq!(msg.thread_id.as_deref(), Some("42"));
+}
+
+// --- Mention gating tests ---
+
+fn make_group_msg(content: &str) -> IncomingMessage {
+    IncomingMessage {
+        id: "1".into(),
+        channel_id: "ch".into(),
+        sender_id: "s".into(),
+        sender_name: "sender".into(),
+        content: content.to_string(),
+        is_dm: false,
+        reply_to: None,
+        attachments: vec![],
+        thread_id: None,
+        callback_data: None,
+    }
+}
+
+#[test]
+fn mention_gating_skips_unmentioned_group_messages() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: Some("mybot".into()),
+        require_mention_in_groups: true,
+        reaction_level: ReactionLevel::Ack,
+        ack_reaction: "\u{1F440}".into(),
+        done_reaction: "\u{2705}".into(),
+    };
+    let msg = make_group_msg("hello everyone");
+    assert!(should_skip_group_message(&msg, "supergroup", false, &config));
+}
+
+#[test]
+fn mention_gating_allows_direct_mentions() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: Some("mybot".into()),
+        require_mention_in_groups: true,
+        reaction_level: ReactionLevel::Ack,
+        ack_reaction: "\u{1F440}".into(),
+        done_reaction: "\u{2705}".into(),
+    };
+    let msg = make_group_msg("hey @mybot what's up");
+    assert!(!should_skip_group_message(&msg, "supergroup", false, &config));
+}
+
+#[test]
+fn mention_gating_allows_replies_to_bot() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: Some("mybot".into()),
+        require_mention_in_groups: true,
+        reaction_level: ReactionLevel::Ack,
+        ack_reaction: "\u{1F440}".into(),
+        done_reaction: "\u{2705}".into(),
+    };
+    let msg = make_group_msg("hello");
+    // has_reply = true simulates reply_to_message being present
+    assert!(!should_skip_group_message(&msg, "supergroup", true, &config));
+}
+
+#[test]
+fn mention_gating_ignores_in_private_chats() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: Some("mybot".into()),
+        require_mention_in_groups: true,
+        reaction_level: ReactionLevel::Ack,
+        ack_reaction: "\u{1F440}".into(),
+        done_reaction: "\u{2705}".into(),
+    };
+    let msg = make_group_msg("hello");
+    // Private chat type → should NOT skip
+    assert!(!should_skip_group_message(&msg, "private", false, &config));
+}
+
+// --- Reaction config tests ---
+
+#[test]
+fn reaction_level_off_skips_reactions() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: None,
+        require_mention_in_groups: false,
+        reaction_level: ReactionLevel::Off,
+        ack_reaction: "\u{1F440}".into(),
+        done_reaction: "\u{2705}".into(),
+    };
+    assert_eq!(config.reaction_level, ReactionLevel::Off);
+}
+
+#[test]
+fn reaction_level_ack_sends_reactions() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: None,
+        require_mention_in_groups: false,
+        reaction_level: ReactionLevel::Ack,
+        ack_reaction: "\u{1F440}".into(),
+        done_reaction: "\u{2705}".into(),
+    };
+    assert_ne!(config.reaction_level, ReactionLevel::Off);
+}
+
+#[test]
+fn custom_ack_emoji_used() {
+    let config = TelegramConfig {
+        bot_token: "tok".into(),
+        bot_username: None,
+        require_mention_in_groups: false,
+        reaction_level: ReactionLevel::Ack,
+        ack_reaction: "\u{1F44D}".into(), // 👍
+        done_reaction: "\u{1F389}".into(), // 🎉
+    };
+    assert_eq!(config.ack_reaction, "\u{1F44D}");
+    assert_eq!(config.done_reaction, "\u{1F389}");
+}
+
+#[test]
+fn reaction_level_parsing() {
+    assert_eq!(ReactionLevel::from_str("off"), ReactionLevel::Off);
+    assert_eq!(ReactionLevel::from_str("none"), ReactionLevel::Off);
+    assert_eq!(ReactionLevel::from_str("full"), ReactionLevel::Full);
+    assert_eq!(ReactionLevel::from_str("ack"), ReactionLevel::Ack);
+    assert_eq!(ReactionLevel::from_str("anything_else"), ReactionLevel::Ack);
 }

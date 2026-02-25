@@ -10,8 +10,9 @@ use tokio::sync::mpsc;
 
 use crate::api::{ApiServerBuilder, ModelInfo};
 use crate::attachments::{AttachmentProcessor, VisionClient};
+use futures::StreamExt as _;
 use crate::channels::{
-    Channel, DiscordChannel, GoogleChatChannel, IncomingMessage, MatrixChannel,
+    Channel, ChannelCapability, DiscordChannel, GoogleChatChannel, IncomingMessage, MatrixChannel,
     OutgoingMessage, SignalChannel, SlackChannel, TeamsChannel, TelegramChannel, WhatsAppChannel,
 };
 #[cfg(target_os = "macos")]
@@ -130,16 +131,33 @@ impl Daemon {
         // Initialize Iggy event publisher (best-effort; failures do not block startup)
         crate::events::init_publisher(crate::events::EventsConfig::from_env());
 
-        // Log Vortex scheduling availability
-        if let Some(ref vortex_url) = self.config.api_server.vortex_url {
-            tracing::info!(url = %vortex_url, "Vortex scheduling integration available");
-        }
+        // Initialize cron tools when Vortex is configured
+        let cron_tools: Option<Arc<crate::tools::BuiltinCronTools>> =
+            if let Some(ref vortex_url) = self.config.api_server.vortex_url {
+                tracing::info!(url = %vortex_url, "Vortex scheduling integration available");
+                let vortex_api_key = std::env::var("VORTEX_API_KEY").ok();
+                let vortex_client = crate::integrations::VortexClient::new(vortex_url, vortex_api_key);
+                let callback_url = self
+                    .config
+                    .api_server
+                    .public_url
+                    .as_deref()
+                    .map_or_else(
+                        || format!("http://localhost:{}/api/webhooks/vortex", self.config.api_server.port),
+                        |url| format!("{}/api/webhooks/vortex", url.trim_end_matches('/')),
+                    );
+                Some(Arc::new(crate::tools::BuiltinCronTools::new(
+                    crate::tools::CronTools::new(vortex_client, callback_url),
+                )))
+            } else {
+                None
+            };
 
         // Initialize Synapse AI router client
         let (synapse, model_info) = self.init_synapse().await;
 
-        // Get tool policy from persona
-        let tool_policy = Arc::new(self.config.persona.tool_policy());
+        // Get tool policy from persona, applying env var overrides
+        let tool_policy = Arc::new(self.config.persona.tool_policy().with_env_overrides());
 
         // Initialize plugin manager (before skill discovery so plugin skills are included)
         let plugin_manager: crate::api::plugins::SharedPluginManager = {
@@ -349,6 +367,29 @@ impl Daemon {
             None
         };
 
+        // Sync bot commands with Telegram (skill-derived command menu)
+        if let Some(ref tg) = telegram {
+            let skill_commands: Vec<crate::channels::BotCommand> = skill_repo
+                .list_enabled_for_user(None)
+                .unwrap_or_default()
+                .iter()
+                .filter(|s| s.skill.metadata.user_invocable)
+                .filter_map(|s| {
+                    s.command_name.as_ref().map(|cmd| crate::channels::BotCommand {
+                        command: cmd.clone(),
+                        description: s.skill.metadata.description.clone(),
+                    })
+                })
+                .take(100) // Telegram limit
+                .collect();
+
+            if !skill_commands.is_empty()
+                && let Err(e) = tg.sync_commands(&skill_commands).await
+            {
+                tracing::warn!(error = %e, "failed to sync Telegram bot commands");
+            }
+        }
+
         // Initialize vision client for image analysis (if Anthropic key available)
         let vision = self.config.api_keys.anthropic.as_ref().and_then(|key| {
             VisionClient::new(key.clone())
@@ -405,6 +446,23 @@ impl Daemon {
         if let Some(tg) = telegram {
             api_builder = api_builder.telegram(tg);
         }
+        if let Some(ref tg_config) = self.config.telegram {
+            api_builder = api_builder.telegram_config(tg_config.clone());
+        }
+        if let Some(ref ct) = cron_tools {
+            api_builder = api_builder.cron_tools(Arc::clone(ct));
+        }
+
+        // Initialize session compactor when Synapse is available
+        if let Some(ref synapse) = synapse {
+            let compact_config = crate::context::CompactionConfig::from_env();
+            let compactor = Arc::new(crate::context::SessionCompactor::new(
+                compact_config,
+                Arc::clone(synapse),
+                model_id.clone(),
+            ));
+            api_builder = api_builder.session_compactor(compactor);
+        }
 
         api_builder = api_builder.voice_config(&self.config.voice);
 
@@ -422,16 +480,21 @@ impl Daemon {
 
         api_builder = api_builder.local_key_store(local_key_store);
 
-        let api_server = api_builder.build();
-        let _api_handle = api_server.spawn();
-        tracing::info!(port = self.config.api_server.port, "API server started");
-
-        // Initialize pairing manager
+        // Initialize pairing manager (before API build so webhook can use it)
         let pairing_manager = Arc::new(PairingManager::new(self.config.dm_policy, self.db.clone()));
         tracing::info!(policy = %self.config.dm_policy, "DM security policy");
 
-        // Initialize hook manager
+        // Initialize hook manager (before API build so webhook can use it)
         let hook_manager = Arc::new(HookManager::new(&self.config.hooks, &self.config.data_dir));
+
+        api_builder = api_builder
+            .hook_manager(Arc::clone(&hook_manager))
+            .pairing_manager(Arc::clone(&pairing_manager))
+            .attachment_processor(Arc::clone(&attachment_processor));
+
+        let api_server = api_builder.build();
+        let _api_handle = api_server.spawn();
+        tracing::info!(port = self.config.api_server.port, "API server started");
 
         // Start channel handlers (only if synapse is configured)
         if let Some(ref synapse) = synapse {
@@ -543,6 +606,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -591,6 +655,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -643,6 +708,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -697,6 +763,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -751,6 +818,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -807,6 +875,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -865,6 +934,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -913,6 +983,7 @@ impl Daemon {
                         knowledge,
                         max_context_tokens,
                         pm,
+                        None,
                     )
                     .await;
                 });
@@ -937,6 +1008,7 @@ impl Daemon {
             let hooks = Arc::clone(&hook_manager);
             let knowledge = knowledge_chunks.clone();
             let pm = plugin_manager.clone();
+            let tg_config = self.config.telegram.clone();
             tokio::spawn(async move {
                 handle_channel_messages(
                     "telegram",
@@ -958,6 +1030,7 @@ impl Daemon {
                     knowledge,
                     max_context_tokens,
                     pm,
+                    tg_config,
                 )
                 .await;
             });
@@ -1229,6 +1302,14 @@ async fn check_pairing<C: Channel>(
     }
 }
 
+/// Accumulated tool call from streaming chunks
+#[derive(Default)]
+struct DaemonPendingToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
 /// Handle incoming messages from a channel
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn handle_channel_messages<C: Channel + Send + 'static>(
@@ -1251,6 +1332,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
     knowledge_chunks: Vec<crate::persona::KnowledgeChunk>,
     max_context_tokens: usize,
     plugin_manager: crate::api::plugins::SharedPluginManager,
+    telegram_config: Option<crate::config::TelegramConfig>,
 ) {
     // Available for future tool filtering by channel policy
     let _ = &tool_policy;
@@ -1395,9 +1477,20 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             .with_subject(&msg.sender_id),
         );
 
-        // Acknowledge message with eyes reaction
-        if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, "\u{1F440}").await {
-            tracing::debug!(error = %e, "ack reaction failed");
+        // Acknowledge message with reaction (configurable for Telegram)
+        let reaction_level = telegram_config
+            .as_ref()
+            .filter(|_| channel_name == "telegram")
+            .map_or(crate::config::ReactionLevel::Ack, |c| c.reaction_level);
+        let ack_emoji = telegram_config
+            .as_ref()
+            .filter(|_| channel_name == "telegram")
+            .map_or("\u{1F440}", |c| c.ack_reaction.as_str());
+
+        if reaction_level != crate::config::ReactionLevel::Off {
+            if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, ack_emoji).await {
+                tracing::debug!(error = %e, "ack reaction failed");
+            }
         }
 
         // Process attachments to augment message content
@@ -1448,55 +1541,232 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             .with_session(&session.id);
         let hook_result = hook_manager.trigger(&hook_event).await;
 
-        // If hook provides a reply and wants to skip agent, use that directly
-        let response = if hook_result.skip_agent && hook_result.reply.is_some() {
-            hook_result.reply.unwrap()
-        } else {
-            // Send hook reply if provided (but continue to agent)
-            if let Some(hook_reply) = hook_result.reply {
-                let outgoing = OutgoingMessage {
-                    channel_id: msg.channel_id.clone(),
-                    content: hook_reply,
-                    reply_to: Some(msg.id.clone()),
-                    thread_id: None,
-                    keyboard: None,
-                    media: vec![],
-                    edit_target: None,
-                    voice_note: false,
-                };
-                if let Err(e) = channel.send(outgoing).await {
-                    tracing::error!(error = %e, "hook reply send error");
-                }
-            }
-
-            // Fetch available tools from Synapse MCP and plugins
-            let tools = {
-                let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
-                executor.list_tools().await.ok()
+        // If hook provides a reply and wants to skip agent, send and move on
+        if hook_result.skip_agent && hook_result.reply.is_some() {
+            let reply = hook_result.reply.unwrap();
+            let outgoing = OutgoingMessage {
+                channel_id: msg.channel_id.clone(),
+                content: reply,
+                reply_to: Some(msg.id.clone()),
+                thread_id: None,
+                keyboard: None,
+                media: vec![],
+                edit_target: None,
+                voice_note: false,
             };
+            if let Err(e) = channel.send(outgoing).await {
+                tracing::error!(error = %e, "hook reply send error");
+            }
+            continue;
+        }
 
-            // Process with Synapse (multi-turn tool loop)
-            {
-                let mut messages = vec![
-                    synapse_client::Message::system(&system_prompt),
-                    synapse_client::Message::user(&augmented_prompt),
-                ];
-                let mut final_response = String::new();
-                let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+        // Send hook reply if provided (but continue to agent)
+        if let Some(hook_reply) = hook_result.reply {
+            let outgoing = OutgoingMessage {
+                channel_id: msg.channel_id.clone(),
+                content: hook_reply,
+                reply_to: Some(msg.id.clone()),
+                thread_id: None,
+                keyboard: None,
+                media: vec![],
+                edit_target: None,
+                voice_note: false,
+            };
+            if let Err(e) = channel.send(outgoing).await {
+                tracing::error!(error = %e, "hook reply send error");
+            }
+        }
 
-                for _turn in 0..10 {
-                    let request = synapse_client::ChatRequest {
-                        model: model_id.clone(),
-                        messages: messages.clone(),
-                        stream: false,
-                        temperature: None,
-                        top_p: None,
-                        max_tokens: Some(max_tokens),
-                        stop: None,
-                        tools: tools.clone(),
-                        tool_choice: None,
-                    };
+        // Fetch available tools from Synapse MCP and plugins
+        let tools = {
+            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+            executor.list_tools().await.ok()
+        };
 
+        let use_streaming = channel.capabilities().contains(&ChannelCapability::Streaming);
+
+        // Start streaming placeholder if channel supports it
+        let streaming_msg_id = if use_streaming {
+            channel
+                .send_streaming_start(
+                    &msg.channel_id,
+                    "\u{2026}",
+                    Some(&msg.id),
+                    msg.thread_id.as_deref(),
+                )
+                .await
+                .ok()
+        } else {
+            None
+        };
+
+        // Process with Synapse (multi-turn tool loop)
+        let response = {
+            let mut llm_messages = vec![
+                synapse_client::Message::system(&system_prompt),
+                synapse_client::Message::user(&augmented_prompt),
+            ];
+            let mut final_response = String::new();
+            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+            let mut loop_detector = crate::tools::loop_detection::LoopDetector::default();
+
+            for _turn in 0..10 {
+                let request = synapse_client::ChatRequest {
+                    model: model_id.clone(),
+                    messages: llm_messages.clone(),
+                    stream: use_streaming,
+                    temperature: None,
+                    top_p: None,
+                    max_tokens: Some(max_tokens),
+                    stop: None,
+                    tools: tools.clone(),
+                    tool_choice: None,
+                };
+
+                if use_streaming {
+                    // Streaming path: use chat_completion_stream
+                    match synapse.chat_completion_stream(&request).await {
+                        Ok(mut stream) => {
+                            let mut turn_text = String::new();
+                            let mut pending_tool_calls: Vec<DaemonPendingToolCall> = Vec::new();
+                            let mut finish_reason: Option<String> = None;
+
+                            while let Some(event) = stream.next().await {
+                                match event {
+                                    Ok(synapse_client::ChatEvent::ContentDelta(text)) => {
+                                        turn_text.push_str(&text);
+                                        if let Some(ref mid) = streaming_msg_id {
+                                            let _ = channel
+                                                .send_streaming_update(&msg.channel_id, mid, &turn_text)
+                                                .await;
+                                        }
+                                    }
+                                    Ok(synapse_client::ChatEvent::ToolCallStart { index, id, name }) => {
+                                        let idx = index as usize;
+                                        while pending_tool_calls.len() <= idx {
+                                            pending_tool_calls.push(DaemonPendingToolCall::default());
+                                        }
+                                        pending_tool_calls[idx].id = id;
+                                        pending_tool_calls[idx].name = name;
+                                    }
+                                    Ok(synapse_client::ChatEvent::ToolCallDelta { index, arguments }) => {
+                                        let idx = index as usize;
+                                        if idx < pending_tool_calls.len() {
+                                            pending_tool_calls[idx].arguments.push_str(&arguments);
+                                        }
+                                    }
+                                    Ok(synapse_client::ChatEvent::Done { finish_reason: fr, .. }) => {
+                                        finish_reason = fr;
+                                        break;
+                                    }
+                                    Ok(synapse_client::ChatEvent::Error(e)) => {
+                                        tracing::error!(error = %e, "streaming error");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "stream event error");
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !turn_text.is_empty() {
+                                final_response.push_str(&turn_text);
+                            }
+
+                            // Handle tool calls from streaming
+                            if finish_reason.as_deref() == Some("tool_calls") && !pending_tool_calls.is_empty() {
+                                let tool_calls: Vec<synapse_client::ToolCall> = pending_tool_calls
+                                    .iter()
+                                    .map(|tc| synapse_client::ToolCall {
+                                        id: tc.id.clone(),
+                                        tool_type: "function".to_owned(),
+                                        function: synapse_client::FunctionCall {
+                                            name: tc.name.clone(),
+                                            arguments: tc.arguments.clone(),
+                                        },
+                                    })
+                                    .collect();
+
+                                let assistant_content = if turn_text.is_empty() {
+                                    serde_json::Value::Null
+                                } else {
+                                    serde_json::Value::String(turn_text)
+                                };
+
+                                llm_messages.push(synapse_client::Message {
+                                    role: "assistant".to_owned(),
+                                    content: assistant_content,
+                                    tool_calls: Some(tool_calls.clone()),
+                                    tool_call_id: None,
+                                });
+
+                                let mut should_break = false;
+                                for tc in &tool_calls {
+                                    let result = executor
+                                        .execute(&tc.function.name, &tc.function.arguments)
+                                        .await
+                                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                                    let severity = loop_detector.record(
+                                        &tc.function.name,
+                                        &tc.function.arguments,
+                                        &result,
+                                    );
+                                    match severity {
+                                        crate::tools::loop_detection::LoopSeverity::CircuitBreaker => {
+                                            tracing::warn!(tool = %tc.function.name, "circuit breaker: tool loop detected");
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id,
+                                                "Error: Circuit breaker triggered — this tool has been called too many times with the same arguments. Please try a different approach.",
+                                            ));
+                                            should_break = true;
+                                            break;
+                                        }
+                                        crate::tools::loop_detection::LoopSeverity::Critical => {
+                                            tracing::warn!(tool = %tc.function.name, "critical: possible tool loop");
+                                            llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                            llm_messages.push(synapse_client::Message::system(
+                                                "Warning: You appear to be in a loop calling the same tool repeatedly. Please try a different approach or provide a final answer.",
+                                            ));
+                                        }
+                                        crate::tools::loop_detection::LoopSeverity::Warning => {
+                                            tracing::info!(tool = %tc.function.name, "warning: repeated tool call pattern");
+                                            llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                        }
+                                        crate::tools::loop_detection::LoopSeverity::None => {
+                                            llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                        }
+                                    }
+
+                                    let tool_success = !result.starts_with("Error: ");
+                                    crate::events::publish(
+                                        crate::events::build_tool_executed_event(
+                                            &session.id,
+                                            &tc.function.name,
+                                            tool_success,
+                                            &msg.sender_id,
+                                        ),
+                                    );
+                                }
+
+                                if should_break {
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "synapse stream error");
+                            final_response =
+                                "Sorry, I encountered an error processing your message.".to_string();
+                            break;
+                        }
+                    }
+                } else {
+                    // Non-streaming path: use chat_completion
                     match synapse.chat_completion(&request).await {
                         Ok(resp) => {
                             let choice = match resp.choices.first() {
@@ -1517,20 +1787,60 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                         .map(|t| serde_json::Value::String(t.clone()))
                                         .unwrap_or(serde_json::Value::Null);
 
-                                    messages.push(synapse_client::Message {
+                                    llm_messages.push(synapse_client::Message {
                                         role: "assistant".to_owned(),
                                         content: assistant_content,
                                         tool_calls: Some(tool_calls.clone()),
                                         tool_call_id: None,
                                     });
 
+                                    let mut should_break = false;
                                     for tc in tool_calls {
                                         let result = executor
                                             .execute(&tc.function.name, &tc.function.arguments)
                                             .await
                                             .unwrap_or_else(|e| format!("Error: {e}"));
 
-                                        // Publish beacon.tool.executed (best-effort)
+                                        let severity = loop_detector.record(
+                                            &tc.function.name,
+                                            &tc.function.arguments,
+                                            &result,
+                                        );
+                                        match severity {
+                                            crate::tools::loop_detection::LoopSeverity::CircuitBreaker => {
+                                                tracing::warn!(
+                                                    tool = %tc.function.name,
+                                                    "circuit breaker: tool loop detected, breaking"
+                                                );
+                                                llm_messages.push(synapse_client::Message::tool(
+                                                    &tc.id,
+                                                    "Error: Circuit breaker triggered — this tool has been called too many times with the same arguments. Please try a different approach.",
+                                                ));
+                                                should_break = true;
+                                                break;
+                                            }
+                                            crate::tools::loop_detection::LoopSeverity::Critical => {
+                                                tracing::warn!(
+                                                    tool = %tc.function.name,
+                                                    "critical: possible tool loop detected"
+                                                );
+                                                llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                                llm_messages.push(synapse_client::Message::system(
+                                                    "Warning: You appear to be in a loop calling the same tool repeatedly. Please try a different approach or provide a final answer.",
+                                                ));
+                                            }
+                                            crate::tools::loop_detection::LoopSeverity::Warning => {
+                                                tracing::info!(
+                                                    tool = %tc.function.name,
+                                                    "warning: repeated tool call pattern detected"
+                                                );
+                                                llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                            }
+                                            crate::tools::loop_detection::LoopSeverity::None => {
+                                                llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                            }
+                                        }
+
                                         let tool_success = !result.starts_with("Error: ");
                                         crate::events::publish(
                                             crate::events::build_tool_executed_event(
@@ -1540,10 +1850,11 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                                 &msg.sender_id,
                                             ),
                                         );
-
-                                        messages.push(synapse_client::Message::tool(&tc.id, &result));
                                     }
 
+                                    if should_break {
+                                        break;
+                                    }
                                     continue;
                                 }
                             }
@@ -1559,9 +1870,16 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                         }
                     }
                 }
-
-                final_response
             }
+
+            // Finalize streaming message
+            if let Some(ref mid) = streaming_msg_id {
+                let _ = channel
+                    .send_streaming_end(&msg.channel_id, mid, &final_response)
+                    .await;
+            }
+
+            final_response
         };
 
         // Hook: message:after_agent - can modify response
@@ -1581,28 +1899,33 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             tracing::warn!(error = %e, "failed to store assistant message");
         }
 
-        // Send response in the same thread (reply to original message)
-        // For Slack: thread_ts causes reply to appear in thread
-        // For Discord: reply_to creates a reply reference
-        // For Matrix/Teams: similar thread continuation
-        let outgoing = OutgoingMessage {
-            channel_id: msg.channel_id.clone(),
-            content: response,
-            reply_to: thread_id.map(String::from).or_else(|| Some(msg.id.clone())),
-            thread_id: None,
-            keyboard: None,
-            media: vec![],
-            edit_target: None,
-            voice_note: false,
-        };
+        // Send response (skip if streaming already delivered it)
+        if streaming_msg_id.is_none() {
+            let outgoing = OutgoingMessage {
+                channel_id: msg.channel_id.clone(),
+                content: response,
+                reply_to: thread_id.map(String::from).or_else(|| Some(msg.id.clone())),
+                thread_id: None,
+                keyboard: None,
+                media: vec![],
+                edit_target: None,
+                voice_note: false,
+            };
 
-        if let Err(e) = channel.send(outgoing).await {
-            tracing::error!(error = %e, "send error");
+            if let Err(e) = channel.send(outgoing).await {
+                tracing::error!(error = %e, "send error");
+            }
         }
 
-        // Mark complete with checkmark reaction
-        if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, "\u{2705}").await {
-            tracing::debug!(error = %e, "done reaction failed");
+        // Mark complete with reaction (configurable for Telegram)
+        if reaction_level != crate::config::ReactionLevel::Off {
+            let done_emoji = telegram_config
+                .as_ref()
+                .filter(|_| channel_name == "telegram")
+                .map_or("\u{2705}", |c| c.done_reaction.as_str());
+            if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, done_emoji).await {
+                tracing::debug!(error = %e, "done reaction failed");
+            }
         }
 
         // Publish beacon.message.processed event (best-effort)

@@ -33,11 +33,13 @@ impl ToolKind {
             // Read-only tools
             "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch"
             | "ListDir" | "NotebookRead" | "TaskList" | "TaskGet"
-            | "memory_search" => Self::Read,
+            | "memory_search" | "cron_list" | "cron_get" => Self::Read,
             // Interactive tools
             "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
             // Mutating memory tools
             "memory_store" | "memory_forget" => Self::Mutate,
+            // Mutating cron tools
+            "cron_schedule" | "cron_cancel" => Self::Mutate,
             // Everything else defaults to Mutate (safe)
             _ => Self::Mutate,
         }
@@ -49,6 +51,7 @@ pub struct ToolExecutor {
     synapse: Arc<SynapseClient>,
     plugin_manager: SharedPluginManager,
     memory_tools: Option<Arc<crate::tools::BuiltinMemoryTools>>,
+    cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
 }
 
 impl ToolExecutor {
@@ -58,6 +61,7 @@ impl ToolExecutor {
             synapse,
             plugin_manager,
             memory_tools: None,
+            cron_tools: None,
         }
     }
 
@@ -65,6 +69,13 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_memory_tools(mut self, tools: Arc<crate::tools::BuiltinMemoryTools>) -> Self {
         self.memory_tools = Some(tools);
+        self
+    }
+
+    /// Attach built-in cron tools to this executor
+    #[must_use]
+    pub fn with_cron_tools(mut self, tools: Arc<crate::tools::BuiltinCronTools>) -> Self {
+        self.cron_tools = Some(tools);
         self
     }
 
@@ -98,6 +109,11 @@ impl ToolExecutor {
             definitions.extend(crate::tools::BuiltinMemoryTools::tool_definitions());
         }
 
+        // Include built-in cron tools if attached
+        if self.cron_tools.is_some() {
+            definitions.extend(crate::tools::BuiltinCronTools::tool_definitions());
+        }
+
         Ok(definitions)
     }
 
@@ -106,6 +122,11 @@ impl ToolExecutor {
         // Route built-in memory tools
         if name.starts_with("memory_") && let Some(ref mt) = self.memory_tools {
             return mt.execute(name, arguments).await;
+        }
+
+        // Route built-in cron tools
+        if name.starts_with("cron_") && let Some(ref ct) = self.cron_tools {
+            return ct.execute(name, arguments).await;
         }
 
         // Plugin tools use `plugin_id::tool_name` format
@@ -248,6 +269,11 @@ mod tests {
         assert_eq!(ToolKind::classify("memory_search"), ToolKind::Read);
         assert_eq!(ToolKind::classify("memory_store"), ToolKind::Mutate);
         assert_eq!(ToolKind::classify("memory_forget"), ToolKind::Mutate);
+        // Cron tools
+        assert_eq!(ToolKind::classify("cron_list"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("cron_get"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("cron_schedule"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("cron_cancel"), ToolKind::Mutate);
         // Unknown tools default to Mutate (safe default)
         assert_eq!(ToolKind::classify("unknown_tool"), ToolKind::Mutate);
     }

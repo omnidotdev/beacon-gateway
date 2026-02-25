@@ -47,6 +47,16 @@ impl MessageRole {
         }
     }
 
+    /// Display-friendly label for compaction summaries
+    #[must_use]
+    pub const fn as_display_str(self) -> &'static str {
+        match self {
+            Self::User => "User",
+            Self::Assistant => "Assistant",
+            Self::System => "System",
+        }
+    }
+
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "user" => Some(Self::User),
@@ -342,6 +352,83 @@ impl SessionRepo {
 
         // Reverse to get chronological order
         Ok(messages.into_iter().rev().collect())
+    }
+
+    /// Delete messages in a session older than the given message ID
+    ///
+    /// Uses `created_at` ordering to determine which messages are "before" the cutoff.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn delete_messages_before(&self, session_id: &str, before_id: &str) -> Result<usize> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Find the created_at of the cutoff message
+        let cutoff: String = conn
+            .query_row(
+                "SELECT created_at FROM messages WHERE id = ?1 AND session_id = ?2",
+                [before_id, session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Database(format!("cutoff message not found: {e}")))?;
+
+        let deleted = conn.execute(
+            "DELETE FROM messages WHERE session_id = ?1 AND created_at < ?2",
+            [session_id, &cutoff],
+        )?;
+
+        Ok(deleted)
+    }
+
+    /// Insert a compaction summary as a system message at the start of a session
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn insert_summary(&self, session_id: &str, summary: &str) -> Result<Message> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Find the earliest message timestamp in the session
+        let earliest: Option<String> = conn
+            .query_row(
+                "SELECT MIN(created_at) FROM messages WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        // Set summary timestamp slightly before the earliest remaining message
+        let summary_time = earliest
+            .as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|dt| (dt.with_timezone(&Utc) - chrono::Duration::seconds(1)).to_rfc3339())
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+        let id = Uuid::new_v4().to_string();
+
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, session_id, "system", summary, summary_time],
+        )
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(Message {
+            id,
+            session_id: session_id.to_string(),
+            role: MessageRole::System,
+            content: summary.to_string(),
+            created_at: DateTime::parse_from_rfc3339(&summary_time)
+                .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc)),
+            thread_id: None,
+        })
     }
 
     /// Count messages in a session

@@ -85,6 +85,9 @@ pub struct Config {
 
     /// Skills system configuration
     pub skills: SkillsConfig,
+
+    /// Telegram-specific configuration (populated when token is present)
+    pub telegram: Option<TelegramConfig>,
 }
 
 /// HTTP API server configuration
@@ -272,6 +275,73 @@ fn default_personal_dir() -> PathBuf {
         || PathBuf::from(".agents/skills"),
         |d| d.home_dir().join(".agents").join("skills"),
     )
+}
+
+/// Telegram channel configuration
+#[derive(Debug, Clone)]
+pub struct TelegramConfig {
+    /// Bot token
+    pub bot_token: String,
+    /// Bot username (for `@bot_username` mention detection in groups)
+    pub bot_username: Option<String>,
+    /// Only respond in groups when `@bot_username` is mentioned or replied to
+    pub require_mention_in_groups: bool,
+    /// Reaction level: Off, Ack, Full
+    pub reaction_level: ReactionLevel,
+    /// Emoji for acknowledging receipt (default: eyes)
+    pub ack_reaction: String,
+    /// Emoji for marking completion (default: checkmark)
+    pub done_reaction: String,
+}
+
+impl TelegramConfig {
+    /// Create from a bot token with defaults
+    #[must_use]
+    pub fn new(bot_token: String) -> Self {
+        Self {
+            bot_token,
+            bot_username: None,
+            require_mention_in_groups: false,
+            reaction_level: ReactionLevel::Ack,
+            ack_reaction: "\u{1F440}".to_string(), // 👀
+            done_reaction: "\u{2705}".to_string(),  // ✅
+        }
+    }
+}
+
+/// How aggressively the bot should react to messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReactionLevel {
+    /// No reactions at all
+    Off,
+    /// Ack (eyes) on receipt and done (checkmark) on completion
+    #[default]
+    Ack,
+    /// Future: richer per-step reactions
+    Full,
+}
+
+impl ReactionLevel {
+    /// Parse from a string value (env var or config)
+    #[must_use]
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "off" | "none" | "false" | "0" => Self::Off,
+            "full" | "extensive" => Self::Full,
+            _ => Self::Ack,
+        }
+    }
+
+    /// Try to parse from a string, returning None for unrecognized values
+    #[must_use]
+    pub fn from_str_value(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "off" | "none" => Some(Self::Off),
+            "ack" => Some(Self::Ack),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
 }
 
 /// Memory sync configuration
@@ -647,6 +717,26 @@ impl Config {
             }
         };
 
+        // Telegram-specific config (assembled from token + env vars)
+        let telegram = api_keys.telegram.as_ref().map(|token| {
+            let mut tg = TelegramConfig::new(token.clone());
+            tg.bot_username = std::env::var("TELEGRAM_BOT_USERNAME").ok();
+            tg.require_mention_in_groups = std::env::var("TELEGRAM_REQUIRE_MENTION")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            tg.reaction_level = std::env::var("TELEGRAM_REACTION_LEVEL")
+                .map(|s| ReactionLevel::from_str(&s))
+                .unwrap_or_default();
+            if let Ok(emoji) = std::env::var("TELEGRAM_ACK_REACTION") {
+                tg.ack_reaction = emoji;
+            }
+            if let Ok(emoji) = std::env::var("TELEGRAM_DONE_REACTION") {
+                tg.done_reaction = emoji;
+            }
+            tg
+        });
+
         Ok(Self {
             persona,
             persona_cache_dir: cache_dir,
@@ -671,6 +761,7 @@ impl Config {
             knowledge_cache_dir,
             sync,
             skills,
+            telegram,
         })
     }
 

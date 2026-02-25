@@ -27,6 +27,8 @@ fn build_test_router(db: DbPool) -> axum::Router {
     let browser = beacon_gateway::api::browser::default_browser();
     let canvas = Arc::new(Mutex::new(Canvas::new()));
 
+    let telegram_group_repo = beacon_gateway::db::TelegramGroupConfigRepo::new(db.clone());
+
     let state = Arc::new(beacon_gateway::api::ApiState {
         db,
         api_key: Some("test-api-key".to_string()),
@@ -76,6 +78,16 @@ fn build_test_router(db: DbPool) -> axum::Router {
             id: "test-persona".to_string(),
             system_prompt: None,
         })),
+        hook_manager: None,
+        pairing_manager: None,
+        attachment_processor: None,
+        telegram_dedup: Arc::new(std::sync::Mutex::new(
+            beacon_gateway::channels::UpdateDedup::default(),
+        )),
+        telegram_config: None,
+        telegram_group_repo,
+        cron_tools: None,
+        session_compactor: None,
     });
 
     Router::new()

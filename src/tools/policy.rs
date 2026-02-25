@@ -22,6 +22,19 @@ pub enum ToolProfile {
 }
 
 impl ToolProfile {
+    /// Parse a tool profile from a string value
+    #[must_use]
+    pub fn from_str_value(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "minimal" => Some(Self::Minimal),
+            "messaging" => Some(Self::Messaging),
+            "full" => Some(Self::Full),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+
     /// Get the list of allowed tool names for this profile
     #[must_use]
     pub const fn allowed_tools(&self) -> &'static [&'static str] {
@@ -113,6 +126,38 @@ impl ToolPolicy {
             .collect()
     }
 
+    /// Apply environment variable overrides to this policy.
+    ///
+    /// Reads:
+    /// - `BEACON_TOOL_PROFILE` for the default profile
+    /// - `BEACON_TOOL_PROFILE_TELEGRAM`, `BEACON_TOOL_PROFILE_DISCORD`, etc. for per-channel
+    ///
+    /// Environment overrides take precedence over persona JSON configuration.
+    #[must_use]
+    pub fn with_env_overrides(mut self) -> Self {
+        // Global default override
+        if let Ok(val) = std::env::var("BEACON_TOOL_PROFILE") {
+            if let Some(profile) = ToolProfile::from_str_value(&val) {
+                self.default_profile = profile;
+                tracing::info!(profile = val, "tool profile default overridden by env");
+            }
+        }
+
+        // Per-channel overrides
+        let channels = ["telegram", "discord", "slack", "voice", "teams", "signal", "matrix"];
+        for channel in &channels {
+            let env_key = format!("BEACON_TOOL_PROFILE_{}", channel.to_uppercase());
+            if let Ok(val) = std::env::var(&env_key) {
+                if let Some(profile) = ToolProfile::from_str_value(&val) {
+                    self.channel_profiles.insert((*channel).to_string(), profile);
+                    tracing::info!(channel, profile = val, "tool profile overridden by env");
+                }
+            }
+        }
+
+        self
+    }
+
     /// Check if a specific tool is allowed for a channel
     #[must_use]
     pub fn is_allowed(&self, channel: &str, tool: &str) -> bool {
@@ -153,6 +198,41 @@ mod tests {
         assert!(!ToolProfile::Full.allowed_tools().is_empty());
         assert!(!ToolProfile::Messaging.allowed_tools().is_empty());
         assert!(ToolProfile::None.allowed_tools().is_empty());
+    }
+
+    #[test]
+    fn from_str_value_parses_all_profiles() {
+        assert_eq!(ToolProfile::from_str_value("none"), Some(ToolProfile::None));
+        assert_eq!(ToolProfile::from_str_value("minimal"), Some(ToolProfile::Minimal));
+        assert_eq!(ToolProfile::from_str_value("messaging"), Some(ToolProfile::Messaging));
+        assert_eq!(ToolProfile::from_str_value("full"), Some(ToolProfile::Full));
+        assert_eq!(ToolProfile::from_str_value("custom"), Some(ToolProfile::Custom));
+        // Case insensitive
+        assert_eq!(ToolProfile::from_str_value("Full"), Some(ToolProfile::Full));
+        assert_eq!(ToolProfile::from_str_value("MESSAGING"), Some(ToolProfile::Messaging));
+        // Invalid
+        assert_eq!(ToolProfile::from_str_value("invalid"), None);
+        assert_eq!(ToolProfile::from_str_value(""), None);
+    }
+
+    #[test]
+    fn with_env_overrides_preserves_defaults_when_no_env() {
+        // When no BEACON_TOOL_PROFILE* env vars are set, policy remains unchanged
+        let original = ToolPolicy::default_policy();
+        let with_overrides = ToolPolicy::default_policy().with_env_overrides();
+
+        assert_eq!(
+            original.profile_for("voice"),
+            with_overrides.profile_for("voice")
+        );
+        assert_eq!(
+            original.profile_for("telegram"),
+            with_overrides.profile_for("telegram")
+        );
+        assert_eq!(
+            original.profile_for("unknown"),
+            with_overrides.profile_for("unknown")
+        );
     }
 
     #[test]

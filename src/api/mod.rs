@@ -33,11 +33,14 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::attachments::AttachmentProcessor;
 use crate::canvas::Canvas;
 use crate::channels::{TeamsChannel, TelegramChannel};
 use crate::context::ContextConfig;
-use crate::db::{DbPool, Embedder, Indexer, MemoryRepo, SessionRepo, SkillRepo, UserRepo};
+use crate::db::{DbPool, Embedder, Indexer, MemoryRepo, SessionRepo, SkillRepo, TelegramGroupConfigRepo, UserRepo};
+use crate::hooks::HookManager;
 use crate::nodes::NodeRegistry;
+use crate::security::PairingManager;
 use crate::tools::ToolPolicy;
 use crate::Result;
 
@@ -116,6 +119,22 @@ pub struct ApiState {
     pub skill_filter: crate::skills::SkillFilter,
     /// Whether voice input/output is enabled (for config-based eligibility)
     pub voice_enabled: bool,
+    /// Hook manager for pre/post message processing
+    pub hook_manager: Option<Arc<HookManager>>,
+    /// DM security pairing manager
+    pub pairing_manager: Option<Arc<PairingManager>>,
+    /// Attachment processor for vision/audio analysis
+    pub attachment_processor: Option<Arc<AttachmentProcessor>>,
+    /// Telegram update dedup cache
+    pub telegram_dedup: Arc<std::sync::Mutex<crate::channels::UpdateDedup>>,
+    /// Telegram-specific configuration (mention gating, reaction config)
+    pub telegram_config: Option<crate::config::TelegramConfig>,
+    /// Per-group Telegram configuration overrides
+    pub telegram_group_repo: TelegramGroupConfigRepo,
+    /// Built-in cron tools for scheduling via Vortex
+    pub cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
+    /// Session compactor for long conversations
+    pub session_compactor: Option<Arc<crate::context::SessionCompactor>>,
 }
 
 impl ApiState {
@@ -188,6 +207,12 @@ pub struct ApiServerBuilder {
     billing_state: Option<crate::billing::BillingState>,
     skills_config: crate::config::SkillsConfig,
     voice_enabled: bool,
+    hook_manager: Option<Arc<HookManager>>,
+    pairing_manager: Option<Arc<PairingManager>>,
+    attachment_processor: Option<Arc<AttachmentProcessor>>,
+    telegram_config: Option<crate::config::TelegramConfig>,
+    cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
+    session_compactor: Option<Arc<crate::context::SessionCompactor>>,
 }
 
 impl ApiServerBuilder {
@@ -236,6 +261,12 @@ impl ApiServerBuilder {
             billing_state: None,
             skills_config: crate::config::SkillsConfig::default(),
             voice_enabled: false,
+            hook_manager: None,
+            pairing_manager: None,
+            attachment_processor: None,
+            telegram_config: None,
+            cron_tools: None,
+            session_compactor: None,
         }
     }
 
@@ -397,6 +428,48 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Set the hook manager for pre/post message processing
+    #[must_use]
+    pub fn hook_manager(mut self, manager: Arc<HookManager>) -> Self {
+        self.hook_manager = Some(manager);
+        self
+    }
+
+    /// Set the pairing manager for DM security
+    #[must_use]
+    pub fn pairing_manager(mut self, manager: Arc<PairingManager>) -> Self {
+        self.pairing_manager = Some(manager);
+        self
+    }
+
+    /// Set the attachment processor for vision/audio analysis
+    #[must_use]
+    pub fn attachment_processor(mut self, processor: Arc<AttachmentProcessor>) -> Self {
+        self.attachment_processor = Some(processor);
+        self
+    }
+
+    /// Set Telegram-specific configuration
+    #[must_use]
+    pub fn telegram_config(mut self, config: crate::config::TelegramConfig) -> Self {
+        self.telegram_config = Some(config);
+        self
+    }
+
+    /// Set built-in cron tools for scheduling via Vortex
+    #[must_use]
+    pub fn cron_tools(mut self, tools: Arc<crate::tools::BuiltinCronTools>) -> Self {
+        self.cron_tools = Some(tools);
+        self
+    }
+
+    /// Set the session compactor for long conversations
+    #[must_use]
+    pub fn session_compactor(mut self, compactor: Arc<crate::context::SessionCompactor>) -> Self {
+        self.session_compactor = Some(compactor);
+        self
+    }
+
     /// Build the API server
     #[must_use]
     pub fn build(self) -> ApiServer {
@@ -404,6 +477,7 @@ impl ApiServerBuilder {
         let user_repo = UserRepo::new(self.db.clone());
         let memory_repo = MemoryRepo::new(self.db.clone());
         let skill_repo = SkillRepo::new(self.db.clone());
+        let telegram_group_repo = TelegramGroupConfigRepo::new(self.db.clone());
 
         // Create embedder and indexer if OPENAI_API_KEY is set
         let openai_key = std::env::var("OPENAI_API_KEY").ok();
@@ -514,6 +588,16 @@ impl ApiServerBuilder {
             skill_filter: self.skills_config.skill_filter.clone(),
             voice_enabled: self.voice_enabled,
             skills_config: self.skills_config,
+            hook_manager: self.hook_manager,
+            pairing_manager: self.pairing_manager,
+            attachment_processor: self.attachment_processor,
+            telegram_dedup: Arc::new(std::sync::Mutex::new(
+                crate::channels::UpdateDedup::default(),
+            )),
+            telegram_config: self.telegram_config,
+            telegram_group_repo,
+            cron_tools: self.cron_tools,
+            session_compactor: self.session_compactor,
         });
 
         ApiServer {

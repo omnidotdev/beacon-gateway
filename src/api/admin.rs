@@ -12,7 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{auth::require_api_key, ApiState};
-use crate::db::{SessionRepo, UserRepo};
+use crate::db::{SessionRepo, TelegramGroupConfig, UserRepo};
 
 // --- Request/Response types ---
 
@@ -228,6 +228,54 @@ async fn get_session_messages(
     ))
 }
 
+// --- Telegram group config handlers ---
+
+/// List Telegram group configurations
+async fn list_telegram_groups(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<Vec<TelegramGroupConfig>>, (StatusCode, Json<ErrorResponse>)> {
+    let configs = state
+        .telegram_group_repo
+        .list()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+
+    Ok(Json(configs))
+}
+
+/// Upsert Telegram group configuration
+async fn upsert_telegram_group(
+    State(state): State<Arc<ApiState>>,
+    Path(chat_id): Path<String>,
+    Json(mut config): Json<TelegramGroupConfig>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    // Ensure path param matches body
+    config.chat_id = chat_id;
+
+    state
+        .telegram_group_repo
+        .upsert(&config)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+
+    Ok(StatusCode::OK)
+}
+
+/// Delete Telegram group configuration
+async fn delete_telegram_group(
+    State(state): State<Arc<ApiState>>,
+    Path(chat_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let deleted = state
+        .telegram_group_repo
+        .delete(&chat_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, error_response("not_found", "Group config not found")))
+    }
+}
+
 /// Build admin router with auth middleware
 pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
@@ -238,6 +286,9 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/users/{id}", delete(delete_user))
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}/messages", get(get_session_messages))
+        .route("/telegram/groups", get(list_telegram_groups))
+        .route("/telegram/groups/{chat_id}", put(upsert_telegram_group))
+        .route("/telegram/groups/{chat_id}", delete(delete_telegram_group))
         .layer(middleware::from_fn_with_state(state.clone(), require_api_key))
         .with_state(state)
 }

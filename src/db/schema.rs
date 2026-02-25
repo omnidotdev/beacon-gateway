@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 16;
+pub const SCHEMA_VERSION: i32 = 17;
 
 /// Initialize the database schema
 ///
@@ -64,6 +64,9 @@ pub fn init(conn: &Connection) -> Result<()> {
     }
     if version < 16 {
         migrate_v16(conn)?;
+    }
+    if version < 17 {
+        migrate_v17(conn)?;
     }
 
     Ok(())
@@ -562,6 +565,30 @@ fn migrate_v16(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("migrated to schema v16 (config-based eligibility)");
+    Ok(())
+}
+
+fn migrate_v17(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Per-group Telegram configuration overrides
+        CREATE TABLE IF NOT EXISTS telegram_group_config (
+            chat_id TEXT PRIMARY KEY,
+            chat_title TEXT,
+            require_mention INTEGER,
+            reaction_level TEXT,
+            ack_reaction TEXT,
+            done_reaction TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        PRAGMA user_version = 17;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v17 (per-group Telegram config)");
     Ok(())
 }
 

@@ -7,6 +7,128 @@ use uuid::Uuid;
 use super::DbPool;
 use crate::{Error, Result};
 
+/// Half-life for temporal decay (in days)
+const DECAY_HALF_LIFE_DAYS: f64 = 7.0;
+
+/// Weight of temporal decay in combined scoring (0.0 = no decay effect, 1.0 = full effect)
+const DECAY_WEIGHT: f64 = 0.3;
+
+/// Compute temporal decay factor for a memory based on its `accessed_at` timestamp.
+///
+/// Uses exponential decay with a configurable half-life.
+/// Returns a value in `[0.0, 1.0]` where 1.0 means just accessed and ~0.0 means very old.
+#[must_use]
+pub fn temporal_decay_factor(accessed_at: &DateTime<Utc>, now: &DateTime<Utc>) -> f64 {
+    let elapsed_days = (*now - *accessed_at).num_seconds().max(0) as f64 / 86400.0;
+    // Exponential decay: 2^(-t/half_life)
+    (-elapsed_days / DECAY_HALF_LIFE_DAYS).exp2()
+}
+
+/// Compute cosine similarity between two vectors.
+///
+/// Returns a value in `[-1.0, 1.0]` where 1.0 is identical direction.
+/// Returns 0.0 if either vector has zero magnitude.
+#[must_use]
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
+    let mut dot = 0.0_f64;
+    let mut norm_a = 0.0_f64;
+    let mut norm_b = 0.0_f64;
+
+    for (ai, bi) in a.iter().zip(b.iter()) {
+        let ai = f64::from(*ai);
+        let bi = f64::from(*bi);
+        dot += ai * bi;
+        norm_a += ai * ai;
+        norm_b += bi * bi;
+    }
+
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom < f64::EPSILON {
+        return 0.0;
+    }
+
+    (dot / denom) as f32
+}
+
+/// Candidate for MMR re-ranking
+struct MmrCandidate {
+    memory: Memory,
+    score: f64,
+}
+
+/// Apply Maximal Marginal Relevance re-ranking to a list of scored candidates.
+///
+/// Iteratively selects candidates that balance relevance (score) with diversity
+/// (dissimilarity to already-selected items). Lambda controls the trade-off:
+/// higher lambda favors relevance, lower lambda favors diversity.
+fn mmr_rerank(candidates: Vec<MmrCandidate>, limit: usize, lambda: f64) -> Vec<Memory> {
+    if candidates.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let mut remaining: Vec<MmrCandidate> = candidates;
+    let mut selected: Vec<(Memory, Option<Vec<f32>>)> = Vec::with_capacity(limit);
+
+    // Normalize scores to [0, 1] for MMR calculation
+    let max_score = remaining
+        .iter()
+        .map(|c| c.score)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_score = remaining
+        .iter()
+        .map(|c| c.score)
+        .fold(f64::INFINITY, f64::min);
+    let score_range = max_score - min_score;
+
+    while selected.len() < limit && !remaining.is_empty() {
+        let mut best_idx = 0;
+        let mut best_mmr = f64::NEG_INFINITY;
+
+        for (i, candidate) in remaining.iter().enumerate() {
+            let relevance = if score_range > f64::EPSILON {
+                (candidate.score - min_score) / score_range
+            } else {
+                1.0
+            };
+
+            // Max similarity to any already-selected item
+            let max_sim = if selected.is_empty() {
+                0.0
+            } else {
+                candidate
+                    .memory
+                    .embedding
+                    .as_ref()
+                    .map(|emb| {
+                        selected
+                            .iter()
+                            .filter_map(|(_, sel_emb)| {
+                                sel_emb.as_ref().map(|se| f64::from(cosine_similarity(emb, se)))
+                            })
+                            .fold(0.0_f64, f64::max)
+                    })
+                    .unwrap_or(0.0)
+            };
+
+            let mmr_score = lambda * relevance - (1.0 - lambda) * max_sim;
+            if mmr_score > best_mmr {
+                best_mmr = mmr_score;
+                best_idx = i;
+            }
+        }
+
+        let chosen = remaining.swap_remove(best_idx);
+        let emb = chosen.memory.embedding.clone();
+        selected.push((chosen.memory, emb));
+    }
+
+    selected.into_iter().map(|(m, _)| m).collect()
+}
+
 /// Column list for all memory SELECT queries
 const MEMORY_COLUMNS: &str = "id, user_id, category, content, tags, pinned, access_count, created_at, accessed_at, embedding, source_session_id, source_channel, content_hash, origin_device_id, updated_at, deleted_at, synced_at, cloud_id";
 
@@ -363,7 +485,10 @@ impl MemoryRepo {
         Ok(memories)
     }
 
-    /// Search memories by vector similarity
+    /// Search memories by vector similarity with temporal decay and MMR diversity re-ranking.
+    ///
+    /// Over-fetches 3x candidates, applies temporal decay to distance scores,
+    /// then uses MMR to select diverse results before returning the top `limit`.
     ///
     /// # Errors
     ///
@@ -371,6 +496,9 @@ impl MemoryRepo {
     pub fn search_similar(&self, user_id: &str, embedding: &[f32], limit: usize) -> Result<Vec<Memory>> {
         let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
         let embedding_bytes = super::embedder::Embedder::to_bytes(embedding);
+
+        // Over-fetch 3x candidates for temporal decay + MMR re-ranking
+        let fetch_limit = limit * 3;
 
         // Use sqlite-vec to find similar memories
         // Join with memories table to filter by user_id
@@ -381,7 +509,7 @@ impl MemoryRepo {
             .join(", ");
 
         let sql = format!(
-            r"SELECT {prefixed_columns}
+            r"SELECT {prefixed_columns}, v.distance
               FROM memories m
               INNER JOIN (
                   SELECT memory_id, distance
@@ -390,16 +518,36 @@ impl MemoryRepo {
                   ORDER BY distance
                   LIMIT ?2
               ) v ON m.id = v.memory_id
-              WHERE m.user_id = ?3 AND m.deleted_at IS NULL
-              ORDER BY v.distance"
+              WHERE m.user_id = ?3 AND m.deleted_at IS NULL"
         );
         let mut stmt = conn.prepare(&sql)?;
 
         #[allow(clippy::cast_possible_wrap)]
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64, user_id], row_to_memory_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params![embedding_bytes, fetch_limit as i64, user_id],
+            |row| {
+                let memory_row = row_to_memory_row(row)?;
+                let distance: f64 = row.get(18)?; // distance is the 19th column (0-indexed)
+                Ok((memory_row, distance))
+            },
+        )?;
 
-        let memories: Vec<Memory> = rows.flatten().map(MemoryRow::into_memory).collect();
-        Ok(memories)
+        let now = Utc::now();
+        let candidates: Vec<MmrCandidate> = rows
+            .flatten()
+            .map(|(row, distance)| {
+                let memory = row.into_memory();
+                let decay = temporal_decay_factor(&memory.accessed_at, &now);
+                // Lower distance = better. Apply temporal decay as a bonus for recent memories.
+                // Combined score: lower is better (subtract decay bonus)
+                let combined = distance * (1.0 - DECAY_WEIGHT * decay);
+                // Invert so higher = better for MMR (MMR selects highest scores)
+                let score = 1.0 / (1.0 + combined);
+                MmrCandidate { memory, score }
+            })
+            .collect();
+
+        Ok(mmr_rerank(candidates, limit, 0.7))
     }
 
     /// Hybrid search combining text substring match with vector similarity
@@ -871,6 +1019,87 @@ mod tests {
         let results = repo.search_hybrid(&user.id, "dark", None, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "Likes dark mode");
+    }
+
+    #[test]
+    fn temporal_decay_recent_is_high() {
+        let now = Utc::now();
+        let factor = super::temporal_decay_factor(&now, &now);
+        assert!(factor > 0.99, "factor for now should be ~1.0, got {factor}");
+    }
+
+    #[test]
+    fn temporal_decay_old_is_low() {
+        let now = Utc::now();
+        let old = now - chrono::Duration::days(30);
+        let factor = super::temporal_decay_factor(&old, &now);
+        assert!(factor < 0.1, "factor for 30 days ago should be < 0.1, got {factor}");
+    }
+
+    #[test]
+    fn temporal_decay_half_life() {
+        let now = Utc::now();
+        let half = now - chrono::Duration::days(7);
+        let factor = super::temporal_decay_factor(&half, &now);
+        assert!(
+            (factor - 0.5).abs() < 0.01,
+            "factor at 7 days should be ~0.5, got {factor}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_identical_is_one() {
+        let v = vec![1.0_f32, 2.0, 3.0];
+        let sim = super::cosine_similarity(&v, &v);
+        assert!((sim - 1.0).abs() < 0.001, "identical vectors should have sim ~1.0, got {sim}");
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_is_zero() {
+        let a = vec![1.0_f32, 0.0, 0.0];
+        let b = vec![0.0_f32, 1.0, 0.0];
+        let sim = super::cosine_similarity(&a, &b);
+        assert!(sim.abs() < 0.001, "orthogonal vectors should have sim ~0.0, got {sim}");
+    }
+
+    #[test]
+    fn mmr_reduces_duplicate_results() {
+        // Create 3 candidates: 2 near-identical + 1 distinct
+        let emb_a = vec![1.0_f32; 8];
+        let emb_a2 = {
+            let mut v = vec![1.0_f32; 8];
+            v[0] = 0.99; // Nearly identical to a
+            v
+        };
+        let emb_b = vec![0.0_f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // Orthogonal
+
+        let candidates = vec![
+            super::MmrCandidate {
+                memory: Memory::new("u1".to_string(), MemoryCategory::Fact, "Dark mode".to_string())
+                    .with_embedding(emb_a),
+                score: 0.9,
+            },
+            super::MmrCandidate {
+                memory: Memory::new("u1".to_string(), MemoryCategory::Fact, "Dark theme".to_string())
+                    .with_embedding(emb_a2),
+                score: 0.9,
+            },
+            super::MmrCandidate {
+                memory: Memory::new("u1".to_string(), MemoryCategory::Fact, "Works at Acme".to_string())
+                    .with_embedding(emb_b),
+                score: 0.9,
+            },
+        ];
+
+        // With equal relevance scores, MMR should prefer diversity
+        let results = super::mmr_rerank(candidates, 2, 0.5);
+        assert_eq!(results.len(), 2);
+        // Both groups should be represented
+        let contents: Vec<&str> = results.iter().map(|m| m.content.as_str()).collect();
+        assert!(
+            contents.contains(&"Works at Acme"),
+            "diverse result should be included: {contents:?}"
+        );
     }
 
     #[test]

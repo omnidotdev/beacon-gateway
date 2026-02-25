@@ -199,6 +199,156 @@ pub struct ScheduleInfo {
     pub active: bool,
 }
 
+/// Built-in cron tools wrapper for the tool executor
+///
+/// Provides tool definitions and dispatch for the LLM to schedule,
+/// list, cancel, and inspect cron schedules via Vortex
+pub struct BuiltinCronTools {
+    cron: CronTools,
+}
+
+impl BuiltinCronTools {
+    /// Create a new set of built-in cron tools
+    #[must_use]
+    pub const fn new(cron: CronTools) -> Self {
+        Self { cron }
+    }
+
+    /// Return tool definitions for all cron tools
+    #[must_use]
+    pub fn tool_definitions() -> Vec<synapse_client::ToolDefinition> {
+        vec![
+            synapse_client::ToolDefinition {
+                tool_type: "function".to_owned(),
+                function: synapse_client::FunctionDefinition {
+                    name: "cron_schedule".to_string(),
+                    description: Some(
+                        "Schedule a recurring task. Provide a cron expression, action type, and payload.".to_string(),
+                    ),
+                    parameters: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "cron": {
+                                "type": "string",
+                                "description": "Cron expression (e.g., '0 9 * * MON' for 9 AM every Monday)"
+                            },
+                            "action": {
+                                "type": "string",
+                                "description": "Action type to trigger (e.g., 'remind', 'check_in')"
+                            },
+                            "payload": {
+                                "type": "object",
+                                "description": "Arbitrary data to include in the callback"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "Human-readable description of the schedule"
+                            },
+                            "timezone": {
+                                "type": "string",
+                                "description": "IANA timezone (e.g., 'America/New_York'). Defaults to UTC"
+                            }
+                        },
+                        "required": ["cron", "action", "payload"]
+                    })),
+                },
+            },
+            synapse_client::ToolDefinition {
+                tool_type: "function".to_owned(),
+                function: synapse_client::FunctionDefinition {
+                    name: "cron_list".to_string(),
+                    description: Some(
+                        "List all scheduled tasks with their cron expressions and next run times.".to_string(),
+                    ),
+                    parameters: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {}
+                    })),
+                },
+            },
+            synapse_client::ToolDefinition {
+                tool_type: "function".to_owned(),
+                function: synapse_client::FunctionDefinition {
+                    name: "cron_cancel".to_string(),
+                    description: Some(
+                        "Cancel a scheduled task by its ID.".to_string(),
+                    ),
+                    parameters: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "schedule_id": {
+                                "type": "string",
+                                "description": "ID of the schedule to cancel"
+                            }
+                        },
+                        "required": ["schedule_id"]
+                    })),
+                },
+            },
+            synapse_client::ToolDefinition {
+                tool_type: "function".to_owned(),
+                function: synapse_client::FunctionDefinition {
+                    name: "cron_get".to_string(),
+                    description: Some(
+                        "Get details of a specific scheduled task by its ID.".to_string(),
+                    ),
+                    parameters: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "schedule_id": {
+                                "type": "string",
+                                "description": "ID of the schedule to retrieve"
+                            }
+                        },
+                        "required": ["schedule_id"]
+                    })),
+                },
+            },
+        ]
+    }
+
+    /// Execute a named cron tool
+    ///
+    /// # Errors
+    ///
+    /// Returns error if arguments are malformed or the Vortex API call fails
+    pub async fn execute(&self, name: &str, arguments: &str) -> crate::Result<String> {
+        match name {
+            "cron_schedule" => {
+                let params: ScheduleParams = serde_json::from_str(arguments)
+                    .map_err(|e| crate::Error::Tool(format!("cron_schedule: invalid arguments: {e}")))?;
+                let id = self.cron.schedule_with_options(params).await?;
+                Ok(serde_json::json!({ "status": "scheduled", "id": id }).to_string())
+            }
+            "cron_list" => {
+                let schedules = self.cron.list().await?;
+                Ok(serde_json::json!({ "schedules": schedules }).to_string())
+            }
+            "cron_cancel" => {
+                #[derive(serde::Deserialize)]
+                struct CancelArgs {
+                    schedule_id: String,
+                }
+                let args: CancelArgs = serde_json::from_str(arguments)
+                    .map_err(|e| crate::Error::Tool(format!("cron_cancel: invalid arguments: {e}")))?;
+                self.cron.cancel(&args.schedule_id).await?;
+                Ok(serde_json::json!({ "status": "cancelled", "id": args.schedule_id }).to_string())
+            }
+            "cron_get" => {
+                #[derive(serde::Deserialize)]
+                struct GetArgs {
+                    schedule_id: String,
+                }
+                let args: GetArgs = serde_json::from_str(arguments)
+                    .map_err(|e| crate::Error::Tool(format!("cron_get: invalid arguments: {e}")))?;
+                let info = self.cron.get(&args.schedule_id).await?;
+                Ok(serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
+            }
+            _ => Err(crate::Error::Tool(format!("unknown cron tool: {name}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +367,17 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("sched_123"));
         assert!(json.contains("0 9 * * MON"));
+    }
+
+    #[test]
+    fn cron_tool_definitions_count() {
+        let defs = BuiltinCronTools::tool_definitions();
+        assert_eq!(defs.len(), 4);
+        let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
+        assert!(names.contains(&"cron_schedule"));
+        assert!(names.contains(&"cron_list"));
+        assert!(names.contains(&"cron_cancel"));
+        assert!(names.contains(&"cron_get"));
     }
 
     #[test]
