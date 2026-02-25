@@ -1,248 +1,16 @@
-//! Telegram webhook handler
+//! Telegram message processing (background task)
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, Json};
 use futures::StreamExt as _;
-use serde::{Deserialize, Serialize};
 
+use super::media::extract_media_file_refs;
+use super::types::TelegramMessage;
 use crate::api::ApiState;
 use crate::channels::{Attachment, Channel, IncomingMessage};
 use crate::context::{ContextBuilder, ContextConfig};
 use crate::db::MessageRole;
 use crate::hooks::{HookAction, HookEvent};
-
-/// Telegram Update object (simplified)
-#[derive(Debug, Deserialize)]
-pub struct TelegramUpdate {
-    pub update_id: i64,
-    pub message: Option<TelegramMessage>,
-}
-
-/// Telegram Message object (simplified)
-#[derive(Debug, Deserialize)]
-pub struct TelegramMessage {
-    pub message_id: i64,
-    pub chat: TelegramChat,
-    pub from: Option<TelegramUser>,
-    pub text: Option<String>,
-    pub caption: Option<String>,
-    pub date: i64,
-    /// Photo (array of sizes, use largest)
-    pub photo: Option<Vec<TelegramPhotoSize>>,
-    /// Document/file attachment
-    pub document: Option<TelegramDocument>,
-    /// Audio message
-    pub audio: Option<TelegramAudio>,
-    /// Video message
-    pub video: Option<TelegramVideo>,
-    /// Voice message
-    pub voice: Option<TelegramVoice>,
-    /// Forum topic / thread ID
-    pub message_thread_id: Option<i64>,
-    /// Message this is replying to (for mention gating)
-    pub reply_to_message: Option<Box<TelegramReplyMessage>>,
-}
-
-/// Minimal reply message (only need to know it exists for mention gating)
-#[derive(Debug, Deserialize)]
-pub struct TelegramReplyMessage {
-    pub message_id: i64,
-    pub from: Option<TelegramUser>,
-}
-
-/// Telegram photo size
-#[derive(Debug, Deserialize)]
-pub struct TelegramPhotoSize {
-    pub file_id: String,
-    pub file_unique_id: String,
-    pub width: i32,
-    pub height: i32,
-    pub file_size: Option<i64>,
-}
-
-/// Telegram document
-#[derive(Debug, Deserialize)]
-pub struct TelegramDocument {
-    pub file_id: String,
-    pub file_unique_id: String,
-    pub file_name: Option<String>,
-    pub mime_type: Option<String>,
-    pub file_size: Option<i64>,
-}
-
-/// Telegram audio
-#[derive(Debug, Deserialize)]
-pub struct TelegramAudio {
-    pub file_id: String,
-    pub file_unique_id: String,
-    pub duration: i32,
-    pub performer: Option<String>,
-    pub title: Option<String>,
-    pub file_name: Option<String>,
-    pub mime_type: Option<String>,
-    pub file_size: Option<i64>,
-}
-
-/// Telegram video
-#[derive(Debug, Deserialize)]
-pub struct TelegramVideo {
-    pub file_id: String,
-    pub file_unique_id: String,
-    pub width: i32,
-    pub height: i32,
-    pub duration: i32,
-    pub file_name: Option<String>,
-    pub mime_type: Option<String>,
-    pub file_size: Option<i64>,
-}
-
-/// Telegram voice message
-#[derive(Debug, Deserialize)]
-pub struct TelegramVoice {
-    pub file_id: String,
-    pub file_unique_id: String,
-    pub duration: i32,
-    pub mime_type: Option<String>,
-    pub file_size: Option<i64>,
-}
-
-/// Telegram Chat object
-#[derive(Debug, Deserialize)]
-pub struct TelegramChat {
-    pub id: i64,
-    #[serde(rename = "type")]
-    pub chat_type: String,
-    pub title: Option<String>,
-    pub username: Option<String>,
-    pub first_name: Option<String>,
-}
-
-/// Telegram User object
-#[derive(Debug, Deserialize)]
-pub struct TelegramUser {
-    pub id: i64,
-    pub is_bot: bool,
-    pub first_name: String,
-    pub last_name: Option<String>,
-    pub username: Option<String>,
-}
-
-/// Telegram webhook response
-#[derive(Serialize)]
-pub struct WebhookResponse {
-    pub ok: bool,
-}
-
-/// Handle incoming Telegram update
-///
-/// Returns 200 immediately and processes the message in a background task.
-/// Telegram requires fast webhook responses to avoid retries.
-pub async fn handle_update(
-    State(state): State<Arc<ApiState>>,
-    Json(update): Json<TelegramUpdate>,
-) -> (StatusCode, Json<WebhookResponse>) {
-    tracing::debug!(update_id = update.update_id, "received Telegram update");
-
-    // Dedup check — prevent processing the same update twice
-    {
-        let key = format!("update:{}", update.update_id);
-        let mut dedup = state.telegram_dedup.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if dedup.is_duplicate(&key) {
-            tracing::debug!(update_id = update.update_id, "duplicate Telegram update, skipping");
-            return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-        }
-    }
-
-    let Some(message) = update.message else {
-        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-    };
-
-    // Ignore bot messages
-    if message.from.as_ref().is_some_and(|u| u.is_bot) {
-        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-    }
-
-    // Mention gating: skip group messages that don't mention the bot
-    let is_group_chat = message.chat.chat_type == "group"
-        || message.chat.chat_type == "supergroup";
-
-    if is_group_chat {
-        let chat_id_str = message.chat.id.to_string();
-
-        // Check per-group config first, fall back to global
-        let group_config = state.telegram_group_repo.get(&chat_id_str).ok().flatten();
-
-        // If group is explicitly disabled, skip
-        if group_config.as_ref().is_some_and(|gc| !gc.enabled) {
-            tracing::debug!(chat_id = message.chat.id, "skipping disabled group");
-            return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-        }
-
-        // Determine require_mention: per-group override > global config
-        let require_mention = group_config
-            .as_ref()
-            .and_then(|gc| gc.require_mention)
-            .or_else(|| {
-                state
-                    .telegram_config
-                    .as_ref()
-                    .map(|c| c.require_mention_in_groups)
-            })
-            .unwrap_or(false);
-
-        if require_mention {
-            let text_for_check = message
-                .text
-                .as_deref()
-                .or(message.caption.as_deref())
-                .unwrap_or("");
-
-            let mentioned = state
-                .telegram_config
-                .as_ref()
-                .and_then(|c| c.bot_username.as_ref())
-                .is_some_and(|username| {
-                    text_for_check.contains(&format!("@{username}"))
-                })
-                || message.reply_to_message.is_some();
-
-            if !mentioned {
-                tracing::debug!(
-                    chat_id = message.chat.id,
-                    "skipping group message (bot not mentioned)"
-                );
-                return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-            }
-        }
-    }
-
-    // Get text content — use caption if no text (for media messages)
-    let text = message
-        .text
-        .clone()
-        .or_else(|| message.caption.clone())
-        .unwrap_or_default();
-
-    let has_media = message.photo.is_some()
-        || message.document.is_some()
-        || message.audio.is_some()
-        || message.video.is_some()
-        || message.voice.is_some();
-
-    if text.is_empty() && !has_media {
-        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-    }
-
-    // Spawn processing in background so we return 200 immediately
-    tokio::spawn(async move {
-        if let Err(e) = process_telegram_message(state, message, text, has_media).await {
-            tracing::error!(error = %e, "Telegram message processing failed");
-        }
-    });
-
-    (StatusCode::OK, Json(WebhookResponse { ok: true }))
-}
 
 /// Build an `IncomingMessage` from a Telegram webhook message
 fn telegram_to_incoming(message: &TelegramMessage, content: &str) -> IncomingMessage {
@@ -274,15 +42,26 @@ fn telegram_to_incoming(message: &TelegramMessage, content: &str) -> IncomingMes
     }
 }
 
+/// Accumulated tool call from streaming chunks
+#[derive(Default)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
 /// Process a Telegram message (runs in background task)
 ///
-/// Mirrors the full agent loop from `daemon.rs` — hooks, pairing, tools, events
+/// Mirrors the full agent loop from `daemon.rs` — hooks, pairing, tools, events.
+/// When `account_id` is `Some`, uses the per-account channel from the registry
+/// and scopes session keys by account.
 #[allow(clippy::too_many_lines)]
-async fn process_telegram_message(
+pub(crate) async fn process_telegram_message(
     state: Arc<ApiState>,
     message: TelegramMessage,
     text: String,
     has_media: bool,
+    account_id: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Extract media file IDs for download
     let media_refs = extract_media_file_refs(&message);
@@ -354,7 +133,18 @@ async fn process_telegram_message(
         return Ok(());
     };
 
-    let Some(telegram) = &state.telegram else {
+    // Resolve the Telegram channel — per-account from registry or default
+    let telegram = if let Some(ref aid) = account_id {
+        state
+            .telegram_registry
+            .as_ref()
+            .and_then(|r| r.get(aid))
+            .map(|a| &a.channel)
+    } else {
+        state.telegram.as_ref()
+    };
+
+    let Some(telegram) = telegram else {
         tracing::warn!("no Telegram client configured");
         return Ok(());
     };
@@ -365,6 +155,10 @@ async fn process_telegram_message(
         if !allowed {
             match pm.policy() {
                 crate::security::DmPolicy::Open => {}
+                crate::security::DmPolicy::Disabled => {
+                    tracing::debug!(sender = %msg.sender_id, "DM policy is disabled, ignoring message");
+                    return Ok(());
+                }
                 crate::security::DmPolicy::Allowlist => {
                     tracing::debug!(sender = %msg.sender_id, "sender not on allowlist");
                     return Ok(());
@@ -427,11 +221,15 @@ async fn process_telegram_message(
     // Find or create user and session
     let user = state.user_repo.find_or_create(&msg.sender_id)?;
 
-    let channel_id = msg.channel_id.clone();
+    // Scope session key by account_id for multi-account isolation
+    let session_channel_id = match &account_id {
+        Some(aid) if aid != "default" => format!("{aid}:{}", msg.channel_id),
+        _ => msg.channel_id.clone(),
+    };
     let session = state.session_repo.find_or_create(
         &user.id,
         "telegram",
-        &channel_id,
+        &session_channel_id,
         &state.persona_id,
     )?;
 
@@ -532,18 +330,28 @@ async fn process_telegram_message(
         None
     };
 
-    // Acknowledge message with reaction (per-group > global config)
+    // Resolve per-account config for reaction overrides
+    let account_config = account_id.as_ref().and_then(|aid| {
+        state
+            .telegram_config
+            .as_ref()
+            .map(|c| c.resolve_for_account(aid))
+    });
+
+    // Acknowledge message with reaction (per-group > per-account > global config)
     let reaction_level = group_config
         .as_ref()
         .and_then(|gc| gc.reaction_level.as_deref())
         .and_then(crate::config::ReactionLevel::from_str_value)
+        .or_else(|| account_config.as_ref().map(|c| c.reaction_level))
         .or_else(|| state.telegram_config.as_ref().map(|c| c.reaction_level))
         .unwrap_or(crate::config::ReactionLevel::Ack);
 
-    let global_ack = state
-        .telegram_config
+    let global_ack = account_config
         .as_ref()
-        .map_or("\u{1F440}", |c| &c.ack_reaction);
+        .map(|c| c.ack_reaction.as_str())
+        .or_else(|| state.telegram_config.as_ref().map(|c| c.ack_reaction.as_str()))
+        .unwrap_or("\u{1F440}");
     let ack_emoji = group_config
         .as_ref()
         .and_then(|gc| gc.ack_reaction.as_deref())
@@ -868,12 +676,13 @@ async fn process_telegram_message(
         }
     }
 
-    // Mark complete with reaction (per-group > global config)
+    // Mark complete with reaction (per-group > per-account > global config)
     if reaction_level != crate::config::ReactionLevel::Off {
-        let global_done = state
-            .telegram_config
+        let global_done = account_config
             .as_ref()
-            .map_or("\u{2705}", |c| &c.done_reaction);
+            .map(|c| c.done_reaction.as_str())
+            .or_else(|| state.telegram_config.as_ref().map(|c| c.done_reaction.as_str()))
+            .unwrap_or("\u{2705}");
         let done_emoji = group_config
             .as_ref()
             .and_then(|gc| gc.done_reaction.as_deref())
@@ -908,81 +717,4 @@ async fn process_telegram_message(
     ));
 
     Ok(())
-}
-
-/// Accumulated tool call from streaming chunks
-#[derive(Default)]
-struct PendingToolCall {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
-/// Media file reference for download
-struct WebhookMediaRef {
-    file_id: String,
-    mime_type: String,
-    filename: Option<String>,
-}
-
-/// Extract media file references from a webhook message
-fn extract_media_file_refs(message: &TelegramMessage) -> Vec<WebhookMediaRef> {
-    let mut refs = Vec::new();
-
-    // Photo: pick largest size (last in array)
-    if let Some(photos) = &message.photo {
-        if let Some(largest) = photos.last() {
-            refs.push(WebhookMediaRef {
-                file_id: largest.file_id.clone(),
-                mime_type: "image/jpeg".to_string(),
-                filename: None,
-            });
-        }
-    }
-
-    if let Some(doc) = &message.document {
-        refs.push(WebhookMediaRef {
-            file_id: doc.file_id.clone(),
-            mime_type: doc
-                .mime_type
-                .clone()
-                .unwrap_or_else(|| "application/octet-stream".to_string()),
-            filename: doc.file_name.clone(),
-        });
-    }
-
-    if let Some(voice) = &message.voice {
-        refs.push(WebhookMediaRef {
-            file_id: voice.file_id.clone(),
-            mime_type: voice
-                .mime_type
-                .clone()
-                .unwrap_or_else(|| "audio/ogg".to_string()),
-            filename: None,
-        });
-    }
-
-    if let Some(audio) = &message.audio {
-        refs.push(WebhookMediaRef {
-            file_id: audio.file_id.clone(),
-            mime_type: audio
-                .mime_type
-                .clone()
-                .unwrap_or_else(|| "audio/mpeg".to_string()),
-            filename: audio.file_name.clone(),
-        });
-    }
-
-    if let Some(video) = &message.video {
-        refs.push(WebhookMediaRef {
-            file_id: video.file_id.clone(),
-            mime_type: video
-                .mime_type
-                .clone()
-                .unwrap_or_else(|| "video/mp4".to_string()),
-            filename: video.file_name.clone(),
-        });
-    }
-
-    refs
 }

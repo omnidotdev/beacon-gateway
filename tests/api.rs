@@ -88,6 +88,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         telegram_group_repo,
         cron_tools: None,
         session_compactor: None,
+        telegram_registry: None,
     });
 
     Router::new()

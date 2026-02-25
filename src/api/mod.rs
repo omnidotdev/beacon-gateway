@@ -35,7 +35,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::attachments::AttachmentProcessor;
 use crate::canvas::Canvas;
-use crate::channels::{TeamsChannel, TelegramChannel};
+use crate::channels::{TeamsChannel, TelegramAccountRegistry, TelegramChannel};
 use crate::context::ContextConfig;
 use crate::db::{DbPool, Embedder, Indexer, MemoryRepo, SessionRepo, SkillRepo, TelegramGroupConfigRepo, UserRepo};
 use crate::hooks::HookManager;
@@ -135,6 +135,8 @@ pub struct ApiState {
     pub cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
     /// Session compactor for long conversations
     pub session_compactor: Option<Arc<crate::context::SessionCompactor>>,
+    /// Multi-account Telegram registry
+    pub telegram_registry: Option<TelegramAccountRegistry>,
 }
 
 impl ApiState {
@@ -213,6 +215,7 @@ pub struct ApiServerBuilder {
     telegram_config: Option<crate::config::TelegramConfig>,
     cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
     session_compactor: Option<Arc<crate::context::SessionCompactor>>,
+    telegram_registry: Option<TelegramAccountRegistry>,
 }
 
 impl ApiServerBuilder {
@@ -267,6 +270,7 @@ impl ApiServerBuilder {
             telegram_config: None,
             cron_tools: None,
             session_compactor: None,
+            telegram_registry: None,
         }
     }
 
@@ -470,6 +474,13 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Set the multi-account Telegram registry
+    #[must_use]
+    pub fn telegram_registry(mut self, registry: TelegramAccountRegistry) -> Self {
+        self.telegram_registry = Some(registry);
+        self
+    }
+
     /// Build the API server
     #[must_use]
     pub fn build(self) -> ApiServer {
@@ -598,6 +609,7 @@ impl ApiServerBuilder {
             telegram_group_repo,
             cron_tools: self.cron_tools,
             session_compactor: self.session_compactor,
+            telegram_registry: self.telegram_registry,
         });
 
         ApiServer {

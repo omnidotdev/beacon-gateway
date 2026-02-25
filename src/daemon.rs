@@ -327,7 +327,7 @@ impl Daemon {
             }
         });
 
-        // Initialize Telegram channel if configured
+        // Initialize Telegram channel(s) if configured
         // Webhook mode when BEACON_PUBLIC_URL is set, polling mode otherwise
         let telegram_token = self.config.api_keys.telegram.clone();
         let telegram_public_url = self.config.api_server.public_url.clone();
@@ -346,7 +346,8 @@ impl Daemon {
                         "{}/api/webhooks/telegram",
                         telegram_public_url.as_ref().unwrap().trim_end_matches('/')
                     );
-                    if let Err(e) = tg.set_webhook(&webhook_url).await {
+                    let webhook_secret = self.config.telegram.as_ref().and_then(|c| c.webhook_secret.as_deref());
+                    if let Err(e) = tg.set_webhook(&webhook_url, webhook_secret).await {
                         tracing::error!(error = %e, "Telegram webhook registration failed");
                     }
                     Some(tg)
@@ -367,26 +368,140 @@ impl Daemon {
             None
         };
 
-        // Sync bot commands with Telegram (skill-derived command menu)
-        if let Some(ref tg) = telegram {
-            let skill_commands: Vec<crate::channels::BotCommand> = skill_repo
-                .list_enabled_for_user(None)
-                .unwrap_or_default()
-                .iter()
-                .filter(|s| s.skill.metadata.user_invocable)
-                .filter_map(|s| {
-                    s.command_name.as_ref().map(|cmd| crate::channels::BotCommand {
-                        command: cmd.clone(),
-                        description: s.skill.metadata.description.clone(),
-                    })
+        // Build multi-account registry when additional accounts are configured
+        let telegram_registry = if let Some(ref tg_config) = self.config.telegram {
+            if tg_config.accounts.is_empty() {
+                // Single-bot mode: wrap default channel in a single-entry registry
+                telegram.as_ref().map(|tg| {
+                    use crate::channels::TelegramAccountRegistry;
+                    TelegramAccountRegistry::single(
+                        tg.clone(),
+                        crate::config::TelegramAccountConfig {
+                            bot_token: tg_config.bot_token.clone(),
+                            bot_username: tg_config.bot_username.clone(),
+                            require_mention_in_groups: Some(tg_config.require_mention_in_groups),
+                            reaction_level: Some(tg_config.reaction_level),
+                            ack_reaction: Some(tg_config.ack_reaction.clone()),
+                            done_reaction: Some(tg_config.done_reaction.clone()),
+                            streaming_mode: Some(tg_config.streaming_mode),
+                            text_chunk_limit: Some(tg_config.text_chunk_limit),
+                        },
+                    )
                 })
-                .take(100) // Telegram limit
-                .collect();
+            } else {
+                // Multi-bot mode: create channels for each account
+                use crate::channels::{TelegramAccount, TelegramAccountRegistry};
+                let mut accounts = std::collections::HashMap::new();
 
-            if !skill_commands.is_empty()
-                && let Err(e) = tg.sync_commands(&skill_commands).await
-            {
-                tracing::warn!(error = %e, "failed to sync Telegram bot commands");
+                // Add default account
+                if let Some(ref tg) = telegram {
+                    accounts.insert(
+                        "default".to_string(),
+                        TelegramAccount {
+                            id: "default".to_string(),
+                            channel: tg.clone(),
+                            config: crate::config::TelegramAccountConfig {
+                                bot_token: tg_config.bot_token.clone(),
+                                bot_username: tg_config.bot_username.clone(),
+                                require_mention_in_groups: Some(tg_config.require_mention_in_groups),
+                                reaction_level: Some(tg_config.reaction_level),
+                                ack_reaction: Some(tg_config.ack_reaction.clone()),
+                                done_reaction: Some(tg_config.done_reaction.clone()),
+                                streaming_mode: Some(tg_config.streaming_mode),
+                                text_chunk_limit: Some(tg_config.text_chunk_limit),
+                            },
+                        },
+                    );
+                }
+
+                // Initialize each named account
+                for (acct_id, acct_config) in &tg_config.accounts {
+                    let base_url = telegram_public_url.as_deref();
+                    if let Some(base) = base_url {
+                        // Webhook mode for this account
+                        let mut tg = TelegramChannel::new(acct_config.bot_token.clone());
+                        if let Err(e) = tg.connect().await {
+                            tracing::error!(account = %acct_id, error = %e, "Telegram account connect failed");
+                            continue;
+                        }
+                        let webhook_url = format!(
+                            "{}/api/webhooks/telegram/{acct_id}",
+                            base.trim_end_matches('/')
+                        );
+                        let webhook_secret = self.config.telegram.as_ref().and_then(|c| c.webhook_secret.as_deref());
+                        if let Err(e) = tg.set_webhook(&webhook_url, webhook_secret).await {
+                            tracing::error!(account = %acct_id, error = %e, "Telegram account webhook failed");
+                        }
+                        accounts.insert(
+                            acct_id.clone(),
+                            TelegramAccount {
+                                id: acct_id.clone(),
+                                channel: tg,
+                                config: acct_config.clone(),
+                            },
+                        );
+                    } else {
+                        // Polling mode for this account
+                        let (mut tg, _rx) = TelegramChannel::with_receiver(acct_config.bot_token.clone());
+                        if let Err(e) = tg.connect().await {
+                            tracing::error!(account = %acct_id, error = %e, "Telegram account connect failed");
+                            continue;
+                        }
+                        tg.start_polling(std::time::Duration::from_secs(1));
+                        tracing::info!(account = %acct_id, "Telegram account using polling mode");
+                        accounts.insert(
+                            acct_id.clone(),
+                            TelegramAccount {
+                                id: acct_id.clone(),
+                                channel: tg,
+                                config: acct_config.clone(),
+                            },
+                        );
+                    }
+                }
+
+                if accounts.is_empty() {
+                    None
+                } else {
+                    tracing::info!(
+                        count = accounts.len(),
+                        accounts = ?accounts.keys().collect::<Vec<_>>(),
+                        "Telegram multi-account registry initialized"
+                    );
+                    Some(TelegramAccountRegistry::new(accounts, "default".to_string()))
+                }
+            }
+        } else {
+            None
+        };
+
+        // Sync bot commands with Telegram (skill-derived command menu)
+        let skill_commands: Vec<crate::channels::BotCommand> = skill_repo
+            .list_enabled_for_user(None)
+            .unwrap_or_default()
+            .iter()
+            .filter(|s| s.skill.metadata.user_invocable)
+            .filter_map(|s| {
+                s.command_name.as_ref().map(|cmd| crate::channels::BotCommand {
+                    command: cmd.clone(),
+                    description: s.skill.metadata.description.clone(),
+                })
+            })
+            .take(100) // Telegram limit
+            .collect();
+
+        if !skill_commands.is_empty() {
+            // Sync commands for each account in the registry
+            if let Some(ref registry) = telegram_registry {
+                for (acct_id, acct) in registry.iter() {
+                    if let Err(e) = acct.channel.sync_commands(&skill_commands).await {
+                        tracing::warn!(account = %acct_id, error = %e, "failed to sync Telegram bot commands");
+                    }
+                }
+            } else if let Some(ref tg) = telegram {
+                if let Err(e) = tg.sync_commands(&skill_commands).await {
+                    tracing::warn!(error = %e, "failed to sync Telegram bot commands");
+                }
             }
         }
 
@@ -448,6 +563,9 @@ impl Daemon {
         }
         if let Some(ref tg_config) = self.config.telegram {
             api_builder = api_builder.telegram_config(tg_config.clone());
+        }
+        if let Some(registry) = telegram_registry {
+            api_builder = api_builder.telegram_registry(registry);
         }
         if let Some(ref ct) = cron_tools {
             api_builder = api_builder.cron_tools(Arc::clone(ct));
@@ -1222,6 +1340,15 @@ async fn check_pairing<C: Channel>(
     // Handle based on policy
     match pairing_manager.policy() {
         DmPolicy::Open => PairingResult::Allowed,
+
+        DmPolicy::Disabled => {
+            tracing::debug!(
+                sender = %msg.sender_id,
+                channel = channel_name,
+                "DM policy is disabled, ignoring message"
+            );
+            PairingResult::Denied
+        }
 
         DmPolicy::Allowlist => {
             tracing::debug!(

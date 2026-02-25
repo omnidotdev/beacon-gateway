@@ -10,7 +10,6 @@ mod signal;
 mod slack;
 mod teams;
 mod telegram;
-pub mod telegram_html;
 mod whatsapp;
 
 use async_trait::async_trait;
@@ -23,8 +22,8 @@ pub use signal::{SignalChannel, SignalMessage};
 pub use slack::{SlackChannel, SlackEvent};
 pub use teams::{TeamsActivity, TeamsChannel};
 pub use telegram::{
-    BotCommand, MediaFileRef, TelegramChannel, TelegramRateLimiter, UpdateDedup,
-    extract_update_media_refs, should_skip_group_message,
+    BotCommand, MediaFileRef, TelegramAccount, TelegramAccountRegistry, TelegramChannel,
+    TelegramRateLimiter, UpdateDedup, extract_update_media_refs, should_skip_group_message,
 };
 pub use whatsapp::{WhatsAppChannel, WhatsAppWebhook};
 

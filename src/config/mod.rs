@@ -280,7 +280,7 @@ fn default_personal_dir() -> PathBuf {
 /// Telegram channel configuration
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
-    /// Bot token
+    /// Bot token (default account)
     pub bot_token: String,
     /// Bot username (for `@bot_username` mention detection in groups)
     pub bot_username: Option<String>,
@@ -292,6 +292,26 @@ pub struct TelegramConfig {
     pub ack_reaction: String,
     /// Emoji for marking completion (default: checkmark)
     pub done_reaction: String,
+    /// Secret token for webhook request validation (`X-Telegram-Bot-Api-Secret-Token` header)
+    pub webhook_secret: Option<String>,
+    /// How streaming responses are delivered (Edit or Block mode)
+    pub streaming_mode: StreamingMode,
+    /// Text chunk limit for outgoing messages (default: 4000)
+    pub text_chunk_limit: usize,
+    /// Whether to show reasoning/thinking tags as separate blockquote messages
+    pub show_reasoning: bool,
+    /// API request timeout in seconds (default: 30)
+    pub api_timeout_secs: u64,
+    /// File download timeout in seconds (default: 60)
+    pub download_timeout_secs: u64,
+    /// HTTP proxy URL for Telegram API (HTTP or SOCKS5)
+    pub proxy: Option<String>,
+    /// Log raw update JSON for debugging
+    pub debug_updates: bool,
+    /// Log API response bodies for debugging
+    pub debug_responses: bool,
+    /// Additional bot accounts for multi-account mode
+    pub accounts: std::collections::HashMap<String, TelegramAccountConfig>,
 }
 
 impl TelegramConfig {
@@ -305,6 +325,102 @@ impl TelegramConfig {
             reaction_level: ReactionLevel::Ack,
             ack_reaction: "\u{1F440}".to_string(), // 👀
             done_reaction: "\u{2705}".to_string(),  // ✅
+            webhook_secret: None,
+            streaming_mode: StreamingMode::Edit,
+            text_chunk_limit: 4000,
+            show_reasoning: false,
+            api_timeout_secs: 30,
+            download_timeout_secs: 60,
+            proxy: None,
+            debug_updates: false,
+            debug_responses: false,
+            accounts: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Resolve a config value for a given account, falling back to global defaults
+    #[must_use]
+    pub fn resolve_for_account(&self, account_id: &str) -> ResolvedTelegramAccountConfig {
+        if let Some(acct) = self.accounts.get(account_id) {
+            ResolvedTelegramAccountConfig {
+                bot_token: acct.bot_token.clone(),
+                bot_username: acct.bot_username.clone().or_else(|| self.bot_username.clone()),
+                require_mention_in_groups: acct.require_mention_in_groups.unwrap_or(self.require_mention_in_groups),
+                reaction_level: acct.reaction_level.unwrap_or(self.reaction_level),
+                ack_reaction: acct.ack_reaction.clone().unwrap_or_else(|| self.ack_reaction.clone()),
+                done_reaction: acct.done_reaction.clone().unwrap_or_else(|| self.done_reaction.clone()),
+                streaming_mode: acct.streaming_mode.unwrap_or(self.streaming_mode),
+                text_chunk_limit: acct.text_chunk_limit.unwrap_or(self.text_chunk_limit),
+            }
+        } else {
+            ResolvedTelegramAccountConfig {
+                bot_token: self.bot_token.clone(),
+                bot_username: self.bot_username.clone(),
+                require_mention_in_groups: self.require_mention_in_groups,
+                reaction_level: self.reaction_level,
+                ack_reaction: self.ack_reaction.clone(),
+                done_reaction: self.done_reaction.clone(),
+                streaming_mode: self.streaming_mode,
+                text_chunk_limit: self.text_chunk_limit,
+            }
+        }
+    }
+}
+
+/// Per-account Telegram configuration overrides
+///
+/// All fields except `bot_token` are optional and fall back to the global
+/// `TelegramConfig` defaults when not set.
+#[derive(Debug, Clone)]
+pub struct TelegramAccountConfig {
+    /// Bot token (required per account)
+    pub bot_token: String,
+    /// Bot username (for @mentions in groups)
+    pub bot_username: Option<String>,
+    /// Override global `require_mention_in_groups`
+    pub require_mention_in_groups: Option<bool>,
+    /// Override global reaction level
+    pub reaction_level: Option<ReactionLevel>,
+    /// Override global ack reaction emoji
+    pub ack_reaction: Option<String>,
+    /// Override global done reaction emoji
+    pub done_reaction: Option<String>,
+    /// Override global streaming mode
+    pub streaming_mode: Option<StreamingMode>,
+    /// Override global text chunk limit
+    pub text_chunk_limit: Option<usize>,
+}
+
+/// Fully resolved per-account config (no Optional fields)
+#[derive(Debug, Clone)]
+pub struct ResolvedTelegramAccountConfig {
+    pub bot_token: String,
+    pub bot_username: Option<String>,
+    pub require_mention_in_groups: bool,
+    pub reaction_level: ReactionLevel,
+    pub ack_reaction: String,
+    pub done_reaction: String,
+    pub streaming_mode: StreamingMode,
+    pub text_chunk_limit: usize,
+}
+
+/// How the bot delivers streaming responses
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamingMode {
+    /// Edit a single message in-place as tokens arrive (default)
+    #[default]
+    Edit,
+    /// Send chunks as separate messages at paragraph boundaries
+    Block,
+}
+
+impl StreamingMode {
+    /// Parse from a string value
+    #[must_use]
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "block" | "chunked" => Self::Block,
+            _ => Self::Edit,
         }
     }
 }
@@ -734,6 +850,71 @@ impl Config {
             if let Ok(emoji) = std::env::var("TELEGRAM_DONE_REACTION") {
                 tg.done_reaction = emoji;
             }
+            tg.webhook_secret = std::env::var("TELEGRAM_WEBHOOK_SECRET").ok();
+            tg.streaming_mode = std::env::var("TELEGRAM_STREAMING_MODE")
+                .map(|s| StreamingMode::from_str(&s))
+                .unwrap_or_default();
+            tg.text_chunk_limit = std::env::var("TELEGRAM_TEXT_CHUNK_LIMIT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4000);
+            tg.show_reasoning = std::env::var("TELEGRAM_SHOW_REASONING")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            tg.api_timeout_secs = std::env::var("TELEGRAM_API_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30);
+            tg.download_timeout_secs = std::env::var("TELEGRAM_DOWNLOAD_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60);
+            tg.proxy = std::env::var("TELEGRAM_PROXY").ok();
+            tg.debug_updates = std::env::var("TELEGRAM_DEBUG_UPDATES")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            tg.debug_responses = std::env::var("TELEGRAM_DEBUG_RESPONSES")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+            // Load additional accounts from TELEGRAM_ACCOUNTS (comma-separated IDs)
+            // Each account reads TELEGRAM_{ID}_BOT_TOKEN, TELEGRAM_{ID}_BOT_USERNAME, etc.
+            if let Ok(account_ids) = std::env::var("TELEGRAM_ACCOUNTS") {
+                for raw_id in account_ids.split(',') {
+                    let id = raw_id.trim().to_string();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    let prefix = format!("TELEGRAM_{}", id.to_uppercase());
+                    let Some(bot_token) = std::env::var(format!("{prefix}_BOT_TOKEN")).ok() else {
+                        tracing::warn!(account = %id, "skipping Telegram account: no {prefix}_BOT_TOKEN");
+                        continue;
+                    };
+                    let acct = TelegramAccountConfig {
+                        bot_token,
+                        bot_username: std::env::var(format!("{prefix}_BOT_USERNAME")).ok(),
+                        require_mention_in_groups: std::env::var(format!("{prefix}_REQUIRE_MENTION"))
+                            .ok()
+                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+                        reaction_level: std::env::var(format!("{prefix}_REACTION_LEVEL"))
+                            .ok()
+                            .map(|s| ReactionLevel::from_str(&s)),
+                        ack_reaction: std::env::var(format!("{prefix}_ACK_REACTION")).ok(),
+                        done_reaction: std::env::var(format!("{prefix}_DONE_REACTION")).ok(),
+                        streaming_mode: std::env::var(format!("{prefix}_STREAMING_MODE"))
+                            .ok()
+                            .map(|s| StreamingMode::from_str(&s)),
+                        text_chunk_limit: std::env::var(format!("{prefix}_TEXT_CHUNK_LIMIT"))
+                            .ok()
+                            .and_then(|s| s.parse().ok()),
+                    };
+                    tg.accounts.insert(id, acct);
+                }
+            }
+
             tg
         });
 

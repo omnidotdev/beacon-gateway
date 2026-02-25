@@ -11,7 +11,7 @@ use beacon_gateway::{
         BotCommand, Channel, ChannelCapability, ChannelRegistry, IncomingMessage, OutgoingMessage,
         TelegramChannel, TelegramRateLimiter, UpdateDedup, should_skip_group_message,
     },
-    config::{ReactionLevel, TelegramConfig},
+    config::{ReactionLevel, StreamingMode, TelegramConfig},
     db::{Memory, MemoryCategory, MemoryRepo, MessageRole, SessionRepo, UserRepo},
     tools::loop_detection::{LoopDetector, LoopSeverity},
 };
@@ -590,6 +590,16 @@ fn mention_gating_skips_unmentioned_group_messages() {
         reaction_level: ReactionLevel::Ack,
         ack_reaction: "\u{1F440}".into(),
         done_reaction: "\u{2705}".into(),
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     let msg = make_group_msg("hello everyone");
     assert!(should_skip_group_message(&msg, "supergroup", false, &config));
@@ -604,6 +614,16 @@ fn mention_gating_allows_direct_mentions() {
         reaction_level: ReactionLevel::Ack,
         ack_reaction: "\u{1F440}".into(),
         done_reaction: "\u{2705}".into(),
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     let msg = make_group_msg("hey @mybot what's up");
     assert!(!should_skip_group_message(&msg, "supergroup", false, &config));
@@ -618,6 +638,16 @@ fn mention_gating_allows_replies_to_bot() {
         reaction_level: ReactionLevel::Ack,
         ack_reaction: "\u{1F440}".into(),
         done_reaction: "\u{2705}".into(),
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     let msg = make_group_msg("hello");
     // has_reply = true simulates reply_to_message being present
@@ -633,6 +663,16 @@ fn mention_gating_ignores_in_private_chats() {
         reaction_level: ReactionLevel::Ack,
         ack_reaction: "\u{1F440}".into(),
         done_reaction: "\u{2705}".into(),
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     let msg = make_group_msg("hello");
     // Private chat type → should NOT skip
@@ -650,6 +690,16 @@ fn reaction_level_off_skips_reactions() {
         reaction_level: ReactionLevel::Off,
         ack_reaction: "\u{1F440}".into(),
         done_reaction: "\u{2705}".into(),
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     assert_eq!(config.reaction_level, ReactionLevel::Off);
 }
@@ -663,6 +713,16 @@ fn reaction_level_ack_sends_reactions() {
         reaction_level: ReactionLevel::Ack,
         ack_reaction: "\u{1F440}".into(),
         done_reaction: "\u{2705}".into(),
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     assert_ne!(config.reaction_level, ReactionLevel::Off);
 }
@@ -676,6 +736,16 @@ fn custom_ack_emoji_used() {
         reaction_level: ReactionLevel::Ack,
         ack_reaction: "\u{1F44D}".into(), // 👍
         done_reaction: "\u{1F389}".into(), // 🎉
+        webhook_secret: None,
+        streaming_mode: StreamingMode::Edit,
+        text_chunk_limit: 4000,
+        show_reasoning: false,
+        api_timeout_secs: 30,
+        download_timeout_secs: 60,
+        proxy: None,
+        debug_updates: false,
+        debug_responses: false,
+        accounts: std::collections::HashMap::new(),
     };
     assert_eq!(config.ack_reaction, "\u{1F44D}");
     assert_eq!(config.done_reaction, "\u{1F389}");

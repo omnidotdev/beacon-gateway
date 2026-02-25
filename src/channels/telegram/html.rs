@@ -7,13 +7,13 @@
 /// Convert markdown text to Telegram-compatible HTML.
 ///
 /// Supported conversions:
-/// - `**bold**` / `__bold__` → `<b>bold</b>`
-/// - `*italic*` / `_italic_` → `<i>italic</i>`
-/// - `` `code` `` → `<code>code</code>`
-/// - ` ```lang\nblock\n``` ` → `<pre><code class="language-lang">block</code></pre>`
-/// - `~~strike~~` → `<s>strike</s>`
-/// - `[text](url)` → `<a href="url">text</a>`
-/// - `> blockquote` → `<blockquote>blockquote</blockquote>`
+/// - `**bold**` / `__bold__` -> `<b>bold</b>`
+/// - `*italic*` / `_italic_` -> `<i>italic</i>`
+/// - `` `code` `` -> `<code>code</code>`
+/// - ` ```lang\nblock\n``` ` -> `<pre><code class="language-lang">block</code></pre>`
+/// - `~~strike~~` -> `<s>strike</s>`
+/// - `[text](url)` -> `<a href="url">text</a>`
+/// - `> blockquote` -> `<blockquote>blockquote</blockquote>`
 ///
 /// HTML special characters (`<`, `>`, `&`) are escaped in non-tag content.
 #[must_use]
@@ -200,7 +200,7 @@ fn convert_links(text: &str) -> String {
     result
 }
 
-/// Generic two-char delimiter converter (e.g., `**` → `<b>`, `~~` → `<s>`)
+/// Generic two-char delimiter converter (e.g., `**` -> `<b>`, `~~` -> `<s>`)
 fn convert_delimited(text: &str, delimiter: &str, open_tag: &str, close_tag: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut remaining = text;

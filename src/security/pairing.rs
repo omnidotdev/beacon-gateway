@@ -1,9 +1,10 @@
 //! DM pairing and allowlist security
 //!
-//! Provides three modes of access control for incoming DMs:
+//! Provides four modes of access control for incoming DMs:
 //! - Open: Accept all DMs (no security)
 //! - Pairing: New senders must enter a pairing code to be approved
 //! - Allowlist: Only pre-approved sender IDs can message
+//! - Disabled: Ignore all DMs entirely
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -29,6 +30,9 @@ pub enum DmPolicy {
 
     /// Only pre-approved sender IDs can message
     Allowlist,
+
+    /// Ignore all DMs entirely
+    Disabled,
 }
 
 impl DmPolicy {
@@ -37,6 +41,7 @@ impl DmPolicy {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
+            "disabled" | "off" | "none" => Self::Disabled,
             "pairing" => Self::Pairing,
             "allowlist" | "whitelist" => Self::Allowlist,
             _ => Self::Open,
@@ -50,6 +55,7 @@ impl std::fmt::Display for DmPolicy {
             Self::Open => write!(f, "open"),
             Self::Pairing => write!(f, "pairing"),
             Self::Allowlist => write!(f, "allowlist"),
+            Self::Disabled => write!(f, "disabled"),
         }
     }
 }
@@ -92,6 +98,7 @@ impl PairingManager {
     /// Returns error if database operation fails
     pub fn is_allowed(&self, sender_id: &str, channel: &str) -> Result<bool> {
         match self.policy {
+            DmPolicy::Disabled => Ok(false),
             DmPolicy::Open => Ok(true),
             DmPolicy::Pairing | DmPolicy::Allowlist => self.is_paired(sender_id, channel),
         }
@@ -495,11 +502,24 @@ mod tests {
     }
 
     #[test]
+    fn test_disabled_policy_denies_all() {
+        let manager = setup(DmPolicy::Disabled);
+
+        // Even after adding to allowlist, disabled policy always denies
+        manager.add_to_allowlist("user789", "discord").unwrap();
+        assert!(!manager.is_allowed("user789", "discord").unwrap());
+        assert!(!manager.is_allowed("anyone", "discord").unwrap());
+    }
+
+    #[test]
     fn test_dm_policy_from_str() {
         assert_eq!(DmPolicy::from_str("open"), DmPolicy::Open);
         assert_eq!(DmPolicy::from_str("pairing"), DmPolicy::Pairing);
         assert_eq!(DmPolicy::from_str("allowlist"), DmPolicy::Allowlist);
         assert_eq!(DmPolicy::from_str("whitelist"), DmPolicy::Allowlist);
+        assert_eq!(DmPolicy::from_str("disabled"), DmPolicy::Disabled);
+        assert_eq!(DmPolicy::from_str("off"), DmPolicy::Disabled);
+        assert_eq!(DmPolicy::from_str("none"), DmPolicy::Disabled);
         assert_eq!(DmPolicy::from_str("unknown"), DmPolicy::Open);
     }
 }
