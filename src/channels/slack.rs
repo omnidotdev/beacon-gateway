@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{Attachment, Channel, IncomingMessage, OutgoingMessage};
+use super::{Attachment, Channel, ChannelCapability, IncomingMessage, OutgoingMessage};
 use crate::{Error, Result};
 
 const SLACK_API_URL: &str = "https://slack.com/api";
@@ -187,6 +187,10 @@ impl SlackChannel {
 impl Channel for SlackChannel {
     fn name(&self) -> &'static str {
         "slack"
+    }
+
+    fn capabilities(&self) -> &'static [ChannelCapability] {
+        &[ChannelCapability::Reactions]
     }
 
     async fn connect(&mut self) -> Result<()> {

@@ -2,21 +2,69 @@
 //!
 //! Uses webhooks for receiving messages and Bot API for sending
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
-use super::{Channel, OutgoingMessage};
+use super::{Channel, IncomingMessage, OutgoingMessage};
 use crate::{Error, Result};
 
 /// Telegram Bot API base URL
 const API_BASE: &str = "https://api.telegram.org/bot";
+
+/// Per-chat rate limiter for Telegram API edit operations
+#[derive(Debug, Clone)]
+pub struct TelegramRateLimiter {
+    /// Minimum interval between edits per chat
+    interval: Duration,
+    /// Last edit timestamp per chat
+    last_edit: Arc<Mutex<HashMap<String, Instant>>>,
+}
+
+impl TelegramRateLimiter {
+    /// Create a rate limiter with the given minimum interval between edits per chat
+    #[must_use]
+    pub fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_edit: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Check if an edit is allowed for the given chat. Returns true if allowed.
+    pub fn check(&self, chat_id: &str) -> bool {
+        let mut map = self.last_edit.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        if let Some(last) = map.get(chat_id) {
+            if now.duration_since(*last) < self.interval {
+                return false;
+            }
+        }
+
+        map.insert(chat_id.to_string(), now);
+        true
+    }
+
+    /// Record a 429 response — push the effective interval forward for this chat
+    pub fn backoff(&self, chat_id: &str) {
+        let mut map = self.last_edit.lock().unwrap_or_else(|e| e.into_inner());
+        let future = Instant::now() + self.interval;
+        map.insert(chat_id.to_string(), future);
+    }
+}
 
 /// Telegram channel adapter
 #[derive(Clone)]
 pub struct TelegramChannel {
     token: String,
     client: Client,
+    message_tx: Option<mpsc::Sender<IncomingMessage>>,
     connected: bool,
 }
 
@@ -27,8 +75,85 @@ impl TelegramChannel {
         Self {
             token,
             client: Client::new(),
+            message_tx: None,
             connected: false,
         }
+    }
+
+    /// Create with a message receiver for polling mode
+    ///
+    /// Returns the channel and a receiver for incoming messages
+    #[must_use]
+    pub fn with_receiver(token: String) -> (Self, mpsc::Receiver<IncomingMessage>) {
+        let (tx, rx) = mpsc::channel(100);
+        let channel = Self {
+            token,
+            client: Client::new(),
+            message_tx: Some(tx),
+            connected: false,
+        };
+        (channel, rx)
+    }
+
+    /// Spawn a background task that polls Telegram's getUpdates API
+    ///
+    /// Polls every `interval` and forwards received messages into the mpsc channel.
+    /// Deletes any existing webhook before starting to avoid conflicts.
+    pub fn start_polling(
+        &self,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let token = self.token.clone();
+        let client = self.client.clone();
+        let tx = self
+            .message_tx
+            .clone()
+            .expect("start_polling requires a message_tx (use with_receiver)");
+
+        tokio::spawn(async move {
+            // Delete any existing webhook so getUpdates works
+            let delete_url = format!("{API_BASE}{token}/deleteWebhook");
+            if let Err(e) = client.post(&delete_url).send().await {
+                tracing::warn!(error = %e, "failed to delete Telegram webhook before polling");
+            }
+
+            let mut offset: Option<i64> = None;
+
+            loop {
+                let url = format!("{API_BASE}{token}/getUpdates");
+                let mut params = serde_json::json!({
+                    "timeout": 30,
+                    "allowed_updates": ["message"],
+                });
+                if let Some(off) = offset {
+                    params["offset"] = serde_json::json!(off);
+                }
+
+                match client.post(&url).json(&params).send().await {
+                    Ok(resp) => {
+                        if let Ok(body) = resp.text().await {
+                            if let Ok(updates) = serde_json::from_str::<GetUpdatesResponse>(&body) {
+                                for update in &updates.result {
+                                    // Advance offset past this update
+                                    offset = Some(update.update_id + 1);
+
+                                    if let Some(msg) = update_to_incoming(update) {
+                                        if let Err(e) = tx.send(msg).await {
+                                            tracing::warn!(error = %e, "failed to forward Telegram message");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Telegram getUpdates error");
+                    }
+                }
+
+                tokio::time::sleep(interval).await;
+            }
+        })
     }
 
     /// Send a message to a chat
@@ -266,4 +391,81 @@ pub struct TelegramResponse<T> {
     pub ok: bool,
     pub result: Option<T>,
     pub description: Option<String>,
+}
+
+/// Response from Telegram getUpdates API
+#[derive(Debug, Deserialize)]
+struct GetUpdatesResponse {
+    #[allow(dead_code)]
+    ok: bool,
+    result: Vec<PollingUpdate>,
+}
+
+/// A single update from getUpdates
+#[derive(Debug, Deserialize)]
+struct PollingUpdate {
+    update_id: i64,
+    message: Option<PollingMessage>,
+}
+
+/// Message from a polling update
+#[derive(Debug, Deserialize)]
+struct PollingMessage {
+    message_id: i64,
+    chat: PollingChat,
+    from: Option<PollingUser>,
+    text: Option<String>,
+    caption: Option<String>,
+}
+
+/// Chat info from polling
+#[derive(Debug, Deserialize)]
+struct PollingChat {
+    id: i64,
+    #[serde(rename = "type")]
+    chat_type: String,
+}
+
+/// User info from polling
+#[derive(Debug, Deserialize)]
+struct PollingUser {
+    id: i64,
+    is_bot: bool,
+    first_name: String,
+}
+
+/// Convert a polling update into an `IncomingMessage`
+fn update_to_incoming(update: &PollingUpdate) -> Option<IncomingMessage> {
+    let msg = update.message.as_ref()?;
+    let text = msg.text.clone().or_else(|| msg.caption.clone())?;
+
+    // Skip bot messages
+    if msg.from.as_ref().is_some_and(|u| u.is_bot) {
+        return None;
+    }
+
+    let sender_id = msg
+        .from
+        .as_ref()
+        .map_or_else(|| msg.chat.id.to_string(), |u| u.id.to_string());
+
+    let sender_name = msg
+        .from
+        .as_ref()
+        .map_or_else(|| "Unknown".to_string(), |u| u.first_name.clone());
+
+    let is_dm = msg.chat.chat_type == "private";
+
+    Some(IncomingMessage {
+        id: msg.message_id.to_string(),
+        channel_id: msg.chat.id.to_string(),
+        sender_id,
+        sender_name,
+        content: text,
+        is_dm,
+        reply_to: None,
+        attachments: vec![],
+        thread_id: None,
+        callback_data: None,
+    })
 }

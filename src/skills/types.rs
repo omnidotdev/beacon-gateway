@@ -290,6 +290,93 @@ pub struct InstalledSkill {
     pub skill_env: HashMap<String, String>,
 }
 
+/// Merge nested skill metadata into flat Beacon fields
+///
+/// Checks `metadata.openclaw`, `metadata.clawdbot`, and `metadata.clawdis`
+/// for nested runtime fields and fills in any Beacon fields still at defaults.
+/// Flat fields always win — the merge only fills in defaults.
+pub fn merge_nested_metadata(meta: &mut SkillMetadata, raw: &serde_yaml::Value) {
+    let metadata_map = match raw.get("metadata") {
+        Some(m) => m,
+        None => return,
+    };
+
+    // Check all three nested metadata alias keys
+    let oc = ["openclaw", "clawdbot", "clawdis"]
+        .iter()
+        .find_map(|key| metadata_map.get(*key));
+
+    let oc = match oc {
+        Some(v) => v,
+        None => return,
+    };
+
+    // requires.env → requires_env
+    if meta.requires_env.is_empty() {
+        if let Some(vals) = oc.get("requires").and_then(|r| r.get("env")).and_then(|v| v.as_sequence()) {
+            meta.requires_env = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+    }
+
+    // requires.bins → requires_bins
+    if meta.requires_bins.is_empty() {
+        if let Some(vals) = oc.get("requires").and_then(|r| r.get("bins")).and_then(|v| v.as_sequence()) {
+            meta.requires_bins = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+    }
+
+    // requires.anyBins → requires_any_bins
+    if meta.requires_any_bins.is_empty() {
+        if let Some(vals) = oc.get("requires").and_then(|r| r.get("anyBins")).and_then(|v| v.as_sequence()) {
+            meta.requires_any_bins = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+    }
+
+    // requires.config → requires_config
+    if meta.requires_config.is_empty() {
+        if let Some(vals) = oc.get("requires").and_then(|r| r.get("config")).and_then(|v| v.as_sequence()) {
+            meta.requires_config = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+    }
+
+    // primaryEnv → primary_env
+    if meta.primary_env.is_none() {
+        if let Some(val) = oc.get("primaryEnv").and_then(|v| v.as_str()) {
+            meta.primary_env = Some(val.to_string());
+        }
+    }
+
+    // always (only override if still at default false)
+    if !meta.always {
+        if let Some(val) = oc.get("always").and_then(|v| v.as_bool()) {
+            meta.always = val;
+        }
+    }
+
+    // emoji
+    if meta.emoji.is_none() {
+        if let Some(val) = oc.get("emoji").and_then(|v| v.as_str()) {
+            meta.emoji = Some(val.to_string());
+        }
+    }
+
+    // os
+    if meta.os.is_empty() {
+        if let Some(vals) = oc.get("os").and_then(|v| v.as_sequence()) {
+            meta.os = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+    }
+
+    // install
+    if meta.install.is_empty() {
+        if let Some(install_val) = oc.get("install") {
+            if let Ok(specs) = serde_yaml::from_value::<Vec<SkillInstallSpec>>(install_val.clone()) {
+                meta.install = specs;
+            }
+        }
+    }
+}
+
 /// Sanitize a skill name into a valid command name
 ///
 /// Non-alphanumeric characters become `_`, lowercased, max 32 chars.

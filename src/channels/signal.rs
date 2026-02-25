@@ -2,6 +2,8 @@
 //!
 //! Uses Signal CLI or signal-cli-rest-api for messaging
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
@@ -59,6 +61,50 @@ impl SignalChannel {
             connected: false,
         };
         (channel, rx)
+    }
+
+    /// Spawn a background task that polls the signal-cli-rest-api for new messages
+    ///
+    /// Polls every `interval` and forwards received messages into the `mpsc` channel.
+    /// The returned `JoinHandle` can be used to cancel polling.
+    pub fn start_polling(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let api_url = self.api_url.clone();
+        let sender_number = self.sender_number.clone();
+        let client = self.client.clone();
+        let tx = self
+            .message_tx
+            .clone()
+            .expect("start_polling requires a message_tx (use with_receiver)");
+
+        tokio::spawn(async move {
+            let poller = Self {
+                api_url,
+                sender_number,
+                client,
+                message_tx: Some(tx.clone()),
+                connected: true,
+            };
+
+            loop {
+                match poller.receive().await {
+                    Ok(messages) => {
+                        if !messages.is_empty() {
+                            tracing::info!(count = messages.len(), "Signal: received messages");
+                        }
+                        for msg in &messages {
+                            if let Err(e) = poller.handle_incoming(msg).await {
+                                tracing::warn!(error = %e, "failed to forward Signal message");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Signal poll error");
+                    }
+                }
+
+                tokio::time::sleep(interval).await;
+            }
+        })
     }
 
     /// Process an incoming Signal message
@@ -182,6 +228,9 @@ impl SignalChannel {
 
     /// Receive pending messages
     ///
+    /// Polls signal-cli-rest-api and flattens envelope responses into
+    /// `SignalMessage` values, discarding non-data items (receipts, typing).
+    ///
     /// # Errors
     ///
     /// Returns error if the API request fails
@@ -203,10 +252,15 @@ impl SignalChannel {
             )));
         }
 
-        let messages: Vec<SignalMessage> = response
+        let items: Vec<SignalReceiveItem> = response
             .json()
             .await
             .map_err(|e| Error::Channel(format!("Signal parse error: {e}")))?;
+
+        let messages: Vec<SignalMessage> = items
+            .into_iter()
+            .filter_map(SignalReceiveItem::into_message)
+            .collect();
 
         Ok(messages)
     }
@@ -259,9 +313,48 @@ impl Channel for SignalChannel {
     }
 }
 
-/// A received Signal message
+/// Top-level response item from signal-cli-rest-api `/v1/receive`
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SignalReceiveItem {
+    /// The message envelope
+    pub envelope: SignalEnvelope,
+    /// Account that received the message
+    pub account: Option<String>,
+}
+
+/// Signal message envelope
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalEnvelope {
+    /// Source phone number
+    pub source: Option<String>,
+    /// Source phone number
+    pub source_number: Option<String>,
+    /// Source UUID
+    pub source_uuid: Option<String>,
+    /// Source display name
+    pub source_name: Option<String>,
+    /// Envelope timestamp
+    pub timestamp: Option<i64>,
+    /// Data message (text, attachments, etc.)
+    pub data_message: Option<SignalDataMessage>,
+}
+
+/// Data message payload inside a Signal envelope
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalDataMessage {
+    /// Message text
+    pub message: Option<String>,
+    /// Timestamp
+    pub timestamp: Option<i64>,
+    /// Attachments
+    pub attachments: Option<Vec<SignalAttachment>>,
+}
+
+/// Flattened Signal message for internal use
+#[derive(Debug, Clone)]
 pub struct SignalMessage {
     /// Source phone number
     pub source_number: Option<String>,
@@ -273,6 +366,22 @@ pub struct SignalMessage {
     pub timestamp: Option<i64>,
     /// Attachments
     pub attachments: Option<Vec<SignalAttachment>>,
+}
+
+impl SignalReceiveItem {
+    /// Flatten the envelope into a `SignalMessage`, returning `None` if there's
+    /// no data message (e.g. receipts, typing indicators)
+    #[must_use]
+    pub fn into_message(self) -> Option<SignalMessage> {
+        let data = self.envelope.data_message?;
+        Some(SignalMessage {
+            source_number: self.envelope.source_number.or(self.envelope.source),
+            source_uuid: self.envelope.source_uuid,
+            message: data.message,
+            timestamp: data.timestamp.or(self.envelope.timestamp),
+            attachments: data.attachments,
+        })
+    }
 }
 
 /// Signal attachment from signal-cli-rest-api

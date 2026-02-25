@@ -8,7 +8,8 @@ pub use manifold::ManifoldClient;
 pub use types::{
     InstalledSkill, InstallKind, NodeManager, Skill, SkillFilter, SkillInstallPreferences,
     SkillInstallResult, SkillInstallSpec, SkillMetadata, SkillPriority, SkillSnapshot,
-    SkillSource, SnapshotEntry, deduplicate_command_name, has_binary, sanitize_command_name,
+    SkillSource, SnapshotEntry, deduplicate_command_name, has_binary, merge_nested_metadata,
+    sanitize_command_name,
 };
 
 use std::collections::HashMap;
@@ -346,8 +347,13 @@ fn parse_frontmatter(content: &str) -> Result<(SkillMetadata, String)> {
     let frontmatter = &rest[..end];
     let body = rest[end + 3..].trim().to_string();
 
-    let metadata: SkillMetadata =
+    let mut metadata: SkillMetadata =
         serde_yaml::from_str(frontmatter).map_err(|e| Error::Skill(e.to_string()))?;
+
+    // Merge nested metadata (fills defaults only, flat fields win)
+    if let Ok(raw) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
+        types::merge_nested_metadata(&mut metadata, &raw);
+    }
 
     Ok((metadata, body))
 }
@@ -485,5 +491,112 @@ This is the content.
     fn parse_frontmatter_missing_fails() {
         let content = "# No frontmatter";
         assert!(parse_frontmatter(content).is_err());
+    }
+
+    #[test]
+    fn parse_nested_metadata_format() {
+        let content = r#"---
+name: nested-skill
+description: A skill with nested metadata
+metadata:
+  openclaw:
+    requires:
+      env: [OPENAI_API_KEY]
+      bins: [jq]
+      anyBins: [gh, hub]
+      config: [voice.enabled]
+    primaryEnv: OPENAI_API_KEY
+    always: true
+    emoji: "\U0001F916"
+    os: [linux, darwin]
+    install:
+      - kind: brew
+        formula: jq
+        bins: [jq]
+---
+
+Nested skill body.
+"#;
+        let (meta, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(meta.name, "nested-skill");
+        assert_eq!(meta.requires_env, vec!["OPENAI_API_KEY"]);
+        assert_eq!(meta.requires_bins, vec!["jq"]);
+        assert_eq!(meta.requires_any_bins, vec!["gh", "hub"]);
+        assert_eq!(meta.requires_config, vec!["voice.enabled"]);
+        assert_eq!(meta.primary_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert!(meta.always);
+        assert_eq!(meta.emoji.as_deref(), Some("\u{1F916}"));
+        assert_eq!(meta.os, vec!["linux", "darwin"]);
+        assert_eq!(meta.install.len(), 1);
+        assert_eq!(meta.install[0].formula.as_deref(), Some("jq"));
+        assert!(body.contains("Nested skill body."));
+    }
+
+    #[test]
+    fn parse_nested_alias_clawdbot() {
+        let content = "---\nname: alias-skill\ndescription: Uses clawdbot alias\nmetadata:\n  clawdbot:\n    requires:\n      env: [MY_TOKEN]\n    emoji: \"\u{1F43E}\"\n---\n\nBody.\n";
+        let (meta, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(meta.requires_env, vec!["MY_TOKEN"]);
+        assert_eq!(meta.emoji.as_deref(), Some("\u{1F43E}"));
+    }
+
+    #[test]
+    fn flat_fields_override_nested() {
+        let content = r"---
+name: override-test
+description: Flat wins over nested
+requires_env: [FLAT_TOKEN]
+emoji: flat-emoji
+metadata:
+  openclaw:
+    requires:
+      env: [NESTED_TOKEN]
+    emoji: nested-emoji
+---
+
+Body.
+";
+        let (meta, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(meta.requires_env, vec!["FLAT_TOKEN"]);
+        assert_eq!(meta.emoji.as_deref(), Some("flat-emoji"));
+    }
+
+    #[test]
+    fn mixed_flat_and_nested() {
+        let content = r"---
+name: mixed-test
+description: Some flat some nested
+always: true
+metadata:
+  openclaw:
+    requires:
+      env: [NESTED_TOKEN]
+      bins: [curl]
+    primaryEnv: NESTED_TOKEN
+---
+
+Body.
+";
+        let (meta, _) = parse_frontmatter(content).unwrap();
+        // `always` set flat
+        assert!(meta.always);
+        // These come from nested
+        assert_eq!(meta.requires_env, vec!["NESTED_TOKEN"]);
+        assert_eq!(meta.requires_bins, vec!["curl"]);
+        assert_eq!(meta.primary_env.as_deref(), Some("NESTED_TOKEN"));
+    }
+
+    #[test]
+    fn pure_beacon_format_unchanged() {
+        let content = "---\nname: beacon-skill\ndescription: A pure Beacon skill\nrequires_env: [MY_KEY]\nrequires_bins: [git]\nprimary_env: MY_KEY\nalways: true\nemoji: \"\u{1F680}\"\nos: [linux]\n---\n\nBeacon body.\n";
+        let (meta, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(meta.name, "beacon-skill");
+        assert_eq!(meta.requires_env, vec!["MY_KEY"]);
+        assert_eq!(meta.requires_bins, vec!["git"]);
+        assert_eq!(meta.primary_env.as_deref(), Some("MY_KEY"));
+        assert!(meta.always);
+        assert_eq!(meta.emoji.as_deref(), Some("\u{1F680}"));
+        assert_eq!(meta.os, vec!["linux"]);
+        assert!(body.contains("Beacon body."));
     }
 }

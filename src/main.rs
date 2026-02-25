@@ -12,9 +12,9 @@ use beacon_gateway::{Config, Daemon};
 #[derive(Parser)]
 #[command(name = "beacon", version, about)]
 struct Cli {
-    /// Persona to use (e.g., "orin")
-    #[arg(short, long, env = "BEACON_PERSONA", default_value = "orin")]
-    persona: String,
+    /// Persona to use (e.g., "orin"); omit or pass "" for no persona
+    #[arg(short, long, env = "BEACON_PERSONA")]
+    persona: Option<String>,
 
     /// Port to listen on
     #[arg(long, env = "BEACON_PORT", default_value = "18789")]
@@ -113,15 +113,17 @@ async fn main() -> ExitCode {
 
 #[allow(clippy::future_not_send)]
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    let persona_ref = cli.persona.as_deref();
+
     // Handle subcommands
     if let Some(cmd) = cli.command {
         return match cmd {
             Command::TestMic { duration } => test_mic(duration).await,
             Command::TestSpeaker => test_speaker().await,
-            Command::TestTts { text } => test_tts(&cli.persona, &text).await,
-            Command::SetLifeJson { user, path } => set_life_json(&cli.persona, &user, &path),
-            Command::GetLifeJson { user } => get_life_json(&cli.persona, &user),
-            Command::Install => cmd_install(&cli.persona, cli.port),
+            Command::TestTts { text } => test_tts(persona_ref, &text).await,
+            Command::SetLifeJson { user, path } => set_life_json(persona_ref, &user, &path),
+            Command::GetLifeJson { user } => get_life_json(persona_ref, &user),
+            Command::Install => cmd_install(persona_ref, cli.port),
             Command::Uninstall => cmd_uninstall(),
             Command::Status => cmd_status(),
             Command::Logs { lines, follow } => cmd_logs(lines, follow),
@@ -130,14 +132,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     tracing::info!(
-        persona = %cli.persona,
+        persona = ?cli.persona,
         port = cli.port,
         disable_voice = cli.disable_voice,
         "starting beacon gateway"
     );
 
     // Load configuration
-    let config = Config::load_with_options(&cli.persona, cli.disable_voice)?;
+    let config = Config::load_with_options(persona_ref, cli.disable_voice)?;
     tracing::debug!(?config, "loaded configuration");
 
     let voice_enabled = config.voice.enabled;
@@ -263,7 +265,7 @@ async fn test_speaker() -> anyhow::Result<()> {
 }
 
 /// Test TTS output via Synapse
-async fn test_tts(persona: &str, text: &str) -> anyhow::Result<()> {
+async fn test_tts(persona: Option<&str>, text: &str) -> anyhow::Result<()> {
     println!("Testing TTS with text: \"{text}\"\n");
 
     let config = Config::load(persona)?;
@@ -318,7 +320,7 @@ async fn test_tts(persona: &str, text: &str) -> anyhow::Result<()> {
 }
 
 /// Set a user's life.json path
-fn set_life_json(persona: &str, user_id: &str, path: &str) -> anyhow::Result<()> {
+fn set_life_json(persona: Option<&str>, user_id: &str, path: &str) -> anyhow::Result<()> {
     let config = Config::load(persona)?;
     let db_path = config.data_dir.join("beacon.db");
     let pool = db::init(&db_path)?;
@@ -345,7 +347,7 @@ fn set_life_json(persona: &str, user_id: &str, path: &str) -> anyhow::Result<()>
 }
 
 /// Get a user's life.json path
-fn get_life_json(persona: &str, user_id: &str) -> anyhow::Result<()> {
+fn get_life_json(persona: Option<&str>, user_id: &str) -> anyhow::Result<()> {
     let config = Config::load(persona)?;
     let db_path = config.data_dir.join("beacon.db");
     let pool = db::init(&db_path)?;
@@ -363,11 +365,11 @@ fn get_life_json(persona: &str, user_id: &str) -> anyhow::Result<()> {
 }
 
 /// Install beacon as a system service
-fn cmd_install(persona: &str, port: u16) -> anyhow::Result<()> {
+fn cmd_install(persona: Option<&str>, port: u16) -> anyhow::Result<()> {
     let binary = std::env::current_exe()?;
     let config = beacon_gateway::lifecycle::ServiceConfig {
         binary_path: binary,
-        persona: persona.to_string(),
+        persona: persona.unwrap_or_default().to_string(),
         port,
         extra_args: Vec::new(),
     };

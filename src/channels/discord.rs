@@ -10,7 +10,7 @@ use serenity::all::{
 };
 use tokio::sync::{Mutex, mpsc};
 
-use super::{Attachment, Channel, IncomingMessage, OutgoingMessage};
+use super::{Attachment, Channel, ChannelCapability, IncomingMessage, OutgoingMessage};
 use crate::{Error, Result};
 
 /// Discord channel adapter
@@ -62,6 +62,10 @@ impl DiscordChannel {
 impl Channel for DiscordChannel {
     fn name(&self) -> &'static str {
         "discord"
+    }
+
+    fn capabilities(&self) -> &'static [ChannelCapability] {
+        &[ChannelCapability::Reactions]
     }
 
     async fn connect(&mut self) -> Result<()> {

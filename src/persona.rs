@@ -450,6 +450,31 @@ fn default_life_json_write() -> Vec<String> {
     vec!["assistants".to_string()]
 }
 
+impl Default for Persona {
+    fn default() -> Self {
+        Self {
+            schema: None,
+            version: "1.0.0".to_string(),
+            identity: Identity {
+                id: "assistant".to_string(),
+                name: "Assistant".to_string(),
+                tagline: None,
+                icon: None,
+                entity_type: Some(EntityType::Assistant),
+                description: None,
+                url: None,
+            },
+            voice: None,
+            personality: None,
+            branding: None,
+            capabilities: None,
+            memory: MemoryConfig::default(),
+            context: ContextConfig::default(),
+            knowledge: KnowledgeConfig::default(),
+        }
+    }
+}
+
 // Convenience methods
 
 impl Persona {
@@ -550,5 +575,28 @@ impl Persona {
     #[must_use]
     pub fn has_knowledge(&self) -> bool {
         !self.knowledge.inline.is_empty() || !self.knowledge.packs.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_persona_has_assistant_identity() {
+        let p = Persona::default();
+        assert_eq!(p.id(), "assistant");
+        assert_eq!(p.name(), "Assistant");
+        assert_eq!(p.identity.entity_type, Some(EntityType::Assistant));
+        assert_eq!(p.version, "1.0.0");
+    }
+
+    #[test]
+    fn default_persona_has_no_voice() {
+        let p = Persona::default();
+        assert_eq!(p.wake_word(), None);
+        assert!(!p.is_voice_enabled());
+        assert_eq!(p.tts_voice(), None);
+        assert_eq!(p.system_prompt(), None);
     }
 }

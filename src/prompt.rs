@@ -192,7 +192,11 @@ pub fn build_system_prompt_with_budget(
     }
 
     // 2. Identity / persona
-    if persona_prompt.is_empty() {
+    if persona_name.is_empty() {
+        sections.push(
+            "You are a helpful assistant. Keep responses concise and conversational.".to_string(),
+        );
+    } else if persona_prompt.is_empty() {
         sections.push(format!(
             "You are {persona_name}. Keep responses concise and conversational."
         ));
@@ -259,7 +263,11 @@ pub fn build_system_prompt(
     }
 
     // 2. Identity / persona
-    if persona_prompt.is_empty() {
+    if persona_name.is_empty() {
+        sections.push(
+            "You are a helpful assistant. Keep responses concise and conversational.".to_string(),
+        );
+    } else if persona_prompt.is_empty() {
         sections.push(format!(
             "You are {persona_name}. Keep responses concise and conversational."
         ));
@@ -359,9 +367,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_persona_uses_fallback() {
+    fn empty_prompt_uses_name_fallback() {
         let result = build_system_prompt("Orin", "", &[]);
         assert!(result.contains("You are Orin. Keep responses concise"));
+    }
+
+    #[test]
+    fn empty_persona_name_uses_generic_fallback() {
+        let result = build_system_prompt("", "", &[]);
+        assert!(result.contains("You are a helpful assistant"));
+        assert!(!result.contains("Your name is"));
+
+        let result_with_budget = build_system_prompt_with_budget(
+            "",
+            "",
+            &[],
+            &PromptBudget {
+                max_skills: 50,
+                max_chars: 30_000,
+                voice_enabled: false,
+            },
+        );
+        assert!(result_with_budget.contains("You are a helpful assistant"));
+        assert!(!result_with_budget.contains("Your name is"));
     }
 
     #[test]

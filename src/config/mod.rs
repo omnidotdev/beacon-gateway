@@ -96,6 +96,10 @@ pub struct ApiServerConfig {
     /// API key for admin endpoints (from `BEACON_API_KEY` env)
     pub api_key: Option<String>,
 
+    /// Public URL for webhook registration (from `BEACON_PUBLIC_URL` env)
+    /// When set, Telegram uses webhook mode; otherwise falls back to polling
+    pub public_url: Option<String>,
+
     /// Manifold registry URL for skills marketplace
     pub manifold_url: Option<String>,
 
@@ -306,24 +310,40 @@ pub fn persona_cache_dir() -> PathBuf {
 impl Config {
     /// Load configuration for a persona
     ///
+    /// Pass `None` or `Some("")` to run without a persona (uses `Persona::default()`).
+    ///
     /// # Errors
     ///
     /// Returns error if persona file cannot be loaded
-    pub fn load(persona_id: &str) -> Result<Self> {
+    pub fn load(persona_id: Option<&str>) -> Result<Self> {
         Self::load_with_options(persona_id, false)
     }
 
     /// Load configuration with explicit voice disable option
     ///
+    /// Pass `None` or `Some("")` for `persona_id` to run without a persona.
+    ///
     /// # Errors
     ///
     /// Returns error if persona file cannot be loaded
-    pub fn load_with_options(persona_id: &str, disable_voice: bool) -> Result<Self> {
+    pub fn load_with_options(persona_id: Option<&str>, disable_voice: bool) -> Result<Self> {
         // Load optional TOML config file (env > toml > default)
         let fc = file::load_config_file();
 
-        // Load persona with priority: env override → Manifold → cache → embedded
-        let persona = Self::load_persona_with_priority(persona_id)?;
+        // Resolve effective persona ID: CLI arg > TOML config > None
+        let effective_id = persona_id
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                fc.persona
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+            });
+
+        // Load persona (or use default for no-persona mode)
+        let persona = match effective_id {
+            Some(id) => Self::load_persona_with_priority(id)?,
+            None => Persona::default(),
+        };
         let cache_dir = persona_cache_dir();
 
         // Load API keys (env > toml > None)
@@ -371,6 +391,7 @@ impl Config {
                 .or(fc.server.port)
                 .unwrap_or(18790),
             api_key: std::env::var("BEACON_API_KEY").ok(),
+            public_url: std::env::var("BEACON_PUBLIC_URL").ok(),
             manifold_url: std::env::var("MANIFOLD_URL").ok(),
             vortex_url: std::env::var("VORTEX_URL").ok(),
             static_dir: std::env::var("BEACON_STATIC_DIR").ok().map(PathBuf::from),
@@ -382,7 +403,7 @@ impl Config {
         let voice_enabled = if disable_voice {
             false
         } else {
-            fc.voice.enabled.unwrap_or(true)
+            fc.voice.enabled.unwrap_or(true) && persona.is_voice_enabled()
         };
         let voice = VoiceConfig {
             enabled: voice_enabled,

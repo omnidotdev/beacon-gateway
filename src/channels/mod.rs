@@ -21,7 +21,7 @@ pub use matrix::MatrixChannel;
 pub use signal::{SignalChannel, SignalMessage};
 pub use slack::{SlackChannel, SlackEvent};
 pub use teams::{TeamsActivity, TeamsChannel};
-pub use telegram::TelegramChannel;
+pub use telegram::{TelegramChannel, TelegramRateLimiter};
 pub use whatsapp::{WhatsAppChannel, WhatsAppWebhook};
 
 use crate::Result;
@@ -356,6 +356,52 @@ pub trait Channel: Send + Sync {
         _message_id: &str,
         _emoji: &str,
     ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Send initial streaming message, returns the platform message ID
+    async fn send_streaming_start(
+        &self,
+        _channel_id: &str,
+        _initial_text: &str,
+        _reply_to: Option<&str>,
+        _thread_id: Option<&str>,
+    ) -> Result<String> {
+        Err(crate::Error::Channel("streaming not supported".into()))
+    }
+
+    /// Update a streaming message with accumulated text
+    async fn send_streaming_update(
+        &self,
+        _channel_id: &str,
+        _message_id: &str,
+        _text: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Finalize a streaming message
+    async fn send_streaming_end(
+        &self,
+        _channel_id: &str,
+        _message_id: &str,
+        _final_text: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Edit a previously sent message
+    async fn edit_message(
+        &self,
+        _channel_id: &str,
+        _message_id: &str,
+        _new_content: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Delete a previously sent message
+    async fn delete_message(&self, _channel_id: &str, _message_id: &str) -> Result<()> {
         Ok(())
     }
 }

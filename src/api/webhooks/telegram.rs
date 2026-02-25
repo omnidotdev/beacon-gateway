@@ -6,6 +6,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiState;
+use crate::channels::Channel;
 use crate::context::ContextBuilder;
 use crate::db::MessageRole;
 
@@ -121,41 +122,62 @@ pub struct WebhookResponse {
 }
 
 /// Handle incoming Telegram update
-#[allow(clippy::too_many_lines)]
+///
+/// Returns 200 immediately and processes the message in a background task.
+/// Telegram requires fast webhook responses to avoid retries.
 pub async fn handle_update(
     State(state): State<Arc<ApiState>>,
     Json(update): Json<TelegramUpdate>,
 ) -> (StatusCode, Json<WebhookResponse>) {
     tracing::debug!(update_id = update.update_id, "received Telegram update");
 
-    let Some(message) = &update.message else {
+    let Some(message) = update.message else {
         return (StatusCode::OK, Json(WebhookResponse { ok: true }));
     };
 
-    // Get text content - use caption if no text (for media messages)
+    // Ignore bot messages
+    if message.from.as_ref().is_some_and(|u| u.is_bot) {
+        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
+    }
+
+    // Get text content — use caption if no text (for media messages)
     let text = message
         .text
         .clone()
         .or_else(|| message.caption.clone())
         .unwrap_or_default();
 
-    // Check if this is a media message with attachments
-    let has_photo = message.photo.is_some();
-    let has_document = message.document.is_some();
-    let has_audio = message.audio.is_some();
-    let has_video = message.video.is_some();
-    let has_voice = message.voice.is_some();
-    let has_media = has_photo || has_document || has_audio || has_video || has_voice;
+    let has_media = message.photo.is_some()
+        || message.document.is_some()
+        || message.audio.is_some()
+        || message.video.is_some()
+        || message.voice.is_some();
 
-    // Skip if no text and no media
     if text.is_empty() && !has_media {
         return (StatusCode::OK, Json(WebhookResponse { ok: true }));
     }
 
+    // Spawn processing in background so we return 200 immediately
+    tokio::spawn(async move {
+        if let Err(e) = process_telegram_message(state, message, text, has_media).await {
+            tracing::error!(error = %e, "Telegram message processing failed");
+        }
+    });
+
+    (StatusCode::OK, Json(WebhookResponse { ok: true }))
+}
+
+/// Process a Telegram message (runs in background task)
+async fn process_telegram_message(
+    state: Arc<ApiState>,
+    message: TelegramMessage,
+    text: String,
+    has_media: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Build content with attachment metadata
     let content = if has_media {
         let mut parts = vec![text.clone()];
-        if has_photo {
+        if message.photo.is_some() {
             parts.push("[Photo attached]".to_string());
         }
         if let Some(doc) = &message.document {
@@ -170,21 +192,16 @@ pub async fn handle_update(
                 audio.title.as_deref().unwrap_or("audio")
             ));
         }
-        if has_video {
+        if message.video.is_some() {
             parts.push("[Video attached]".to_string());
         }
-        if has_voice {
+        if message.voice.is_some() {
             parts.push("[Voice message]".to_string());
         }
         parts.join("\n")
     } else {
-        text.clone()
+        text
     };
-
-    // Ignore bot messages
-    if message.from.as_ref().is_some_and(|u| u.is_bot) {
-        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-    }
 
     let sender_id = message
         .from
@@ -199,44 +216,33 @@ pub async fn handle_update(
     tracing::info!(
         chat_id = message.chat.id,
         from = %sender_name,
-        content = %content,
         has_media,
         "Telegram message received"
     );
 
-    // Check if we have Synapse configured
     let Some(synapse) = &state.synapse else {
         tracing::warn!("no Synapse client configured for Telegram webhook");
-        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
+        return Ok(());
     };
 
     let Some(telegram) = &state.telegram else {
         tracing::warn!("no Telegram client configured");
-        return (StatusCode::OK, Json(WebhookResponse { ok: true }));
+        return Ok(());
     };
+
+    // Send typing indicator while we process
+    let _ = telegram.send_typing(&message.chat.id.to_string()).await;
 
     // Find or create user and session
-    let user = match state.user_repo.find_or_create(&sender_id) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to find/create user");
-            return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-        }
-    };
+    let user = state.user_repo.find_or_create(&sender_id)?;
 
     let channel_id = message.chat.id.to_string();
-    let session = match state.session_repo.find_or_create(
+    let session = state.session_repo.find_or_create(
         &user.id,
         "telegram",
         &channel_id,
         &state.persona_id,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to find/create session");
-            return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-        }
-    };
+    )?;
 
     // Store user message
     if let Err(e) = state
@@ -270,7 +276,6 @@ pub async fn handle_update(
         );
     }
 
-    // Build augmented prompt with context and history
     let augmented_prompt = built_context
         .as_ref()
         .map_or_else(|_| content.clone(), |ctx| ctx.format_prompt(&content));
@@ -312,9 +317,12 @@ pub async fn handle_update(
     }
 
     // Send response via Telegram (reply to original message)
-    if let Err(e) = telegram.send_message(message.chat.id, &response, Some(message.message_id)).await {
+    if let Err(e) = telegram
+        .send_message(message.chat.id, &response, Some(message.message_id))
+        .await
+    {
         tracing::error!(error = %e, "failed to send Telegram response");
     }
 
-    (StatusCode::OK, Json(WebhookResponse { ok: true }))
+    Ok(())
 }

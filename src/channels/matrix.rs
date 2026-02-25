@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{Attachment, AttachmentKind, Channel, IncomingMessage, OutgoingMessage};
+use super::{Attachment, AttachmentKind, Channel, ChannelCapability, IncomingMessage, OutgoingMessage};
 use crate::{Error, Result};
 
 /// Matrix channel adapter
@@ -428,6 +428,10 @@ impl MatrixChannel {
 impl Channel for MatrixChannel {
     fn name(&self) -> &'static str {
         "matrix"
+    }
+
+    fn capabilities(&self) -> &'static [ChannelCapability] {
+        &[ChannelCapability::Reactions]
     }
 
     async fn connect(&mut self) -> Result<()> {

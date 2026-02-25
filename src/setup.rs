@@ -28,19 +28,31 @@ pub fn run_setup() -> anyhow::Result<()> {
 
     // 1. Persona selection
     let personas = Config::embedded_personas();
-    let persona_labels: Vec<&str> = personas.iter().map(|(id, _)| *id).collect();
+    let mut persona_labels: Vec<&str> = vec!["(none)"];
+    persona_labels.extend(personas.iter().map(|(id, _)| *id));
+
     let default_persona = existing
         .persona
         .as_deref()
-        .and_then(|p| persona_labels.iter().position(|&l| l == p))
-        .unwrap_or(0);
+        .and_then(|p| {
+            if p.is_empty() {
+                Some(0) // "(none)" is at index 0
+            } else {
+                persona_labels.iter().position(|&l| l == p)
+            }
+        })
+        .unwrap_or(1); // Default to first real persona
 
     let persona_idx = Select::new()
         .with_prompt("Select a persona")
         .items(&persona_labels)
         .default(default_persona)
         .interact()?;
-    let persona = persona_labels[persona_idx].to_string();
+    let persona = if persona_idx == 0 {
+        String::new() // "(none)" selected
+    } else {
+        persona_labels[persona_idx].to_string()
+    };
 
     // 2. LLM provider + API key
     let providers = ["Anthropic", "OpenAI", "OpenRouter"];

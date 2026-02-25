@@ -310,13 +310,40 @@ impl Daemon {
         });
 
         // Initialize Telegram channel if configured
-        let telegram = if let Some(token) = &self.config.api_keys.telegram {
-            let mut tg = TelegramChannel::new(token.clone());
-            if let Err(e) = tg.connect().await {
-                tracing::error!(error = %e, "Telegram connect failed");
-                None
+        // Webhook mode when BEACON_PUBLIC_URL is set, polling mode otherwise
+        let telegram_token = self.config.api_keys.telegram.clone();
+        let telegram_public_url = self.config.api_server.public_url.clone();
+        let mut telegram_polling_rx: Option<tokio::sync::mpsc::Receiver<IncomingMessage>> = None;
+
+        let telegram = if let Some(token) = &telegram_token {
+            if telegram_public_url.is_some() {
+                // Webhook mode: create simple channel for API state
+                let mut tg = TelegramChannel::new(token.clone());
+                if let Err(e) = tg.connect().await {
+                    tracing::error!(error = %e, "Telegram connect failed");
+                    None
+                } else {
+                    // Auto-register webhook
+                    let webhook_url = format!(
+                        "{}/api/webhooks/telegram",
+                        telegram_public_url.as_ref().unwrap().trim_end_matches('/')
+                    );
+                    if let Err(e) = tg.set_webhook(&webhook_url).await {
+                        tracing::error!(error = %e, "Telegram webhook registration failed");
+                    }
+                    Some(tg)
+                }
             } else {
-                Some(tg)
+                // Polling mode: create channel with receiver
+                let (mut tg, rx) = TelegramChannel::with_receiver(token.clone());
+                if let Err(e) = tg.connect().await {
+                    tracing::error!(error = %e, "Telegram connect failed");
+                    None
+                } else {
+                    tracing::info!("Telegram: no BEACON_PUBLIC_URL, using polling mode");
+                    telegram_polling_rx = Some(rx);
+                    Some(tg)
+                }
             }
         } else {
             None
@@ -373,6 +400,8 @@ impl Daemon {
             .llm_max_tokens(MAX_TOKENS)
             .system_prompt(system_prompt.clone());
 
+        // Clone for API state; keep original for polling handler
+        let telegram_for_polling = telegram.clone();
         if let Some(tg) = telegram {
             api_builder = api_builder.telegram(tg);
         }
@@ -417,6 +446,8 @@ impl Daemon {
                 Arc::clone(&hook_manager),
                 plugin_manager.clone(),
                 all_knowledge,
+                telegram_for_polling,
+                telegram_polling_rx,
             )
             .await;
         } else {
@@ -450,7 +481,7 @@ impl Daemon {
     }
 
     /// Start channel message handlers
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn start_channels(
         &self,
         synapse: Arc<SynapseClient>,
@@ -463,6 +494,8 @@ impl Daemon {
         hook_manager: Arc<HookManager>,
         plugin_manager: crate::api::plugins::SharedPluginManager,
         knowledge_chunks: Vec<crate::persona::KnowledgeChunk>,
+        telegram: Option<TelegramChannel>,
+        telegram_polling_rx: Option<tokio::sync::mpsc::Receiver<IncomingMessage>>,
     ) {
         let persona_id = self.config.persona.id().to_string();
         let persona_system_prompt = self.config.persona.system_prompt().map(String::from);
@@ -626,6 +659,9 @@ impl Daemon {
             if let Err(e) = signal.connect().await {
                 tracing::error!(error = %e, "Signal connect failed");
             } else {
+                // Spawn polling loop to fetch incoming messages
+                signal.start_polling(std::time::Duration::from_secs(5));
+
                 let synapse = Arc::clone(&synapse);
                 let model_id = model_id.clone();
                 let system_prompt = system_prompt.clone();
@@ -881,6 +917,50 @@ impl Daemon {
                     .await;
                 });
             }
+        }
+
+        // Telegram (polling mode — only when no public URL for webhooks)
+        if let (Some(tg), Some(rx)) = (telegram, telegram_polling_rx) {
+            tg.start_polling(std::time::Duration::from_secs(1));
+
+            let synapse = Arc::clone(&synapse);
+            let model_id = model_id.clone();
+            let system_prompt = system_prompt.clone();
+            let session_repo = SessionRepo::new(self.db.clone());
+            let user_repo = UserRepo::new(self.db.clone());
+            let memory_repo = db::MemoryRepo::new(self.db.clone());
+            let persona_id = persona_id.clone();
+            let persona_system_prompt = persona_system_prompt.clone();
+            let policy = Arc::clone(&tool_policy);
+            let pairing = Arc::clone(&pairing_manager);
+            let attachments = Arc::clone(&attachment_processor);
+            let hooks = Arc::clone(&hook_manager);
+            let knowledge = knowledge_chunks.clone();
+            let pm = plugin_manager.clone();
+            tokio::spawn(async move {
+                handle_channel_messages(
+                    "telegram",
+                    rx,
+                    synapse,
+                    model_id,
+                    system_prompt,
+                    max_tokens,
+                    tg,
+                    session_repo,
+                    user_repo,
+                    memory_repo,
+                    persona_id,
+                    persona_system_prompt,
+                    policy,
+                    pairing,
+                    attachments,
+                    hooks,
+                    knowledge,
+                    max_context_tokens,
+                    pm,
+                )
+                .await;
+            });
         }
     }
 

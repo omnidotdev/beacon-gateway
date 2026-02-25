@@ -7,7 +7,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use beacon_gateway::{
     ToolPolicy, ToolPolicyConfig, ToolProfile,
-    channels::{Channel, ChannelCapability, ChannelRegistry, IncomingMessage, OutgoingMessage},
+    channels::{
+        Channel, ChannelCapability, ChannelRegistry, IncomingMessage, OutgoingMessage,
+        TelegramChannel, TelegramRateLimiter,
+    },
     db::{Memory, MemoryCategory, MemoryRepo, MessageRole, SessionRepo, UserRepo},
 };
 use tokio::sync::Mutex;
@@ -402,6 +405,21 @@ fn incoming_message_has_thread_and_callback() {
     assert_eq!(msg.thread_id.as_deref(), Some("t1"));
 }
 
+#[tokio::test]
+async fn channel_streaming_defaults_are_noop() {
+    let channel = MockChannel::new("test");
+    // Default impls should succeed silently
+    let _ = channel.edit_message("ch", "msg", "new").await;
+    let _ = channel.delete_message("ch", "msg").await;
+}
+
+#[test]
+fn telegram_has_no_capabilities_yet() {
+    let channel = TelegramChannel::new("fake_token".into());
+    let caps = channel.capabilities();
+    assert!(caps.is_empty());
+}
+
 #[test]
 fn outgoing_message_has_new_fields() {
     let msg = OutgoingMessage::text("ch".into(), "hi".into());
@@ -410,4 +428,31 @@ fn outgoing_message_has_new_fields() {
     assert!(msg.media.is_empty());
     assert!(msg.edit_target.is_none());
     assert!(msg.thread_id.is_none());
+}
+
+#[tokio::test]
+async fn telegram_rate_limiter_allows_first_call() {
+    use std::time::Duration;
+
+    let limiter = TelegramRateLimiter::new(Duration::from_millis(800));
+    assert!(limiter.check("chat_123"));
+}
+
+#[tokio::test]
+async fn telegram_rate_limiter_throttles_rapid_calls() {
+    use std::time::Duration;
+
+    let limiter = TelegramRateLimiter::new(Duration::from_millis(800));
+    assert!(limiter.check("chat_123"));
+    // Second call within window should be throttled
+    assert!(!limiter.check("chat_123"));
+}
+
+#[tokio::test]
+async fn telegram_rate_limiter_allows_different_chats() {
+    use std::time::Duration;
+
+    let limiter = TelegramRateLimiter::new(Duration::from_millis(800));
+    assert!(limiter.check("chat_123"));
+    assert!(limiter.check("chat_456"));
 }
