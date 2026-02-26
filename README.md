@@ -50,6 +50,11 @@ docker build -t beacon-gateway .
 docker run beacon-gateway
 ```
 
+## Ecosystem
+
+- **[Omni CLI](https://github.com/omnidotdev/cli)**: Agentic CLI that powers Beacon's intelligence layer
+- **[Omni Terminal](https://github.com/omnidotdev/terminal)**: GPU-accelerated terminal emulator built to run everywhere
+
 ## License
 
 The code in this repository is licensed under MIT, &copy; [Omni LLC](https://omni.dev). See [LICENSE.md](LICENSE.md) for more information.
