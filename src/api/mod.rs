@@ -140,6 +140,10 @@ pub struct ApiState {
     pub session_compactor: Option<Arc<crate::context::SessionCompactor>>,
     /// Multi-account Telegram registry
     pub telegram_registry: Option<TelegramAccountRegistry>,
+    /// Optional query condenser for LLM-based retrieval query rewriting
+    pub condenser: Option<Arc<dyn agent_core::knowledge::QueryCondenser>>,
+    /// Optional reranker for cross-encoder reranking
+    pub reranker: Option<Arc<dyn agent_core::knowledge::Reranker>>,
 }
 
 impl ApiState {
@@ -219,6 +223,8 @@ pub struct ApiServerBuilder {
     cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
     session_compactor: Option<Arc<crate::context::SessionCompactor>>,
     telegram_registry: Option<TelegramAccountRegistry>,
+    condenser: Option<Arc<dyn agent_core::knowledge::QueryCondenser>>,
+    reranker: Option<Arc<dyn agent_core::knowledge::Reranker>>,
 }
 
 impl ApiServerBuilder {
@@ -274,6 +280,8 @@ impl ApiServerBuilder {
             cron_tools: None,
             session_compactor: None,
             telegram_registry: None,
+            condenser: None,
+            reranker: None,
         }
     }
 
@@ -484,6 +492,20 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Set the query condenser for LLM-based retrieval query rewriting
+    #[must_use]
+    pub fn condenser(mut self, condenser: Arc<dyn agent_core::knowledge::QueryCondenser>) -> Self {
+        self.condenser = Some(condenser);
+        self
+    }
+
+    /// Set the reranker for cross-encoder reranking
+    #[must_use]
+    pub fn reranker(mut self, reranker: Arc<dyn agent_core::knowledge::Reranker>) -> Self {
+        self.reranker = Some(reranker);
+        self
+    }
+
     /// Build the API server
     #[must_use]
     #[allow(clippy::too_many_lines)]
@@ -511,6 +533,16 @@ impl ApiServerBuilder {
                     memory_repo.clone(),
                     key.to_string(),
                 ))
+            });
+
+        // Create query condenser from builder or auto-detect from OpenAI key
+        let condenser: Option<Arc<dyn agent_core::knowledge::QueryCondenser>> =
+            self.condenser.or_else(|| {
+                openai_key.as_deref().and_then(|key| {
+                    agent_core::knowledge::LlmCondenser::new(key.to_string())
+                        .ok()
+                        .map(|c| Arc::new(c) as Arc<dyn agent_core::knowledge::QueryCondenser>)
+                })
             });
         let manifold_url = self
             .manifold_url
@@ -620,6 +652,8 @@ impl ApiServerBuilder {
             cron_tools: self.cron_tools,
             session_compactor: self.session_compactor,
             telegram_registry: self.telegram_registry,
+            condenser,
+            reranker: self.reranker,
         });
 
         ApiServer {

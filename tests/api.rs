@@ -89,6 +89,8 @@ fn build_test_router(db: DbPool) -> axum::Router {
         cron_tools: None,
         session_compactor: None,
         telegram_registry: None,
+        condenser: None,
+        reranker: None,
     });
 
     Router::new()

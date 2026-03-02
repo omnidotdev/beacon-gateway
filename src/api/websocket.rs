@@ -445,16 +445,49 @@ async fn handle_chat_message(
         query_embedding.as_deref(),
     );
 
-    // Inject knowledge based on user message
+    // Inject knowledge based on conversation context + embeddings
     if let Ok(ref mut ctx) = built_context
         && !state.persona_knowledge.is_empty()
     {
-        let max_knowledge_tokens = state.max_context_tokens / 4;
-        let selected = crate::knowledge::select_knowledge(
-            &state.persona_knowledge,
+        // Build multi-turn retrieval query from recent session history
+        let prior_texts: Vec<String> = state
+            .session_repo
+            .get_messages(&session.id, 4)
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .filter(|m| m.role == crate::db::MessageRole::User)
+            .skip(1) // skip current (already in `content`)
+            .take(3)
+            .map(|m| m.content)
+            .collect();
+        let prior_refs: Vec<&str> = prior_texts.iter().map(String::as_str).collect();
+        let retrieval_query = agent_core::knowledge::build_retrieval_query_condensed(
             content,
-            max_knowledge_tokens,
-        );
+            &prior_refs,
+            3,
+            state.condenser.as_deref(),
+        )
+        .await;
+
+        let max_knowledge_tokens = state.max_context_tokens / 4;
+        let selected = if let Some(ref reranker) = state.reranker {
+            agent_core::knowledge::select_knowledge_reranked(
+                &state.persona_knowledge,
+                &retrieval_query,
+                query_embedding.as_deref(),
+                reranker.as_ref(),
+                max_knowledge_tokens,
+            )
+            .await
+        } else {
+            crate::knowledge::select_knowledge_with_embeddings(
+                &state.persona_knowledge,
+                &retrieval_query,
+                query_embedding.as_deref(),
+                max_knowledge_tokens,
+            )
+        };
         if !selected.is_empty() {
             ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
         }
