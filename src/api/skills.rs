@@ -4,15 +4,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     middleware,
     routing::{get, patch, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{auth::require_api_key, ApiState};
+use super::{ApiState, auth::require_api_key};
 use crate::skills::{
     ManifoldClient, Skill, SkillPriority, SkillSnapshot, SkillSource, SnapshotEntry,
 };
@@ -50,7 +50,10 @@ pub struct SkillCommandResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SkillSourceResponse {
     Local,
-    Manifold { namespace: String, repository: String },
+    Manifold {
+        namespace: String,
+        repository: String,
+    },
     Bundled,
     Plugin,
 }
@@ -103,7 +106,7 @@ pub struct InstallLocalRequest {
     pub requires_env: Vec<String>,
 }
 
-fn default_user_invocable() -> bool {
+const fn default_user_invocable() -> bool {
     true
 }
 
@@ -241,10 +244,12 @@ fn available_skill_to_response(skill: &Skill) -> SkillResponse {
 async fn list_installed(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<SkillListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let skills = state
-        .skill_repo
-        .list()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let skills = state.skill_repo.list().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     let response: Vec<SkillResponse> = skills.iter().map(skill_to_response).collect();
     let total = response.len();
@@ -263,8 +268,18 @@ async fn get_skill(
     let skill = state
         .skill_repo
         .get(&skill_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "Skill not found"),
+            )
+        })?;
 
     Ok(Json(skill_to_response(&skill)))
 }
@@ -277,15 +292,19 @@ async fn search_skills(
     let client = ManifoldClient::new(&state.manifold_url);
 
     let skills = if let Some(q) = &query.q {
-        client
-            .search_skills(q)
-            .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, error_response("manifold_error", &e.to_string())))?
+        client.search_skills(q).await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                error_response("manifold_error", &e.to_string()),
+            )
+        })?
     } else {
-        client
-            .list_skills(&query.namespace)
-            .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, error_response("manifold_error", &e.to_string())))?
+        client.list_skills(&query.namespace).await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                error_response("manifold_error", &e.to_string()),
+            )
+        })?
     };
 
     let response: Vec<SkillResponse> = skills.iter().map(available_skill_to_response).collect();
@@ -315,13 +334,20 @@ async fn install_skill(
     let skill = client
         .get_skill(&req.namespace, &req.skill_id)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, error_response("manifold_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                error_response("manifold_error", &e.to_string()),
+            )
+        })?;
 
     // Install to database
-    let installed = state
-        .skill_repo
-        .install(&skill)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let installed = state.skill_repo.install(&skill).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok((StatusCode::CREATED, Json(skill_to_response(&installed))))
 }
@@ -369,7 +395,12 @@ async fn install_local(
     let installed = state
         .skill_repo
         .install_with_priority(&skill, priority, None)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?;
 
     Ok((StatusCode::CREATED, Json(skill_to_response(&installed))))
 }
@@ -379,15 +410,20 @@ async fn uninstall_skill(
     State(state): State<Arc<ApiState>>,
     Path(skill_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let removed = state
-        .skill_repo
-        .uninstall(&skill_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let removed = state.skill_repo.uninstall(&skill_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))
+        Err((
+            StatusCode::NOT_FOUND,
+            error_response("not_found", "Skill not found"),
+        ))
     }
 }
 
@@ -400,17 +436,35 @@ async fn set_enabled(
     let updated = state
         .skill_repo
         .set_enabled(&skill_id, req.enabled)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?;
 
     if !updated {
-        return Err((StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")));
+        return Err((
+            StatusCode::NOT_FOUND,
+            error_response("not_found", "Skill not found"),
+        ));
     }
 
     let skill = state
         .skill_repo
         .get(&skill_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "Skill not found"),
+            )
+        })?;
 
     Ok(Json(skill_to_response(&skill)))
 }
@@ -424,22 +478,40 @@ async fn set_priority(
     let updated = state
         .skill_repo
         .set_priority(&skill_id, req.priority)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?;
 
     if !updated {
-        return Err((StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")));
+        return Err((
+            StatusCode::NOT_FOUND,
+            error_response("not_found", "Skill not found"),
+        ));
     }
 
     let skill = state
         .skill_repo
         .get(&skill_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "Skill not found"),
+            )
+        })?;
 
     Ok(Json(skill_to_response(&skill)))
 }
 
-/// Unified update for skill configuration (enabled, priority, api_key, env)
+/// Unified update for skill configuration (enabled, priority, `api_key`, env)
 async fn update_skill(
     State(state): State<Arc<ApiState>>,
     Path(skill_id): Path<String>,
@@ -450,7 +522,12 @@ async fn update_skill(
         state
             .skill_repo
             .set_enabled(&skill_id, enabled)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    error_response("db_error", &e.to_string()),
+                )
+            })?;
     }
 
     // Apply priority change
@@ -458,26 +535,42 @@ async fn update_skill(
         state
             .skill_repo
             .set_priority(&skill_id, priority)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    error_response("db_error", &e.to_string()),
+                )
+            })?;
     }
 
     // Apply api_key and/or env changes
     if req.api_key.is_some() || req.env.is_some() {
         state
             .skill_repo
-            .update_skill_config(
-                &skill_id,
-                req.api_key.as_deref(),
-                req.env.as_ref(),
-            )
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+            .update_skill_config(&skill_id, req.api_key.as_deref(), req.env.as_ref())
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    error_response("db_error", &e.to_string()),
+                )
+            })?;
     }
 
     let skill = state
         .skill_repo
         .get(&skill_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "Skill not found"),
+            )
+        })?;
 
     Ok(Json(skill_to_response(&skill)))
 }
@@ -486,10 +579,12 @@ async fn update_skill(
 async fn skill_status(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<SkillStatusReport>, (StatusCode, Json<ErrorResponse>)> {
-    let skills = state
-        .skill_repo
-        .list()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let skills = state.skill_repo.list().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     let entries: Vec<SkillStatusEntry> = skills
         .iter()
@@ -501,12 +596,16 @@ async fn skill_status(
             );
             let os_ok = crate::prompt::check_os_requirement(&s.skill.metadata.os);
             let bins_ok = crate::prompt::check_bins_requirement(&s.skill.metadata.requires_bins);
-            let any_bins_ok = crate::prompt::check_any_bins_requirement(&s.skill.metadata.requires_any_bins);
+            let any_bins_ok =
+                crate::prompt::check_any_bins_requirement(&s.skill.metadata.requires_any_bins);
 
             let eligible = s.enabled && env_ok && os_ok && bins_ok && any_bins_ok;
 
             // Compute missing requirements
-            let missing_env: Vec<String> = s.skill.metadata.requires_env
+            let missing_env: Vec<String> = s
+                .skill
+                .metadata
+                .requires_env
                 .iter()
                 .filter(|var| {
                     std::env::var(var).is_err()
@@ -516,7 +615,10 @@ async fn skill_status(
                 .cloned()
                 .collect();
 
-            let missing_bins: Vec<String> = s.skill.metadata.requires_bins
+            let missing_bins: Vec<String> = s
+                .skill
+                .metadata
+                .requires_bins
                 .iter()
                 .filter(|b| !crate::skills::has_binary(b))
                 .cloned()
@@ -560,8 +662,16 @@ async fn skill_status(
         .collect();
 
     Ok(Json(SkillStatusReport {
-        managed_dir: state.skills_config.managed_dir.to_string_lossy().to_string(),
-        personal_dir: state.skills_config.personal_dir.to_string_lossy().to_string(),
+        managed_dir: state
+            .skills_config
+            .managed_dir
+            .to_string_lossy()
+            .to_string(),
+        personal_dir: state
+            .skills_config
+            .personal_dir
+            .to_string_lossy()
+            .to_string(),
         skills: entries,
     }))
 }
@@ -570,10 +680,12 @@ async fn skill_status(
 async fn list_commands(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<Vec<SkillCommandResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    let skills = state
-        .skill_repo
-        .list_enabled()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let skills = state.skill_repo.list_enabled().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     let commands: Vec<SkillCommandResponse> = skills
         .iter()
@@ -604,8 +716,18 @@ async fn install_deps(
     let skill = state
         .skill_repo
         .get(&skill_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "Skill not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "Skill not found"),
+            )
+        })?;
 
     let specs = &skill.skill.metadata.install;
     if specs.is_empty() {
@@ -616,32 +738,38 @@ async fn install_deps(
     }
 
     let prefs = &state.skills_config.install_prefs;
-    let spec = crate::skills::install::select_install_spec(specs, prefs)
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                error_response("no_compatible_spec", "No compatible install spec for this platform"),
-            )
-        })?;
+    let spec = crate::skills::install::select_install_spec(specs, prefs).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            error_response(
+                "no_compatible_spec",
+                "No compatible install spec for this platform",
+            ),
+        )
+    })?;
 
     let result = crate::skills::install::execute_install(spec, prefs)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("install_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("install_error", &e.to_string()),
+            )
+        })?;
 
-    Ok(Json(InstallDepsResponse {
-        skill_id,
-        result,
-    }))
+    Ok(Json(InstallDepsResponse { skill_id, result }))
 }
 
 /// Export a snapshot of all installed skills
 async fn get_snapshot(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<SkillSnapshot>, (StatusCode, Json<ErrorResponse>)> {
-    let skills = state
-        .skill_repo
-        .list()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let skills = state.skill_repo.list().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     let entries: Vec<SnapshotEntry> = skills
         .iter()
@@ -676,7 +804,13 @@ async fn import_snapshot(
 
     for entry in &snapshot.skills {
         // Skip if already installed
-        if state.skill_repo.get_by_name(&entry.name).ok().flatten().is_some() {
+        if state
+            .skill_repo
+            .get_by_name(&entry.name)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             skipped += 1;
             continue;
         }
@@ -704,12 +838,19 @@ async fn import_snapshot(
 
         // Install with snapshot priority
         let priority = SkillPriority::from_db(&entry.priority);
-        match state.skill_repo.install_with_priority(&skill, priority, None) {
+        match state
+            .skill_repo
+            .install_with_priority(&skill, priority, None)
+        {
             Ok(installed) => {
                 // Apply api_key and env from snapshot
                 let has_config = entry.api_key.is_some() || !entry.skill_env.is_empty();
                 if has_config {
-                    let env = if entry.skill_env.is_empty() { None } else { Some(&entry.skill_env) };
+                    let env = if entry.skill_env.is_empty() {
+                        None
+                    } else {
+                        Some(&entry.skill_env)
+                    };
                     let _ = state.skill_repo.update_skill_config(
                         &installed.skill.id,
                         entry.api_key.as_deref(),
@@ -749,10 +890,16 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/install", post(install_skill))
         .route("/install/local", post(install_local))
         .route("/snapshot", get(get_snapshot).post(import_snapshot))
-        .route("/{skill_id}", get(get_skill).patch(update_skill).delete(uninstall_skill))
+        .route(
+            "/{skill_id}",
+            get(get_skill).patch(update_skill).delete(uninstall_skill),
+        )
         .route("/{skill_id}/enabled", patch(set_enabled))
         .route("/{skill_id}/priority", patch(set_priority))
         .route("/{skill_id}/install-deps", post(install_deps))
-        .layer(middleware::from_fn_with_state(state.clone(), require_api_key))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ))
         .with_state(state)
 }

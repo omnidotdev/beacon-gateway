@@ -84,12 +84,15 @@ fn summarize_invocation(name: &str, args: &str) -> String {
 /// # Errors
 ///
 /// Returns an error if the LLM call fails or no Synapse client is configured.
-pub async fn run_agent_turn(
-    state: &ApiState,
-    config: AgentRunConfig,
-) -> crate::Result<String> {
-    let Some(synapse) = config.synapse_override.clone().or_else(|| state.synapse.clone()) else {
-        return Err(crate::Error::Agent("no LLM provider configured".to_string()));
+pub async fn run_agent_turn(state: &ApiState, config: AgentRunConfig) -> crate::Result<String> {
+    let Some(synapse) = config
+        .synapse_override
+        .clone()
+        .or_else(|| state.synapse.clone())
+    else {
+        return Err(crate::Error::Agent(
+            "no LLM provider configured".to_string(),
+        ));
     };
 
     let memory_tools = Arc::new(crate::tools::BuiltinMemoryTools::new(
@@ -164,11 +167,15 @@ pub async fn run_agent_turn(
                         pending_tool_calls[idx].arguments.push_str(&arguments);
                     }
                 }
-                Ok(ChatEvent::Done { finish_reason: fr, usage }) => {
+                Ok(ChatEvent::Done {
+                    finish_reason: fr,
+                    usage,
+                }) => {
                     finish_reason = fr;
                     if let Some(u) = usage {
                         total_input_tokens = total_input_tokens.saturating_add(u.prompt_tokens);
-                        total_output_tokens = total_output_tokens.saturating_add(u.completion_tokens);
+                        total_output_tokens =
+                            total_output_tokens.saturating_add(u.completion_tokens);
                     }
                     break;
                 }
@@ -248,10 +255,12 @@ pub async fn run_agent_turn(
                 let notify = config.notify.clone();
                 async move {
                     if let Some(ref n) = notify {
-                        let _ = n.send(AgentNotifyEvent::ToolStart {
-                            tool_id: tool_id.clone(),
-                            name: name.clone(),
-                        }).await;
+                        let _ = n
+                            .send(AgentNotifyEvent::ToolStart {
+                                tool_id: tool_id.clone(),
+                                name: name.clone(),
+                            })
+                            .await;
                     }
                     let result = executor.execute(&name, &args).await;
                     if let Some(ref n) = notify {
@@ -259,13 +268,15 @@ pub async fn run_agent_turn(
                             Ok(out) => (out.clone(), false),
                             Err(e) => (format!("Error: {e}"), true),
                         };
-                        let _ = n.send(AgentNotifyEvent::ToolResult {
-                            tool_id: tool_id.clone(),
-                            name: name.clone(),
-                            invocation: summarize_invocation(&name, &args),
-                            output,
-                            is_error,
-                        }).await;
+                        let _ = n
+                            .send(AgentNotifyEvent::ToolResult {
+                                tool_id: tool_id.clone(),
+                                name: name.clone(),
+                                invocation: summarize_invocation(&name, &args),
+                                output,
+                                is_error,
+                            })
+                            .await;
                     }
                     (tool_id, result)
                 }
@@ -275,10 +286,12 @@ pub async fn run_agent_turn(
             let mut mutate_results = Vec::new();
             for tc in mutates {
                 if let Some(n) = &config.notify {
-                    let _ = n.send(AgentNotifyEvent::ToolStart {
-                        tool_id: tc.id.clone(),
-                        name: tc.name.clone(),
-                    }).await;
+                    let _ = n
+                        .send(AgentNotifyEvent::ToolStart {
+                            tool_id: tc.id.clone(),
+                            name: tc.name.clone(),
+                        })
+                        .await;
                 }
                 let result = executor.execute(&tc.name, &tc.arguments).await;
                 if let Some(n) = &config.notify {
@@ -286,13 +299,15 @@ pub async fn run_agent_turn(
                         Ok(out) => (out.clone(), false),
                         Err(e) => (format!("Error: {e}"), true),
                     };
-                    let _ = n.send(AgentNotifyEvent::ToolResult {
-                        tool_id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        invocation: summarize_invocation(&tc.name, &tc.arguments),
-                        output,
-                        is_error,
-                    }).await;
+                    let _ = n
+                        .send(AgentNotifyEvent::ToolResult {
+                            tool_id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            invocation: summarize_invocation(&tc.name, &tc.arguments),
+                            output,
+                            is_error,
+                        })
+                        .await;
                 }
                 mutate_results.push((tc.id.clone(), result));
             }
@@ -316,8 +331,7 @@ pub async fn run_agent_turn(
         let provider = state
             .model_info
             .as_ref()
-            .map(|m| m.provider.clone())
-            .unwrap_or_else(|| "unknown".to_owned());
+            .map_or_else(|| "unknown".to_owned(), |m| m.provider.clone());
         recorder.record(synapse_billing::UsageEvent {
             entity_type: "user".to_owned(),
             entity_id: config.user_id.clone(),

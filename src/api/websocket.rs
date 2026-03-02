@@ -4,18 +4,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket},
         Path, Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use synapse_client::SynapseClient;
 use tokio::sync::mpsc;
+
+use std::fmt::Write as _;
 
 use super::ApiState;
 use crate::agent::{AgentNotifyEvent, AgentRunConfig, run_agent_turn};
@@ -64,10 +66,7 @@ pub enum WsOutgoing {
     /// Chat response complete
     ChatComplete { message_id: String },
     /// Tool invocation started — emitted immediately on dispatch
-    ToolStart {
-        tool_id: String,
-        name: String,
-    },
+    ToolStart { tool_id: String, name: String },
     /// Tool invocation finished
     ToolResult {
         tool_id: String,
@@ -132,6 +131,7 @@ async fn ws_upgrade(
 }
 
 /// Handle WebSocket connection
+#[allow(clippy::too_many_lines)]
 async fn handle_socket(
     socket: WebSocket,
     state: Arc<ApiState>,
@@ -146,10 +146,10 @@ async fn handle_socket(
     let connected = WsOutgoing::Connected {
         session_id: session_id.clone(),
     };
-    if let Ok(msg) = serde_json::to_string(&connected) {
-        if sender.send(Message::Text(msg.into())).await.is_err() {
-            return;
-        }
+    if let Ok(msg) = serde_json::to_string(&connected)
+        && sender.send(Message::Text(msg.into())).await.is_err()
+    {
+        return;
     }
 
     tracing::info!(session_id = %session_id, "WebSocket connected");
@@ -192,19 +192,24 @@ async fn handle_socket(
 
     // Register sender for proactive ws_push delivery
     // Key: Gatekeeper user_id when authenticated, otherwise session_id
-    let ws_push_key = gatekeeper_user_id.clone().unwrap_or_else(|| session_id.clone());
+    let ws_push_key = gatekeeper_user_id
+        .clone()
+        .unwrap_or_else(|| session_id.clone());
     if let Some(ref senders) = state.ws_senders {
-        senders.write().await.insert(ws_push_key.clone(), tx.clone());
+        senders
+            .write()
+            .await
+            .insert(ws_push_key.clone(), tx.clone());
         tracing::debug!(key = %ws_push_key, "ws_push: registered sender");
     }
 
     // Spawn task to forward messages from channel to WebSocket
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let Ok(text) = serde_json::to_string(&msg) {
-                if sender.send(Message::Text(text.into())).await.is_err() {
-                    break;
-                }
+            if let Ok(text) = serde_json::to_string(&msg)
+                && sender.send(Message::Text(text.into())).await.is_err()
+            {
+                break;
             }
         }
     });
@@ -220,8 +225,15 @@ async fn handle_socket(
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(text) => {
-                    if let Err(e) =
-                        handle_message(&text, &state, &session_id_clone, tx.clone(), gk_user_clone.as_deref(), &feedback_for_recv).await
+                    if let Err(e) = handle_message(
+                        &text,
+                        &state,
+                        &session_id_clone,
+                        tx.clone(),
+                        gk_user_clone.as_deref(),
+                        &feedback_for_recv,
+                    )
+                    .await
                     {
                         let error = WsOutgoing::Error {
                             code: "internal_error".to_string(),
@@ -290,8 +302,22 @@ async fn handle_message(
                 .await
                 .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
         }
-        WsIncoming::Chat { content, persona_id, model_override } => {
-            handle_chat_message(&content, persona_id, model_override, state, session_id, tx, gatekeeper_user_id, feedback).await?;
+        WsIncoming::Chat {
+            content,
+            persona_id,
+            model_override,
+        } => {
+            handle_chat_message(
+                &content,
+                persona_id,
+                model_override,
+                state,
+                session_id,
+                tx,
+                gatekeeper_user_id,
+                feedback,
+            )
+            .await?;
         }
         WsIncoming::AgentResponse { request_id, answer } => {
             let fb_answer = match answer.as_str() {
@@ -309,7 +335,7 @@ async fn handle_message(
 }
 
 /// Handle a chat message and stream the response
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn handle_chat_message(
     content: &str,
     persona_id_override: Option<String>,
@@ -321,13 +347,15 @@ async fn handle_chat_message(
     _feedback: &Arc<FeedbackManager>,
 ) -> crate::Result<()> {
     // Use Gatekeeper identity if available, otherwise derive from session_id
-    let user_id = if let Some(gk_id) = gatekeeper_user_id {
-        gk_id.to_string()
-    } else if let Some(suffix) = session_id.strip_prefix("web-") {
-        format!("web-user-{suffix}")
-    } else {
-        session_id.to_string()
-    };
+    let user_id = gatekeeper_user_id.map_or_else(
+        || {
+            session_id.strip_prefix("web-").map_or_else(
+                || session_id.to_string(),
+                |suffix| format!("web-user-{suffix}"),
+            )
+        },
+        std::string::ToString::to_string,
+    );
 
     // Ensure user exists (creates if not found)
     let user = state
@@ -342,17 +370,21 @@ async fn handle_chat_message(
     );
 
     // Resolve persona: prefer per-message override, fall back to active persona
-    let (active_persona_id, active_system_prompt) = if let Some(ref override_id) = persona_id_override {
+    let (active_persona_id, active_system_prompt) = if let Some(ref override_id) =
+        persona_id_override
+    {
         // No-persona mode: skip system prompt entirely
         if override_id == crate::NO_PERSONA_ID {
             (override_id.clone(), None)
         // Load the requested persona from cache or embedded defaults
-        } else if let Some((_info, system_prompt)) = super::health::load_full_persona(&state.persona_cache_dir, override_id)
-            .or_else(|| {
-                crate::Config::load_embedded_persona(override_id).ok().map(|p| {
-                    let prompt = p.system_prompt().map(String::from);
-                    (super::health::persona_to_info(&p), prompt)
-                })
+        } else if let Some((_info, system_prompt)) =
+            super::health::load_full_persona(&state.persona_cache_dir, override_id).or_else(|| {
+                crate::Config::load_embedded_persona(override_id)
+                    .ok()
+                    .map(|p| {
+                        let prompt = p.system_prompt().map(String::from);
+                        (super::health::persona_to_info(&p), prompt)
+                    })
             })
         {
             (override_id.clone(), system_prompt)
@@ -387,10 +419,8 @@ async fn handle_chat_message(
     );
 
     // Build context config with active persona
-    let context_config = crate::api::ApiServer::context_config(
-        &active_persona_id,
-        active_system_prompt,
-    );
+    let context_config =
+        crate::api::ApiServer::context_config(&active_persona_id, active_system_prompt);
     let context_builder = ContextBuilder::new(context_config);
 
     // Embed user message for semantic memory retrieval when embedder is available
@@ -416,17 +446,17 @@ async fn handle_chat_message(
     );
 
     // Inject knowledge based on user message
-    if let Ok(ref mut ctx) = built_context {
-        if !state.persona_knowledge.is_empty() {
-            let max_knowledge_tokens = state.max_context_tokens / 4;
-            let selected = crate::knowledge::select_knowledge(
-                &state.persona_knowledge,
-                content,
-                max_knowledge_tokens,
-            );
-            if !selected.is_empty() {
-                ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
-            }
+    if let Ok(ref mut ctx) = built_context
+        && !state.persona_knowledge.is_empty()
+    {
+        let max_knowledge_tokens = state.max_context_tokens / 4;
+        let selected = crate::knowledge::select_knowledge(
+            &state.persona_knowledge,
+            content,
+            max_knowledge_tokens,
+        );
+        if !selected.is_empty() {
+            ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
         }
     }
 
@@ -500,7 +530,12 @@ async fn handle_chat_message(
             .unwrap_or(None);
 
     // Handle tool dispatch: execute tool directly and return result without LLM
-    if let Some(crate::skills::SlashCommandAction::DispatchTool { tool_name, arguments, .. }) = &slash_action {
+    if let Some(crate::skills::SlashCommandAction::DispatchTool {
+        tool_name,
+        arguments,
+        ..
+    }) = &slash_action
+    {
         let executor = crate::tools::executor::ToolExecutor::new(
             Arc::clone(&synapse),
             state.plugin_manager.clone(),
@@ -527,17 +562,17 @@ async fn handle_chat_message(
     // Extract content and slash skill for prompt injection path
     let injected_remaining: Option<String>;
     let slash_skill;
-    let content = match slash_action {
-        Some(crate::skills::SlashCommandAction::InjectPrompt { skill, remaining }) => {
+    let content =
+        if let Some(crate::skills::SlashCommandAction::InjectPrompt { skill, remaining }) =
+            slash_action
+        {
             slash_skill = Some(skill);
             injected_remaining = Some(remaining);
             injected_remaining.as_deref().unwrap()
-        }
-        _ => {
+        } else {
             slash_skill = None;
             content
-        }
-    };
+        };
 
     // Build system prompt — skip in no-persona mode
     // Uses per-request skill loading to pick up newly installed/toggled skills
@@ -549,10 +584,11 @@ async fn handle_chat_message(
 
     // Append invoked slash skill to system prompt
     if let Some(ref skill) = slash_skill {
-        system_prompt.push_str(&format!(
+        let _ = write!(
+            system_prompt,
             "\n\n<skill name=\"{}\" invoked=\"true\">\n{}\n</skill>",
             skill.skill.metadata.name, skill.skill.content
-        ));
+        );
     }
 
     // Bridge: forward AgentNotifyEvent → WsOutgoing::ToolStart/ToolResult to client
@@ -564,9 +600,19 @@ async fn handle_chat_message(
                 AgentNotifyEvent::ToolStart { tool_id, name } => {
                     WsOutgoing::ToolStart { tool_id, name }
                 }
-                AgentNotifyEvent::ToolResult { tool_id, name, invocation, output, is_error } => {
-                    WsOutgoing::ToolResult { tool_id, name, invocation, output, is_error }
-                }
+                AgentNotifyEvent::ToolResult {
+                    tool_id,
+                    name,
+                    invocation,
+                    output,
+                    is_error,
+                } => WsOutgoing::ToolResult {
+                    tool_id,
+                    name,
+                    invocation,
+                    output,
+                    is_error,
+                },
             };
             let _ = tx_notify.send(ws_msg).await;
         }
@@ -674,7 +720,7 @@ async fn handle_chat_message(
     Ok(())
 }
 
-/// Resolve a provider client from the local SQLite key store (self-hosted path)
+/// Resolve a provider client from the local `SQLite` key store (self-hosted path)
 ///
 /// Checks providers in priority order (anthropic → openai → openrouter) and returns
 /// a `SynapseClient` configured with the first stored key found.
@@ -682,10 +728,10 @@ async fn handle_chat_message(
 /// Returns `None` if no local key store is configured or no keys are stored.
 fn resolve_local_key(state: &Arc<ApiState>) -> Option<(Arc<SynapseClient>, String)> {
     let store = state.local_key_store.as_ref()?;
-    let synapse_base_url = state
-        .synapse
-        .as_ref()
-        .map_or_else(|| "http://localhost:6000".to_string(), |c| c.base_url().to_string());
+    let synapse_base_url = state.synapse.as_ref().map_or_else(
+        || "http://localhost:6000".to_string(),
+        |c| c.base_url().to_string(),
+    );
 
     for (provider, default_model) in &[
         ("anthropic", crate::daemon::DEFAULT_MODEL),
@@ -717,60 +763,57 @@ async fn resolve_user_synapse(
     user_id: &str,
     state: &Arc<ApiState>,
 ) -> Option<(Arc<SynapseClient>, String)> {
-    let synapse_base_url = state
-        .synapse
-        .as_ref()
-        .map_or_else(
-            || "http://localhost:6000".to_string(),
-            |c| c.base_url().to_string(),
-        );
+    let synapse_base_url = state.synapse.as_ref().map_or_else(
+        || "http://localhost:6000".to_string(),
+        |c| c.base_url().to_string(),
+    );
 
     // Step 1: Use user's preferred provider key (respects Synapse defaultProvider preference)
     // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
-    if let Ok(Some((provider_name, resolved))) = resolver.resolve_preferred(user_id).await {
-        if resolved.is_user_key {
-            let model = resolved.model_override.unwrap_or_else(|| {
-                match provider_name.as_str() {
-                    "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
-                    _ => "gpt-4o".to_string(),
-                }
+    if let Ok(Some((provider_name, resolved))) = resolver.resolve_preferred(user_id).await
+        && resolved.is_user_key
+    {
+        let model = resolved
+            .model_override
+            .unwrap_or_else(|| match provider_name.as_str() {
+                "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
+                _ => "gpt-4o".to_string(),
             });
 
-            if let Ok(client) = SynapseClient::new(&synapse_base_url) {
-                let client = client.with_api_key(resolved.api_key);
-                return Some((Arc::new(client), model));
-            }
+        if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+            let client = client.with_api_key(resolved.api_key);
+            return Some((Arc::new(client), model));
         }
     }
 
     // Step 2: Auto-provision via Synapse API (cloud mode only)
-    if state.cloud_mode {
-        if let Some(provisioner) = &state.key_provisioner {
-            match provisioner.provision(user_id, None, None).await {
-                Ok(provisioned) => {
-                    tracing::info!(
-                        user_id = %user_id,
-                        plan = %provisioned.plan,
-                        "auto-provisioned managed key"
-                    );
+    if state.cloud_mode
+        && let Some(provisioner) = &state.key_provisioner
+    {
+        match provisioner.provision(user_id, None, None).await {
+            Ok(provisioned) => {
+                tracing::info!(
+                    user_id = %user_id,
+                    plan = %provisioned.plan,
+                    "auto-provisioned managed key"
+                );
 
-                    // Invalidate resolver cache so next resolve fetches the new key from Synapse
-                    resolver.invalidate(user_id).await;
+                // Invalidate resolver cache so next resolve fetches the new key from Synapse
+                resolver.invalidate(user_id).await;
 
-                    let model = crate::daemon::DEFAULT_MODEL.to_string();
+                let model = crate::daemon::DEFAULT_MODEL.to_string();
 
-                    if let Ok(client) = SynapseClient::new(&synapse_base_url) {
-                        let client = client.with_api_key(provisioned.api_key);
-                        return Some((Arc::new(client), model));
-                    }
+                if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+                    let client = client.with_api_key(provisioned.api_key);
+                    return Some((Arc::new(client), model));
                 }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        user_id = %user_id,
-                        "auto-provision failed"
-                    );
-                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    user_id = %user_id,
+                    "auto-provision failed"
+                );
             }
         }
     }
@@ -822,7 +865,10 @@ mod tests {
             let rx = mgr.register(id);
             mgr.cancel_all();
             let answer = rx.await.unwrap();
-            assert!(matches!(answer, crate::api::feedback::FeedbackAnswer::Cancelled));
+            assert!(matches!(
+                answer,
+                crate::api::feedback::FeedbackAnswer::Cancelled
+            ));
         });
     }
 

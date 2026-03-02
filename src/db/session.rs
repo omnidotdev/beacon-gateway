@@ -408,8 +408,10 @@ impl SessionRepo {
         let summary_time = earliest
             .as_deref()
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-            .map(|dt| (dt.with_timezone(&Utc) - chrono::Duration::seconds(1)).to_rfc3339())
-            .unwrap_or_else(|| Utc::now().to_rfc3339());
+            .map_or_else(
+                || Utc::now().to_rfc3339(),
+                |dt| (dt.with_timezone(&Utc) - chrono::Duration::seconds(1)).to_rfc3339(),
+            );
 
         let id = Uuid::new_v4().to_string();
 

@@ -21,7 +21,9 @@ impl Embedder {
     /// Returns error if API key is empty
     pub fn new(api_key: String) -> Result<Self> {
         if api_key.is_empty() {
-            return Err(Error::Config("OpenAI API key required for embeddings".to_string()));
+            return Err(Error::Config(
+                "OpenAI API key required for embeddings".to_string(),
+            ));
         }
 
         Ok(Self {
@@ -38,7 +40,9 @@ impl Embedder {
     /// Returns error if API key is empty
     pub fn with_model(api_key: String, model: String) -> Result<Self> {
         if api_key.is_empty() {
-            return Err(Error::Config("OpenAI API key required for embeddings".to_string()));
+            return Err(Error::Config(
+                "OpenAI API key required for embeddings".to_string(),
+            ));
         }
 
         Ok(Self {
@@ -100,7 +104,9 @@ impl Embedder {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Database(format!("Embedding API error {status}: {body}")));
+            return Err(Error::Database(format!(
+                "Embedding API error {status}: {body}"
+            )));
         }
 
         let mut result: EmbeddingResponse = response.json().await?;
@@ -114,10 +120,7 @@ impl Embedder {
     /// Serialize embedding to bytes for `SQLite` storage
     #[must_use]
     pub fn to_bytes(embedding: &[f32]) -> Vec<u8> {
-        embedding
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect()
+        embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 
     /// Deserialize embedding from bytes

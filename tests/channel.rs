@@ -121,7 +121,11 @@ async fn test_session_persistence() {
         .add_message(&session.id, MessageRole::User, "Hello Orin")
         .unwrap();
     session_repo
-        .add_message(&session.id, MessageRole::Assistant, "Hello! How can I help?")
+        .add_message(
+            &session.id,
+            MessageRole::Assistant,
+            "Hello! How can I help?",
+        )
         .unwrap();
 
     // Retrieve messages
@@ -221,9 +225,21 @@ async fn test_memory_search() {
     let user = user_repo.find_or_create("search-user").unwrap();
 
     // Add multiple memories
-    let m1 = Memory::new(user.id.clone(), MemoryCategory::Preference, "Prefers dark mode".to_string());
-    let m2 = Memory::new(user.id.clone(), MemoryCategory::Fact, "Lives in Seattle".to_string());
-    let m3 = Memory::new(user.id.clone(), MemoryCategory::Preference, "Likes coffee".to_string());
+    let m1 = Memory::new(
+        user.id.clone(),
+        MemoryCategory::Preference,
+        "Prefers dark mode".to_string(),
+    );
+    let m2 = Memory::new(
+        user.id.clone(),
+        MemoryCategory::Fact,
+        "Lives in Seattle".to_string(),
+    );
+    let m3 = Memory::new(
+        user.id.clone(),
+        MemoryCategory::Preference,
+        "Likes coffee".to_string(),
+    );
 
     memory_repo.add(&m1).unwrap();
     memory_repo.add(&m2).unwrap();
@@ -292,7 +308,10 @@ async fn test_user_life_json_path() {
 
     // Verify it's set
     let updated = user_repo.find(&user.id).unwrap().unwrap();
-    assert_eq!(updated.life_json_path.as_deref(), Some("/home/user/life.json"));
+    assert_eq!(
+        updated.life_json_path.as_deref(),
+        Some("/home/user/life.json")
+    );
 
     // Clear it
     user_repo.set_life_json_path(&user.id, None).unwrap();
@@ -310,12 +329,20 @@ async fn test_pinned_memories_come_first() {
     let user = user_repo.find_or_create("pinned-test-user").unwrap();
 
     // Add an unpinned memory first
-    let m1 = Memory::new(user.id.clone(), MemoryCategory::General, "Unpinned memory".to_string());
+    let m1 = Memory::new(
+        user.id.clone(),
+        MemoryCategory::General,
+        "Unpinned memory".to_string(),
+    );
     memory_repo.add(&m1).unwrap();
 
     // Add a pinned memory second
-    let m2 = Memory::new(user.id.clone(), MemoryCategory::Fact, "Pinned memory".to_string())
-        .pinned();
+    let m2 = Memory::new(
+        user.id.clone(),
+        MemoryCategory::Fact,
+        "Pinned memory".to_string(),
+    )
+    .pinned();
     memory_repo.add(&m2).unwrap();
 
     // Get context - pinned should come first
@@ -602,7 +629,12 @@ fn mention_gating_skips_unmentioned_group_messages() {
         accounts: std::collections::HashMap::new(),
     };
     let msg = make_group_msg("hello everyone");
-    assert!(should_skip_group_message(&msg, "supergroup", false, &config));
+    assert!(should_skip_group_message(
+        &msg,
+        "supergroup",
+        false,
+        &config
+    ));
 }
 
 #[test]
@@ -626,7 +658,12 @@ fn mention_gating_allows_direct_mentions() {
         accounts: std::collections::HashMap::new(),
     };
     let msg = make_group_msg("hey @mybot what's up");
-    assert!(!should_skip_group_message(&msg, "supergroup", false, &config));
+    assert!(!should_skip_group_message(
+        &msg,
+        "supergroup",
+        false,
+        &config
+    ));
 }
 
 #[test]
@@ -651,7 +688,12 @@ fn mention_gating_allows_replies_to_bot() {
     };
     let msg = make_group_msg("hello");
     // has_reply = true simulates reply_to_message being present
-    assert!(!should_skip_group_message(&msg, "supergroup", true, &config));
+    assert!(!should_skip_group_message(
+        &msg,
+        "supergroup",
+        true,
+        &config
+    ));
 }
 
 #[test]
@@ -734,7 +776,7 @@ fn custom_ack_emoji_used() {
         bot_username: None,
         require_mention_in_groups: false,
         reaction_level: ReactionLevel::Ack,
-        ack_reaction: "\u{1F44D}".into(), // 👍
+        ack_reaction: "\u{1F44D}".into(),  // 👍
         done_reaction: "\u{1F389}".into(), // 🎉
         webhook_secret: None,
         streaming_mode: StreamingMode::Edit,

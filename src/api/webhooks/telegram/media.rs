@@ -3,25 +3,25 @@
 use super::types::TelegramMessage;
 
 /// Media file reference for download
-pub(crate) struct WebhookMediaRef {
+pub struct WebhookMediaRef {
     pub file_id: String,
     pub mime_type: String,
     pub filename: Option<String>,
 }
 
 /// Extract media file references from a webhook message
-pub(crate) fn extract_media_file_refs(message: &TelegramMessage) -> Vec<WebhookMediaRef> {
+pub fn extract_media_file_refs(message: &TelegramMessage) -> Vec<WebhookMediaRef> {
     let mut refs = Vec::new();
 
     // Photo: pick largest size (last in array)
-    if let Some(photos) = &message.photo {
-        if let Some(largest) = photos.last() {
-            refs.push(WebhookMediaRef {
-                file_id: largest.file_id.clone(),
-                mime_type: "image/jpeg".to_string(),
-                filename: None,
-            });
-        }
+    if let Some(photos) = &message.photo
+        && let Some(largest) = photos.last()
+    {
+        refs.push(WebhookMediaRef {
+            file_id: largest.file_id.clone(),
+            mime_type: "image/jpeg".to_string(),
+            filename: None,
+        });
     }
 
     if let Some(doc) = &message.document {

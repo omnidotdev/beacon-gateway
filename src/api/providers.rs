@@ -2,11 +2,16 @@
 //!
 //! Lists available LLM providers and their status.
 //! - **Cloud**: key management is via the Synapse dashboard; keys resolved per-user at request time
-//! - **Self-hosted**: keys stored locally in SQLite via `POST /configure` and `DELETE /{provider}`
+//! - **Self-hosted**: keys stored locally in `SQLite` via `POST /configure` and `DELETE /{provider}`
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::HeaderMap, routing::{delete, get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::HeaderMap,
+    routing::{delete, get, post},
+};
 use serde::{Deserialize, Serialize};
 
 use super::ApiState;
@@ -81,7 +86,9 @@ pub struct ConfigureResponse {
 /// Extract user ID from JWT in the Authorization header
 async fn extract_user_id(headers: &HeaderMap, state: &ApiState) -> Option<String> {
     let Some(jwt_cache) = state.jwt_cache.as_ref() else {
-        tracing::warn!("BYOK auth failed: no JWT cache (SYNAPSE_API_URL or SYNAPSE_GATEWAY_SECRET not set)");
+        tracing::warn!(
+            "BYOK auth failed: no JWT cache (SYNAPSE_API_URL or SYNAPSE_GATEWAY_SECRET not set)"
+        );
         return None;
     };
 
@@ -133,6 +140,7 @@ fn provider_status(
 }
 
 /// Get all available providers and their status
+#[allow(clippy::too_many_lines)]
 async fn list_providers(
     headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
@@ -149,15 +157,18 @@ async fn list_providers(
         vec![]
     };
 
-    let local_configured = if let Some(store) = &state.local_key_store {
-        store.list_configured().unwrap_or_default()
-    } else {
-        vec![]
-    };
+    let local_configured = state
+        .local_key_store
+        .as_ref()
+        .map_or_else(Vec::new, |store| {
+            store.list_configured().unwrap_or_default()
+        });
 
     let preferred_provider = if let Some(ref uid) = user_id {
         if let Some(resolver) = &state.key_resolver {
-            resolver.resolve_preferred(uid).await
+            resolver
+                .resolve_preferred(uid)
+                .await
                 .ok()
                 .flatten()
                 .map(|(provider, _)| provider)
@@ -251,36 +262,37 @@ async fn list_providers(
     ];
 
     // Active provider is the user's explicit preference (from Synapse defaultProvider)
-    let active_provider = if let Some(ref pref) = preferred_provider {
-        match pref.as_str() {
+    let active_provider = preferred_provider.as_ref().map_or_else(
+        || {
+            // No Synapse preference — use local store or env order: anthropic → openai → openrouter
+            let all_configured: Vec<&str> = ["anthropic", "openai", "openrouter"]
+                .into_iter()
+                .filter(|p| {
+                    local_configured.contains(&p.to_string())
+                        || std::env::var(match *p {
+                            "anthropic" => "ANTHROPIC_API_KEY",
+                            "openai" => "OPENAI_API_KEY",
+                            _ => "OPENROUTER_API_KEY",
+                        })
+                        .is_ok()
+                })
+                .collect();
+
+            all_configured.first().and_then(|p| match *p {
+                "anthropic" => Some(ProviderType::Anthropic),
+                "openai" => Some(ProviderType::Openai),
+                "openrouter" => Some(ProviderType::Openrouter),
+                _ => None,
+            })
+        },
+        |pref| match pref.as_str() {
             "anthropic" => Some(ProviderType::Anthropic),
             "openai" => Some(ProviderType::Openai),
             "openrouter" => Some(ProviderType::Openrouter),
             "omni_credits" => Some(ProviderType::OmniCredits),
             _ => None,
-        }
-    } else {
-        // No Synapse preference — use local store or env order: anthropic → openai → openrouter
-        let all_configured: Vec<&str> = ["anthropic", "openai", "openrouter"]
-            .into_iter()
-            .filter(|p| {
-                local_configured.contains(&p.to_string())
-                    || std::env::var(match *p {
-                        "anthropic" => "ANTHROPIC_API_KEY",
-                        "openai" => "OPENAI_API_KEY",
-                        _ => "OPENROUTER_API_KEY",
-                    })
-                    .is_ok()
-            })
-            .collect();
-
-        all_configured.first().and_then(|p| match *p {
-            "anthropic" => Some(ProviderType::Anthropic),
-            "openai" => Some(ProviderType::Openai),
-            "openrouter" => Some(ProviderType::Openrouter),
-            _ => None,
-        })
-    };
+        },
+    );
 
     Json(ProvidersResponse {
         providers,
@@ -343,7 +355,11 @@ async fn configure_provider(
         ));
     };
 
-    match store.set(&body.provider, &body.api_key, body.model_preference.as_deref()) {
+    match store.set(
+        &body.provider,
+        &body.api_key,
+        body.model_preference.as_deref(),
+    ) {
         Ok(()) => {
             tracing::info!(provider = %body.provider, "local provider key configured");
             Ok(Json(ConfigureResponse {
@@ -365,6 +381,7 @@ async fn configure_provider(
 }
 
 /// Remove a locally configured provider key
+#[allow(clippy::similar_names)]
 async fn remove_provider(
     headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
@@ -382,12 +399,12 @@ async fn remove_provider(
 
     // Require BEACON_API_KEY if one is configured
     if let Some(ref expected_key) = state.api_key {
-        let provided = headers
+        let header_key = headers
             .get("x-api-key")
             .or_else(|| headers.get("authorization"))
             .and_then(|v| v.to_str().ok())
             .map(|v| v.strip_prefix("Bearer ").unwrap_or(v));
-        if provided != Some(expected_key.as_str()) {
+        if header_key != Some(expected_key.as_str()) {
             return Err((
                 axum::http::StatusCode::UNAUTHORIZED,
                 Json(ConfigureResponse {
@@ -411,7 +428,7 @@ async fn remove_provider(
     match store.remove(&provider) {
         Ok(()) => Ok(Json(ConfigureResponse {
             success: true,
-            message: format!("{} key removed", provider),
+            message: format!("{provider} key removed"),
         })),
         Err(e) => {
             tracing::error!(error = %e, "failed to remove local provider key");

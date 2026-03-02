@@ -7,21 +7,21 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{
-        ws::{Message, WebSocket},
         Path, Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::nodes::{InvokeResult, NodeRegistration, NodeRegistry, NodeSession};
 use crate::nodes::policy::is_command_allowed;
+use crate::nodes::{InvokeResult, NodeRegistration, NodeRegistry, NodeSession};
 
 /// Shared node registry state
 pub type SharedNodeRegistry = Arc<Mutex<NodeRegistry>>;
@@ -104,7 +104,7 @@ pub struct InvokeBody {
     pub idempotency_key: Option<String>,
 }
 
-fn default_timeout_ms() -> u64 {
+const fn default_timeout_ms() -> u64 {
     30_000
 }
 
@@ -174,22 +174,23 @@ async fn handle_node_socket(
 
         match incoming {
             NodeToGateway::Register(registration) => {
-                let mut reg = registry.lock().await;
-                let id = reg.register(registration);
+                let id = registry.lock().await.register(registration);
                 node_id = Some(id.clone());
 
-                let ack = GatewayToNode::Registered { node_id: id.clone() };
-                if let Ok(json) = serde_json::to_string(&ack) {
-                    if sender.send(Message::Text(json.into())).await.is_err() {
-                        return;
-                    }
+                let ack = GatewayToNode::Registered {
+                    node_id: id.clone(),
+                };
+                if let Ok(json) = serde_json::to_string(&ack)
+                    && sender.send(Message::Text(json.into())).await.is_err()
+                {
+                    return;
                 }
 
                 tracing::info!(node_id = %id, "node registered");
                 break;
             }
-            NodeToGateway::Ping => continue,
-            _ => {
+            NodeToGateway::Ping => {}
+            NodeToGateway::InvokeResponse { .. } => {
                 let err = GatewayToNode::Error {
                     code: "invalid_message".to_string(),
                     message: "must register before sending other messages".to_string(),
@@ -236,24 +237,25 @@ async fn handle_node_socket(
                     }
                 }
             }
-            Message::Ping(_) => {}
             Message::Close(_) => break,
             _ => {}
         }
     }
 
     // Cleanup on disconnect
-    let mut reg = registry.lock().await;
-    reg.unregister(&node_id);
+    registry.lock().await.unregister(&node_id);
     tracing::info!(node_id = %node_id, "node disconnected and unregistered");
 }
 
 /// List all connected nodes
-async fn list_nodes(
-    State(registry): State<SharedNodeRegistry>,
-) -> Json<Vec<NodeResponse>> {
-    let reg = registry.lock().await;
-    let nodes: Vec<NodeResponse> = reg.list().iter().map(|n| NodeResponse::from(*n)).collect();
+async fn list_nodes(State(registry): State<SharedNodeRegistry>) -> Json<Vec<NodeResponse>> {
+    let nodes: Vec<NodeResponse> = registry
+        .lock()
+        .await
+        .list()
+        .iter()
+        .map(|n| NodeResponse::from(*n))
+        .collect();
     Json(nodes)
 }
 
@@ -289,7 +291,10 @@ async fn invoke_node(
     let (platform, declared_commands) = {
         let reg = registry.lock().await;
         let node = reg.get(&node_id).ok_or_else(|| {
-            err(StatusCode::NOT_FOUND, &format!("node '{node_id}' not found"))
+            err(
+                StatusCode::NOT_FOUND,
+                &format!("node '{node_id}' not found"),
+            )
         })?;
         (node.platform.clone(), node.commands.clone())
     };
@@ -298,7 +303,10 @@ async fn invoke_node(
     if !is_command_allowed(&platform, &declared_commands, &deny_list, &body.command) {
         return Err(err(
             StatusCode::FORBIDDEN,
-            &format!("command '{}' not allowed for platform '{platform}'", body.command),
+            &format!(
+                "command '{}' not allowed for platform '{platform}'",
+                body.command
+            ),
         ));
     }
 

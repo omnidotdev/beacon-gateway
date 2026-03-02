@@ -75,8 +75,10 @@ impl MdnsAdvertiser {
         let instance_name = format!("{persona_id}-{device_id_short}");
 
         // Get hostname
-        let hostname = hostname::get()
-            .map_or_else(|_| "beacon".to_string(), |h| h.to_string_lossy().to_string());
+        let hostname = hostname::get().map_or_else(
+            |_| "beacon".to_string(),
+            |h| h.to_string_lossy().to_string(),
+        );
 
         // Build TXT record properties
         let mut properties = HashMap::new();
@@ -146,10 +148,10 @@ impl MdnsAdvertiser {
 impl Drop for MdnsAdvertiser {
     fn drop(&mut self) {
         // Try to unregister on drop (best effort, synchronous)
-        if let Ok(guard) = self.registered_service.try_read() {
-            if let Some(name) = guard.as_ref() {
-                let _ = self.daemon.unregister(name);
-            }
+        if let Ok(guard) = self.registered_service.try_read()
+            && let Some(name) = guard.as_ref()
+        {
+            let _ = self.daemon.unregister(name);
         }
         // Shutdown the daemon
         if let Err(e) = self.daemon.shutdown() {

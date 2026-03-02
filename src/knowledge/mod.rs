@@ -1,12 +1,9 @@
 //! Knowledge management for persona context
 //!
-//! - **selection**: Choose relevant knowledge chunks based on user messages
-//! - **resolver**: Fetch and cache knowledge packs from Manifold
+//! Re-exports shared infrastructure from agent-core
 
-mod resolver;
-mod selection;
-
-pub use resolver::{KnowledgePackResolver, ResolverError, hydrate_embeddings};
-pub use selection::{
-    cosine_similarity, format_knowledge, select_knowledge, select_knowledge_with_embeddings,
+pub use agent_core::knowledge::{
+    KnowledgePackResolver, ResolverError, build_knowledge_context, cosine_similarity,
+    format_knowledge, hydrate_embeddings, resolve_and_merge, select_knowledge,
+    select_knowledge_with_embeddings,
 };

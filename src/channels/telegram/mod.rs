@@ -21,9 +21,9 @@ use tokio::sync::mpsc;
 use super::{Channel, ChannelCapability, IncomingMessage, OutgoingMessage};
 use crate::{Error, Result};
 
+pub use dedup::UpdateDedup;
 pub use polling::extract_update_media_refs;
 pub use rate_limiter::TelegramRateLimiter;
-pub use dedup::UpdateDedup;
 pub use types::{BotCommand, MediaFileRef};
 
 /// Default streaming edit interval (1000ms)
@@ -116,7 +116,9 @@ impl Channel for TelegramChannel {
         if let Some(ref target) = message.edit_target
             && let Ok(msg_id) = target.parse::<i64>()
         {
-            return self.edit_message_text(chat_id, msg_id, &message.content).await;
+            return self
+                .edit_message_text(chat_id, msg_id, &message.content)
+                .await;
         }
 
         self.send_message(chat_id, &message.content, reply_to).await
@@ -147,7 +149,12 @@ impl Channel for TelegramChannel {
         self.set_message_reaction(chat_id, msg_id, emoji).await
     }
 
-    async fn remove_reaction(&self, channel_id: &str, message_id: &str, _emoji: &str) -> Result<()> {
+    async fn remove_reaction(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        _emoji: &str,
+    ) -> Result<()> {
         let chat_id: i64 = channel_id
             .parse()
             .map_err(|_| Error::Channel("Invalid chat ID".to_string()))?;
@@ -286,7 +293,7 @@ impl TelegramAccountRegistry {
 
     /// Create a registry from a map of named accounts
     #[must_use]
-    pub fn new(accounts: HashMap<String, TelegramAccount>, default_id: String) -> Self {
+    pub const fn new(accounts: HashMap<String, TelegramAccount>, default_id: String) -> Self {
         Self {
             accounts,
             default_id,
@@ -335,9 +342,10 @@ impl TelegramAccountRegistry {
     }
 }
 
-/// Check if a message should be skipped due to mention gating.
+/// Check if a message should be skipped due to mention gating
 ///
 /// Returns `true` if the message is in a group and the bot is not mentioned.
+#[must_use]
 pub fn should_skip_group_message(
     msg: &IncomingMessage,
     chat_type: &str,

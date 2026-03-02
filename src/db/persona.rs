@@ -34,7 +34,10 @@ impl PersonaRepo {
     ///
     /// Returns error if database operation fails
     pub fn install(&self, persona: &Persona, namespace: &str) -> Result<InstalledPersona> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4().to_string();
         let content = serde_json::to_string(persona).map_err(|e| Error::Database(e.to_string()))?;
@@ -92,7 +95,10 @@ impl PersonaRepo {
     ///
     /// Returns error if database operation fails
     pub fn uninstall(&self, persona_id: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = conn.execute(
             "DELETE FROM installed_personas WHERE persona_id = ?1",
@@ -112,7 +118,10 @@ impl PersonaRepo {
     ///
     /// Returns error if database operation fails
     pub fn get(&self, persona_id: &str) -> Result<Option<InstalledPersona>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn.prepare(
             r"
@@ -139,7 +148,10 @@ impl PersonaRepo {
     ///
     /// Returns error if database operation fails
     pub fn list(&self) -> Result<Vec<InstalledPersona>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn.prepare(
             r"

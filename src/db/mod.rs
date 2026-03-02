@@ -47,7 +47,7 @@ pub(crate) fn register_sqlite_vec() {
     });
 }
 
-pub use embedder::{Embedder, EMBEDDING_DIM};
+pub use embedder::{EMBEDDING_DIM, Embedder};
 pub use indexer::{ExtractedFact, ExtractionResponse, Indexer};
 pub use knowledge::{KnowledgePackRepo, KnowledgePackRow};
 pub use memory::{Memory, MemoryCategory, MemoryRepo};

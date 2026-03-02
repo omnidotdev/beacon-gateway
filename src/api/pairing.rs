@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -297,8 +297,10 @@ async fn confirm_pairing(
 async fn list_pending(State(state): State<Arc<PairingState>>) -> impl IntoResponse {
     state.cleanup_expired().await;
 
-    let requests = state.pending_requests.read().await;
-    let pending: Vec<_> = requests
+    let pending: Vec<_> = state
+        .pending_requests
+        .read()
+        .await
         .values()
         .map(|r| PairingRequestResponse {
             request_id: r.id.clone(),
@@ -388,7 +390,10 @@ async fn update_trust(
 ) -> impl IntoResponse {
     let trust_level = TrustLevel::from_str(&body.trust_level);
 
-    match state.device_manager.update_trust_level(&device_id, trust_level) {
+    match state
+        .device_manager
+        .update_trust_level(&device_id, trust_level)
+    {
         Ok(()) => {
             tracing::info!(device_id = %device_id, trust_level = %trust_level, "trust level updated");
             StatusCode::OK

@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use crate::db::{Memory, MemoryCategory, MemoryRepo};
 use crate::Result;
+use crate::db::{Memory, MemoryCategory, MemoryRepo};
 
 use super::life_json::{AssistantConfig, LearnedFact, LifeJson};
 
@@ -77,7 +77,12 @@ pub fn export_memories(
         ..LifeJson::default()
     };
 
-    tracing::info!(user_id, persona_id, count, "exported memories to life.json format");
+    tracing::info!(
+        user_id,
+        persona_id,
+        count,
+        "exported memories to life.json format"
+    );
 
     Ok(ExportResult { life_json, count })
 }
@@ -102,22 +107,23 @@ pub fn import_memories(
     let mut imported = 0;
     let mut skipped = 0;
 
-    let assistants = match life_json.assistants {
-        Some(a) => a,
-        None => return Ok(ImportResult { imported: 0, skipped: 0 }),
+    let Some(assistants) = life_json.assistants else {
+        return Ok(ImportResult {
+            imported: 0,
+            skipped: 0,
+        });
     };
 
     for (assistant_id, config) in &assistants {
         // If a specific persona was requested, skip others
-        if let Some(pid) = persona_id {
-            if assistant_id != pid {
-                continue;
-            }
+        if let Some(pid) = persona_id
+            && assistant_id != pid
+        {
+            continue;
         }
 
-        let facts = match &config.learned_facts {
-            Some(f) => f,
-            None => continue,
+        let Some(facts) = &config.learned_facts else {
+            continue;
         };
 
         for fact in facts {
@@ -138,7 +144,12 @@ pub fn import_memories(
         }
     }
 
-    tracing::info!(user_id, imported, skipped, "imported memories from life.json");
+    tracing::info!(
+        user_id,
+        imported,
+        skipped,
+        "imported memories from life.json"
+    );
 
     Ok(ImportResult { imported, skipped })
 }
@@ -153,6 +164,7 @@ fn confidence_from_memory(memory: &Memory) -> f32 {
 
     // Scale access count to 0.5..0.95 range
     let base = 0.5_f32;
+    #[allow(clippy::cast_precision_loss)] // access_count is small, precision loss acceptable
     let scale = (memory.access_count as f32 / 100.0).min(0.45);
     base + scale
 }
@@ -160,7 +172,7 @@ fn confidence_from_memory(memory: &Memory) -> f32 {
 /// Build a human-readable source label for the exported fact
 fn source_label(memory: &Memory) -> String {
     match &memory.source_channel {
-        Some(ch) if !ch.is_empty() => format!("beacon:{}", ch),
+        Some(ch) if !ch.is_empty() => format!("beacon:{ch}"),
         _ => "beacon".to_string(),
     }
 }
@@ -198,8 +210,17 @@ mod tests {
     fn test_export_with_memories() {
         let (repo, user_id) = setup();
 
-        let m1 = Memory::new(user_id.clone(), MemoryCategory::Fact, "Likes Rust".to_string()).pinned();
-        let m2 = Memory::new(user_id.clone(), MemoryCategory::Preference, "Dark mode".to_string());
+        let m1 = Memory::new(
+            user_id.clone(),
+            MemoryCategory::Fact,
+            "Likes Rust".to_string(),
+        )
+        .pinned();
+        let m2 = Memory::new(
+            user_id.clone(),
+            MemoryCategory::Preference,
+            "Dark mode".to_string(),
+        );
         repo.add(&m1).unwrap();
         repo.add(&m2).unwrap();
 
@@ -246,7 +267,11 @@ mod tests {
         let (repo, user_id) = setup();
 
         // Pre-create a memory with same content
-        let existing = Memory::new(user_id.clone(), MemoryCategory::Fact, "Prefers Rust".to_string());
+        let existing = Memory::new(
+            user_id.clone(),
+            MemoryCategory::Fact,
+            "Prefers Rust".to_string(),
+        );
         repo.add(&existing).unwrap();
 
         let json = r#"{
@@ -314,8 +339,17 @@ mod tests {
         let (repo, user_id) = setup();
 
         // Create memories
-        let m1 = Memory::new(user_id.clone(), MemoryCategory::Fact, "Knows Rust".to_string()).pinned();
-        let m2 = Memory::new(user_id.clone(), MemoryCategory::Preference, "Vim user".to_string());
+        let m1 = Memory::new(
+            user_id.clone(),
+            MemoryCategory::Fact,
+            "Knows Rust".to_string(),
+        )
+        .pinned();
+        let m2 = Memory::new(
+            user_id.clone(),
+            MemoryCategory::Preference,
+            "Vim user".to_string(),
+        );
         repo.add(&m1).unwrap();
         repo.add(&m2).unwrap();
 
@@ -338,7 +372,8 @@ mod tests {
 
     #[test]
     fn test_confidence_from_memory() {
-        let pinned = Memory::new("u".to_string(), MemoryCategory::Fact, "test".to_string()).pinned();
+        let pinned =
+            Memory::new("u".to_string(), MemoryCategory::Fact, "test".to_string()).pinned();
         assert_eq!(confidence_from_memory(&pinned), 1.0);
 
         let basic = Memory::new("u".to_string(), MemoryCategory::Fact, "test".to_string());

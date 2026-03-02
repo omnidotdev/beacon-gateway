@@ -27,9 +27,8 @@
 
 pub mod agent;
 pub mod api;
-pub mod billing;
 pub mod attachments;
-pub mod events;
+pub mod billing;
 pub mod canvas;
 pub mod channels;
 pub mod config;
@@ -38,8 +37,9 @@ pub mod daemon;
 pub mod db;
 pub mod discovery;
 pub mod error;
-pub mod hooks;
+pub mod events;
 pub mod extensions;
+pub mod hooks;
 pub mod integrations;
 pub mod knowledge;
 pub mod lifecycle;
@@ -52,8 +52,8 @@ pub mod prompt;
 pub mod providers;
 pub mod relay;
 pub mod security;
-pub mod skills;
 pub mod setup;
+pub mod skills;
 pub mod sync;
 pub mod tools;
 pub mod voice;
@@ -61,31 +61,31 @@ pub mod voice;
 /// Sentinel persona ID indicating no persona should be applied
 pub const NO_PERSONA_ID: &str = "__none__";
 
+pub use canvas::{Canvas, CanvasCommand, CanvasContent, CanvasElement, CanvasTools};
 pub use config::Config;
 pub use context::{ContextBuilder, LifeJson, LifeJsonReader};
 pub use daemon::Daemon;
 pub use db::{DbConn, DbPool};
+pub use discovery::MdnsAdvertiser;
 pub use error::{Error, Result};
+pub use extensions::{Extension, ExtensionInfo, ExtensionRegistry};
+pub use hooks::{HookAction, HookEvent, HookManager, HookResult, HooksConfig};
+pub use integrations::{Schedule, ScheduleRequest, VortexClient};
 pub use knowledge::{
-    KnowledgePackResolver, ResolverError, cosine_similarity, format_knowledge,
-    hydrate_embeddings, select_knowledge, select_knowledge_with_embeddings,
+    KnowledgePackResolver, ResolverError, cosine_similarity, format_knowledge, hydrate_embeddings,
+    select_knowledge, select_knowledge_with_embeddings,
 };
 pub use persona::{
     KnowledgeChunk, KnowledgeConfig, KnowledgePack, KnowledgePackRef, KnowledgePriority,
     PackEmbeddings, Persona,
 };
+pub use plugins::{PluginKind, PluginManager, PluginManifest};
 pub use providers::KeyResolver;
+pub use relay::{RelayConfig, RelayManager, RelayMode, RelayStatus};
 pub use security::{DmPolicy, PairedUser, PairingManager};
 pub use skills::{Skill, SkillMetadata, SkillRegistry, SkillSource};
+pub use sync::SyncClient;
 pub use tools::{
     SearchProvider, SearchResult, ToolPolicy, ToolPolicyConfig, ToolProfile, WebFetchTool,
     WebResponse, WebSearchTool,
 };
-pub use canvas::{Canvas, CanvasCommand, CanvasContent, CanvasElement, CanvasTools};
-pub use extensions::{Extension, ExtensionInfo, ExtensionRegistry};
-pub use integrations::{Schedule, ScheduleRequest, VortexClient};
-pub use relay::{RelayConfig, RelayManager, RelayMode, RelayStatus};
-pub use discovery::MdnsAdvertiser;
-pub use hooks::{HookAction, HookEvent, HookManager, HookResult, HooksConfig};
-pub use plugins::{PluginKind, PluginManifest, PluginManager};
-pub use sync::SyncClient;

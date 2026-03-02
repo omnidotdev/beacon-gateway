@@ -4,16 +4,17 @@ use std::path::PathBuf;
 
 use dialoguer::{Confirm, Input, Select};
 
+use crate::Config;
 use crate::config::file::{
     ApiKeysFileConfig, BeaconConfigFile, LlmFileConfig, ServerFileConfig, VoiceFileConfig,
 };
-use crate::Config;
 
 /// Run the interactive setup wizard
 ///
 /// # Errors
 ///
 /// Returns error if user input fails or config cannot be written
+#[allow(clippy::too_many_lines)]
 pub fn run_setup() -> anyhow::Result<()> {
     println!("Beacon Setup\n");
 
@@ -60,11 +61,7 @@ pub fn run_setup() -> anyhow::Result<()> {
         .llm
         .provider
         .as_deref()
-        .and_then(|p| {
-            providers
-                .iter()
-                .position(|&l| l.eq_ignore_ascii_case(p))
-        })
+        .and_then(|p| providers.iter().position(|&l| l.eq_ignore_ascii_case(p)))
         .unwrap_or(0);
 
     let provider_idx = Select::new()
@@ -77,7 +74,10 @@ pub fn run_setup() -> anyhow::Result<()> {
     let (env_hint, existing_key) = match provider_name.as_str() {
         "anthropic" => ("ANTHROPIC_API_KEY", existing.api_keys.anthropic.as_deref()),
         "openai" => ("OPENAI_API_KEY", existing.api_keys.openai.as_deref()),
-        "openrouter" => ("OPENROUTER_API_KEY", existing.api_keys.openrouter.as_deref()),
+        "openrouter" => (
+            "OPENROUTER_API_KEY",
+            existing.api_keys.openrouter.as_deref(),
+        ),
         _ => ("", None),
     };
 
@@ -121,9 +121,9 @@ pub fn run_setup() -> anyhow::Result<()> {
         .model
         .as_deref()
         .unwrap_or(match provider_name.as_str() {
-            "anthropic" => "claude-sonnet-4-20250514",
             "openai" => "gpt-4o",
             "openrouter" => "anthropic/claude-sonnet-4-20250514",
+            // "anthropic" and everything else
             _ => "claude-sonnet-4-20250514",
         });
 
@@ -148,9 +148,7 @@ pub fn run_setup() -> anyhow::Result<()> {
                 .interact()?;
 
             if need_openai {
-                let key: String = Input::new()
-                    .with_prompt("OpenAI API key")
-                    .interact_text()?;
+                let key: String = Input::new().with_prompt("OpenAI API key").interact_text()?;
                 if !key.is_empty() {
                     api_keys.openai = Some(key);
                 }
@@ -240,20 +238,22 @@ fn write_config(path: &PathBuf, config: &BeaconConfigFile) -> anyhow::Result<()>
 
 /// Serialize config to a readable TOML string
 fn serialize_config(config: &BeaconConfigFile) -> String {
+    use std::fmt::Write;
+
     let mut out = String::new();
 
     if let Some(ref persona) = config.persona {
-        out.push_str(&format!("persona = \"{persona}\"\n\n"));
+        let _ = write!(out, "persona = \"{persona}\"\n\n");
     }
 
     // [llm]
     if config.llm.model.is_some() || config.llm.provider.is_some() {
         out.push_str("[llm]\n");
         if let Some(ref model) = config.llm.model {
-            out.push_str(&format!("model = \"{model}\"\n"));
+            let _ = writeln!(out, "model = \"{model}\"");
         }
         if let Some(ref provider) = config.llm.provider {
-            out.push_str(&format!("provider = \"{provider}\"\n"));
+            let _ = writeln!(out, "provider = \"{provider}\"");
         }
         out.push('\n');
     }
@@ -262,19 +262,19 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
     if config.voice.enabled.is_some() {
         out.push_str("[voice]\n");
         if let Some(enabled) = config.voice.enabled {
-            out.push_str(&format!("enabled = {enabled}\n"));
+            let _ = writeln!(out, "enabled = {enabled}");
         }
         if let Some(ref m) = config.voice.stt_model {
-            out.push_str(&format!("stt_model = \"{m}\"\n"));
+            let _ = writeln!(out, "stt_model = \"{m}\"");
         }
         if let Some(ref m) = config.voice.tts_model {
-            out.push_str(&format!("tts_model = \"{m}\"\n"));
+            let _ = writeln!(out, "tts_model = \"{m}\"");
         }
         if let Some(ref v) = config.voice.tts_voice {
-            out.push_str(&format!("tts_voice = \"{v}\"\n"));
+            let _ = writeln!(out, "tts_voice = \"{v}\"");
         }
         if let Some(s) = config.voice.tts_speed {
-            out.push_str(&format!("tts_speed = {s}\n"));
+            let _ = writeln!(out, "tts_speed = {s}");
         }
         out.push('\n');
     }
@@ -302,7 +302,7 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
             ("telegram", &ak.telegram),
         ] {
             if let Some(v) = val {
-                out.push_str(&format!("{key} = \"{v}\"\n"));
+                let _ = writeln!(out, "{key} = \"{v}\"");
             }
         }
         out.push('\n');
@@ -313,13 +313,13 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
     if sv.port.is_some() || sv.synapse_url.is_some() || sv.cloud_mode.is_some() {
         out.push_str("[server]\n");
         if let Some(port) = sv.port {
-            out.push_str(&format!("port = {port}\n"));
+            let _ = writeln!(out, "port = {port}");
         }
         if let Some(ref url) = sv.synapse_url {
-            out.push_str(&format!("synapse_url = \"{url}\"\n"));
+            let _ = writeln!(out, "synapse_url = \"{url}\"");
         }
         if let Some(cloud) = sv.cloud_mode {
-            out.push_str(&format!("cloud_mode = {cloud}\n"));
+            let _ = writeln!(out, "cloud_mode = {cloud}");
         }
         out.push('\n');
     }

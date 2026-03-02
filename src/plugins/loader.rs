@@ -136,12 +136,7 @@ impl PluginManager {
         self.plugins
             .values()
             .filter(|p| p.enabled)
-            .filter_map(|p| {
-                p.manifest
-                    .skills_dir
-                    .as_ref()
-                    .map(|dir| p.path.join(dir))
-            })
+            .filter_map(|p| p.manifest.skills_dir.as_ref().map(|dir| p.path.join(dir)))
             .filter(|p| p.is_dir())
             .collect()
     }

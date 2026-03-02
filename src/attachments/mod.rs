@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use synapse_client::SynapseClient;
 
-use crate::channels::{Attachment, AttachmentKind};
 use crate::Result;
+use crate::channels::{Attachment, AttachmentKind};
 
 pub use vision::VisionClient;
 
@@ -93,7 +93,10 @@ impl AttachmentProcessor {
         };
 
         // Analyze with vision
-        match vision.describe_image(&image_data, &attachment.mime_type).await {
+        match vision
+            .describe_image(&image_data, &attachment.mime_type)
+            .await
+        {
             Ok(description) => {
                 format!(
                     "[Image: {}]\n{}",
@@ -145,7 +148,10 @@ impl AttachmentProcessor {
         };
 
         let filename = attachment.filename.as_deref().unwrap_or("audio.wav");
-        match synapse.transcribe(wav_data.into(), filename, &self.stt_model).await {
+        match synapse
+            .transcribe(wav_data.into(), filename, &self.stt_model)
+            .await
+        {
             Ok(result) => {
                 format!(
                     "[Audio transcription: {}]\n\"{}\"",
@@ -252,7 +258,8 @@ fn convert_mp3_to_wav(mp3_data: &[u8]) -> Result<Vec<u8>> {
                 // Convert to mono f32 if stereo
                 if frame.channels == 2 {
                     for chunk in frame.data.chunks(2) {
-                        let mono = f32::midpoint(f32::from(chunk[0]), f32::from(chunk[1])) / 32768.0;
+                        let mono =
+                            f32::midpoint(f32::from(chunk[0]), f32::from(chunk[1])) / 32768.0;
                         samples.push(mono);
                     }
                 } else {
@@ -286,9 +293,14 @@ fn resample_audio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f
     let chunk_size = 1024;
     let sub_chunks = 2;
 
-    let mut resampler =
-        FftFixedIn::<f64>::new(from_rate as usize, to_rate as usize, chunk_size, sub_chunks, 1)
-            .map_err(|e| crate::Error::Attachment(format!("Resampler init failed: {e}")))?;
+    let mut resampler = FftFixedIn::<f64>::new(
+        from_rate as usize,
+        to_rate as usize,
+        chunk_size,
+        sub_chunks,
+        1,
+    )
+    .map_err(|e| crate::Error::Attachment(format!("Resampler init failed: {e}")))?;
 
     // Convert to f64
     let input: Vec<f64> = samples.iter().map(|&s| f64::from(s)).collect();

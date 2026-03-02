@@ -67,7 +67,10 @@ impl KnowledgePackRepo {
     ///
     /// Returns error if database operation or serialization fails
     pub fn install(&self, pack: &KnowledgePack, namespace: &str) -> Result<String> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = format!("kp_{}", Uuid::new_v4());
         let tags_json = serde_json::to_string(&pack.tags)?;
@@ -127,7 +130,10 @@ impl KnowledgePackRepo {
     ///
     /// Returns error if database operation fails
     pub fn uninstall(&self, name: &str, namespace: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Look up the pack ID before deletion (needed for vector cleanup)
         let pack_id: Option<String> = conn
@@ -173,7 +179,10 @@ impl KnowledgePackRepo {
     ///
     /// Returns error if database operation fails
     pub fn get(&self, id: &str) -> Result<Option<KnowledgePackRow>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
             &format!("SELECT {PACK_COLUMNS} FROM installed_knowledge_packs WHERE id = ?1"),
@@ -194,7 +203,10 @@ impl KnowledgePackRepo {
     ///
     /// Returns error if database operation fails
     pub fn get_by_name(&self, name: &str, namespace: &str) -> Result<Option<KnowledgePackRow>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
             &format!("SELECT {PACK_COLUMNS} FROM installed_knowledge_packs WHERE name = ?1 AND source_namespace = ?2"),
@@ -215,11 +227,14 @@ impl KnowledgePackRepo {
     ///
     /// Returns error if database operation fails
     pub fn list(&self) -> Result<Vec<KnowledgePackRow>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        let mut stmt = conn.prepare(
-            &format!("SELECT {PACK_COLUMNS} FROM installed_knowledge_packs ORDER BY name"),
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PACK_COLUMNS} FROM installed_knowledge_packs ORDER BY name"
+        ))?;
 
         let rows = stmt.query_map([], row_to_pack_row)?;
 
@@ -243,7 +258,10 @@ impl KnowledgePackRepo {
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<(String, f32)>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let embedding_bytes = super::embedder::Embedder::to_bytes(query_embedding);
 
         let mut stmt = conn.prepare(
@@ -255,10 +273,9 @@ impl KnowledgePackRepo {
         )?;
 
         #[allow(clippy::cast_possible_wrap)]
-        let rows = stmt.query_map(
-            rusqlite::params![embedding_bytes, limit as i64],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -284,7 +301,7 @@ mod tests {
             tags: vec!["test".to_string(), "example".to_string()],
             chunks: vec![
                 KnowledgeChunk {
-                    topic: "Rust basics".to_string(),
+                    topic: Some("Rust basics".to_string()),
                     tags: vec!["rust".to_string()],
                     content: "Rust is a systems programming language".to_string(),
                     rules: vec![],
@@ -292,7 +309,7 @@ mod tests {
                     embedding: None,
                 },
                 KnowledgeChunk {
-                    topic: "Testing".to_string(),
+                    topic: Some("Testing".to_string()),
                     tags: vec!["testing".to_string()],
                     content: "Write tests for your code".to_string(),
                     rules: vec![],
@@ -398,6 +415,6 @@ mod tests {
         let deserialized: KnowledgePack = serde_json::from_str(&fetched.content).unwrap();
         assert_eq!(deserialized.name, "test-knowledge");
         assert_eq!(deserialized.chunks.len(), 2);
-        assert_eq!(deserialized.chunks[0].topic, "Rust basics");
+        assert_eq!(deserialized.chunks[0].topic.as_deref(), Some("Rust basics"));
     }
 }

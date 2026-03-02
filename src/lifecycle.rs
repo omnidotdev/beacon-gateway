@@ -105,9 +105,7 @@ pub fn service_status() -> Result<ServiceStatus> {
     return systemd_status();
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    Ok(ServiceStatus::Unknown(
-        "platform not supported".to_string(),
-    ))
+    Ok(ServiceStatus::Unknown("platform not supported".to_string()))
 }
 
 /// Restart the beacon service
@@ -155,9 +153,10 @@ fn plist_path() -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn install_launchd(config: &ServiceConfig) -> Result<()> {
-    let log_dir = directories::BaseDirs::new()
-        .map(|d| d.data_dir().join("omni").join("beacon").join("logs"))
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let log_dir = directories::BaseDirs::new().map_or_else(
+        || PathBuf::from("/tmp"),
+        |d| d.data_dir().join("omni").join("beacon").join("logs"),
+    );
 
     std::fs::create_dir_all(&log_dir)?;
 
@@ -256,7 +255,11 @@ fn launchd_status() -> Result<ServiceStatus> {
 #[cfg(target_os = "macos")]
 fn restart_launchd() -> Result<()> {
     let _ = std::process::Command::new("launchctl")
-        .args(["kickstart", "-k", &format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() })])
+        .args([
+            "kickstart",
+            "-k",
+            &format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() }),
+        ])
         .output();
 
     Ok(())
@@ -269,12 +272,13 @@ const SYSTEMD_SERVICE: &str = "beacon";
 
 #[cfg(target_os = "linux")]
 fn service_file_path() -> PathBuf {
-    let config_dir = directories::BaseDirs::new()
-        .map(|d| d.config_dir().to_path_buf())
-        .unwrap_or_else(|| {
+    let config_dir = directories::BaseDirs::new().map_or_else(
+        || {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
             PathBuf::from(home).join(".config")
-        });
+        },
+        |d| d.config_dir().to_path_buf(),
+    );
 
     config_dir
         .join("systemd/user")
@@ -283,16 +287,17 @@ fn service_file_path() -> PathBuf {
 
 #[cfg(target_os = "linux")]
 fn install_systemd(config: &ServiceConfig) -> Result<()> {
-    let log_dir = directories::BaseDirs::new()
-        .map(|d| d.data_dir().join("omni").join("beacon").join("logs"))
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let log_dir = directories::BaseDirs::new().map_or_else(
+        || PathBuf::from("/tmp"),
+        |d| d.data_dir().join("omni").join("beacon").join("logs"),
+    );
 
     std::fs::create_dir_all(&log_dir)?;
 
     let binary = config.binary_path.display();
 
     let unit = format!(
-        r#"[Unit]
+        r"[Unit]
 Description=Beacon Gateway
 After=network.target
 
@@ -305,7 +310,7 @@ Environment=RUST_LOG=info
 
 [Install]
 WantedBy=default.target
-"#,
+",
         persona = config.persona,
         port = config.port,
     );

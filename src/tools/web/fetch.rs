@@ -64,8 +64,8 @@ impl WebFetchTool {
     /// - Response body cannot be read as text
     pub async fn fetch(&self, url: &str, method: Option<&str>) -> Result<WebResponse> {
         // Parse and validate URL
-        let parsed = reqwest::Url::parse(url)
-            .map_err(|e| Error::WebFetch(format!("Invalid URL: {e}")))?;
+        let parsed =
+            reqwest::Url::parse(url).map_err(|e| Error::WebFetch(format!("Invalid URL: {e}")))?;
 
         // Validate scheme
         let scheme = parsed.scheme();
@@ -81,7 +81,12 @@ impl WebFetchTool {
             .ok_or_else(|| Error::WebFetch("URL has no host".to_string()))?;
 
         // Resolve hostname and check for blocked IPs
-        Self::check_ssrf(host, parsed.port().unwrap_or(if scheme == "https" { 443 } else { 80 }))?;
+        Self::check_ssrf(
+            host,
+            parsed
+                .port()
+                .unwrap_or(if scheme == "https" { 443 } else { 80 }),
+        )?;
 
         // Parse method
         let method = match method.unwrap_or("GET").to_uppercase().as_str() {
@@ -112,12 +117,7 @@ impl WebFetchTool {
         let headers: Vec<(String, String)> = response
             .headers()
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.to_string(),
-                    v.to_str().unwrap_or("<binary>").to_string(),
-                )
-            })
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("<binary>").to_string()))
             .collect();
 
         let body = response
@@ -208,7 +208,7 @@ impl WebFetchTool {
     }
 
     /// Check if an IPv6 address is blocked
-    fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
+    const fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
         // ::1 - loopback
         if ip.is_loopback() {
             return true;
@@ -245,19 +245,25 @@ mod tests {
     #[test]
     fn test_blocked_ipv4_loopback() {
         assert!(WebFetchTool::is_blocked_ip("127.0.0.1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("127.255.255.255".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "127.255.255.255".parse().unwrap()
+        ));
     }
 
     #[test]
     fn test_blocked_ipv4_private_10() {
         assert!(WebFetchTool::is_blocked_ip("10.0.0.1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("10.255.255.255".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "10.255.255.255".parse().unwrap()
+        ));
     }
 
     #[test]
     fn test_blocked_ipv4_private_172() {
         assert!(WebFetchTool::is_blocked_ip("172.16.0.1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("172.31.255.255".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "172.31.255.255".parse().unwrap()
+        ));
         // 172.15.x.x should not be blocked
         assert!(!WebFetchTool::is_blocked_ip("172.15.0.1".parse().unwrap()));
         // 172.32.x.x should not be blocked
@@ -267,7 +273,9 @@ mod tests {
     #[test]
     fn test_blocked_ipv4_private_192() {
         assert!(WebFetchTool::is_blocked_ip("192.168.0.1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("192.168.255.255".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "192.168.255.255".parse().unwrap()
+        ));
         // 192.169.x.x should not be blocked
         assert!(!WebFetchTool::is_blocked_ip("192.169.0.1".parse().unwrap()));
     }
@@ -275,20 +283,26 @@ mod tests {
     #[test]
     fn test_blocked_ipv4_link_local() {
         assert!(WebFetchTool::is_blocked_ip("169.254.0.1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("169.254.255.255".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "169.254.255.255".parse().unwrap()
+        ));
     }
 
     #[test]
     fn test_blocked_ipv4_current_network() {
         assert!(WebFetchTool::is_blocked_ip("0.0.0.0".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("0.255.255.255".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "0.255.255.255".parse().unwrap()
+        ));
     }
 
     #[test]
     fn test_allowed_ipv4() {
         assert!(!WebFetchTool::is_blocked_ip("8.8.8.8".parse().unwrap()));
         assert!(!WebFetchTool::is_blocked_ip("1.1.1.1".parse().unwrap()));
-        assert!(!WebFetchTool::is_blocked_ip("93.184.216.34".parse().unwrap()));
+        assert!(!WebFetchTool::is_blocked_ip(
+            "93.184.216.34".parse().unwrap()
+        ));
     }
 
     #[test]
@@ -300,13 +314,17 @@ mod tests {
     fn test_blocked_ipv6_unique_local() {
         assert!(WebFetchTool::is_blocked_ip("fc00::1".parse().unwrap()));
         assert!(WebFetchTool::is_blocked_ip("fd00::1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap()
+        ));
     }
 
     #[test]
     fn test_blocked_ipv6_link_local() {
         assert!(WebFetchTool::is_blocked_ip("fe80::1".parse().unwrap()));
-        assert!(WebFetchTool::is_blocked_ip("fe80::1234:5678:abcd:ef01".parse().unwrap()));
+        assert!(WebFetchTool::is_blocked_ip(
+            "fe80::1234:5678:abcd:ef01".parse().unwrap()
+        ));
     }
 
     #[test]
@@ -316,7 +334,11 @@ mod tests {
 
     #[test]
     fn test_allowed_ipv6() {
-        assert!(!WebFetchTool::is_blocked_ip("2001:4860:4860::8888".parse().unwrap())); // Google DNS
-        assert!(!WebFetchTool::is_blocked_ip("2606:4700:4700::1111".parse().unwrap())); // Cloudflare DNS
+        assert!(!WebFetchTool::is_blocked_ip(
+            "2001:4860:4860::8888".parse().unwrap()
+        )); // Google DNS
+        assert!(!WebFetchTool::is_blocked_ip(
+            "2606:4700:4700::1111".parse().unwrap()
+        )); // Cloudflare DNS
     }
 }

@@ -3,15 +3,15 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     middleware,
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{auth::require_api_key, ApiState};
+use super::{ApiState, auth::require_api_key};
 use crate::context::life_json_sync;
 use crate::db::{Memory, MemoryCategory};
 
@@ -213,9 +213,7 @@ async fn export_memories(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<ExportQuery>,
 ) -> Result<Json<ExportResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let persona_id = query
-        .persona_id
-        .unwrap_or_else(|| state.persona_id.clone());
+    let persona_id = query.persona_id.unwrap_or_else(|| state.persona_id.clone());
 
     let result = life_json_sync::export_memories(
         &state.memory_repo,
@@ -281,18 +279,29 @@ async fn crud_list_memories(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let category = query.category.as_deref().and_then(MemoryCategory::from_str_value);
+    let category = query
+        .category
+        .as_deref()
+        .and_then(MemoryCategory::from_str_value);
     let memories = state
         .memory_repo
         .list(&query.user_id, category)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?;
 
     let mut dtos: Vec<MemoryDto> = memories.iter().map(MemoryDto::from).collect();
     if let Some(limit) = query.limit {
         dtos.truncate(limit);
     }
     let count = dtos.len();
-    Ok(Json(ListResponse { memories: dtos, count }))
+    Ok(Json(ListResponse {
+        memories: dtos,
+        count,
+    }))
 }
 
 /// Search memories by text query (CRUD endpoint)
@@ -304,11 +313,19 @@ async fn search_memories(
     let memories = state
         .memory_repo
         .search(&query.user_id, &query.q)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?;
 
     let dtos: Vec<MemoryDto> = memories.iter().take(limit).map(MemoryDto::from).collect();
     let count = dtos.len();
-    Ok(Json(ListResponse { memories: dtos, count }))
+    Ok(Json(ListResponse {
+        memories: dtos,
+        count,
+    }))
 }
 
 /// Create a new memory (CRUD endpoint)
@@ -327,10 +344,12 @@ async fn create_memory(
         memory = memory.with_tag(tag);
     }
 
-    state
-        .memory_repo
-        .add(&memory)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    state.memory_repo.add(&memory).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok((StatusCode::CREATED, Json(MemoryDto::from(&memory))))
 }
@@ -388,8 +407,13 @@ mod tests {
         let alice = user_repo.find_or_create("alice_lhfbu").unwrap();
         let bob = user_repo.find_or_create("bob_lhfbu").unwrap();
 
-        let m1 = crate::db::Memory::new(alice.id.clone(), MemoryCategory::Fact, "Alice fact".to_string());
-        let m2 = crate::db::Memory::new(bob.id.clone(), MemoryCategory::Fact, "Bob fact".to_string());
+        let m1 = crate::db::Memory::new(
+            alice.id.clone(),
+            MemoryCategory::Fact,
+            "Alice fact".to_string(),
+        );
+        let m2 =
+            crate::db::Memory::new(bob.id.clone(), MemoryCategory::Fact, "Bob fact".to_string());
         repo.add(&m1).unwrap();
         repo.add(&m2).unwrap();
 
@@ -408,7 +432,11 @@ mod tests {
         let user_repo = crate::db::UserRepo::new(pool);
 
         let user = user_repo.find_or_create("user_dhsd_delete").unwrap();
-        let m = crate::db::Memory::new(user.id.clone(), MemoryCategory::General, "to delete".to_string());
+        let m = crate::db::Memory::new(
+            user.id.clone(),
+            MemoryCategory::General,
+            "to delete".to_string(),
+        );
         repo.add(&m).unwrap();
 
         let deleted = repo.delete(&m.id).unwrap();
@@ -424,7 +452,10 @@ mod tests {
         let m = crate::db::Memory::new("u1".to_string(), MemoryCategory::Fact, "test".to_string());
         let dto = MemoryDto::from(&m);
         let json = serde_json::to_string(&dto).unwrap();
-        assert!(!json.contains("embedding"), "DTO must not include embedding field");
+        assert!(
+            !json.contains("embedding"),
+            "DTO must not include embedding field"
+        );
     }
 
     #[test]

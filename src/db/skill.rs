@@ -27,6 +27,7 @@ impl SkillRepo {
     /// # Errors
     ///
     /// Returns error if database operation fails
+    #[allow(clippy::too_many_lines)]
     pub fn install_with_priority(
         &self,
         skill: &Skill,
@@ -45,7 +46,10 @@ impl SkillRepo {
             None
         };
 
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4().to_string();
         let tags_json = serde_json::to_string(&skill.metadata.tags).unwrap_or_default();
@@ -64,23 +68,26 @@ impl SkillRepo {
             SkillSource::Manifold {
                 namespace,
                 repository,
-            } => ("manifold", Some(namespace.as_str()), Some(repository.as_str())),
+            } => (
+                "manifold",
+                Some(namespace.as_str()),
+                Some(repository.as_str()),
+            ),
             SkillSource::Bundled => ("bundled", None, None),
             SkillSource::Plugin => ("plugin", None, None),
         };
 
         // Compute command_dispatch_tool from metadata
-        let command_dispatch_tool =
-            if skill.metadata.command_dispatch.as_deref() == Some("tool") {
-                skill.metadata.command_tool.clone()
-            } else {
-                None
-            };
+        let command_dispatch_tool = if skill.metadata.command_dispatch.as_deref() == Some("tool") {
+            skill.metadata.command_tool.clone()
+        } else {
+            None
+        };
 
         let install_specs_json =
             serde_json::to_string(&skill.metadata.install).unwrap_or_else(|_| "[]".to_string());
-        let requires_config_json =
-            serde_json::to_string(&skill.metadata.requires_config).unwrap_or_else(|_| "[]".to_string());
+        let requires_config_json = serde_json::to_string(&skill.metadata.requires_config)
+            .unwrap_or_else(|_| "[]".to_string());
 
         conn.execute(
             r"
@@ -161,7 +168,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn uninstall(&self, skill_id: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = conn.execute(
             "DELETE FROM installed_skills WHERE id = ?1",
@@ -193,7 +203,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn get(&self, skill_id: &str) -> Result<Option<InstalledSkill>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
             "SELECT {} FROM installed_skills WHERE id = ?1",
@@ -218,7 +231,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn get_by_name(&self, name: &str) -> Result<Option<InstalledSkill>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
             "SELECT {} FROM installed_skills WHERE name = ?1",
@@ -247,7 +263,10 @@ impl SkillRepo {
         command: &str,
         user_id: Option<&str>,
     ) -> Result<Option<InstalledSkill>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
             "SELECT {} FROM installed_skills WHERE command_name = ?1 AND (user_id IS NULL OR user_id = ?2)",
@@ -255,10 +274,9 @@ impl SkillRepo {
         );
         let mut stmt = conn.prepare(&sql)?;
 
-        let result = stmt.query_row(
-            rusqlite::params![command, user_id.unwrap_or("")],
-            |row| Self::row_to_installed_skill(row),
-        );
+        let result = stmt.query_row(rusqlite::params![command, user_id.unwrap_or("")], |row| {
+            Self::row_to_installed_skill(row)
+        });
 
         match result {
             Ok(skill) => Ok(Some(skill)),
@@ -273,7 +291,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn list(&self) -> Result<Vec<InstalledSkill>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
             "SELECT {} FROM installed_skills ORDER BY name",
@@ -297,7 +318,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn list_enabled(&self) -> Result<Vec<InstalledSkill>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
             "SELECT {} FROM installed_skills WHERE enabled = 1 ORDER BY name",
@@ -321,7 +345,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn list_enabled_for_user(&self, user_id: Option<&str>) -> Result<Vec<InstalledSkill>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
             "SELECT {} FROM installed_skills WHERE enabled = 1 AND (user_id IS NULL OR user_id = ?1) ORDER BY name",
@@ -344,14 +371,15 @@ impl SkillRepo {
 
     /// List all existing command names (for deduplication)
     fn list_command_names(&self) -> Result<Vec<String>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        let mut stmt = conn.prepare(
-            "SELECT command_name FROM installed_skills WHERE command_name IS NOT NULL",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT command_name FROM installed_skills WHERE command_name IS NOT NULL")?;
 
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
         let mut names = Vec::new();
         for row in rows {
@@ -369,30 +397,34 @@ impl SkillRepo {
     /// Returns error if database operation fails
     pub fn upsert_bundled(&self, skill: &Skill, priority: SkillPriority) -> Result<InstalledSkill> {
         // Check if already installed
-        if let Some(existing) = self.get_by_name(&skill.metadata.name)? {
-            if existing.skill.source == SkillSource::Bundled {
-                // Update content but preserve user settings
-                let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
-                let requires_env_json =
-                    serde_json::to_string(&skill.metadata.requires_env).unwrap_or_default();
-                let os_json = serde_json::to_string(&skill.metadata.os).unwrap_or_default();
-                let requires_bins_json =
-                    serde_json::to_string(&skill.metadata.requires_bins).unwrap_or_default();
-                let requires_any_bins_json =
-                    serde_json::to_string(&skill.metadata.requires_any_bins).unwrap_or_default();
-                let command_dispatch_tool =
-                    if skill.metadata.command_dispatch.as_deref() == Some("tool") {
-                        skill.metadata.command_tool.clone()
-                    } else {
-                        None
-                    };
-                let install_specs_json =
-                    serde_json::to_string(&skill.metadata.install).unwrap_or_else(|_| "[]".to_string());
-                let requires_config_json =
-                    serde_json::to_string(&skill.metadata.requires_config).unwrap_or_else(|_| "[]".to_string());
+        if let Some(existing) = self.get_by_name(&skill.metadata.name)?
+            && existing.skill.source == SkillSource::Bundled
+        {
+            // Update content but preserve user settings
+            let conn = self
+                .pool
+                .get()
+                .map_err(|e| Error::Database(e.to_string()))?;
+            let requires_env_json =
+                serde_json::to_string(&skill.metadata.requires_env).unwrap_or_default();
+            let os_json = serde_json::to_string(&skill.metadata.os).unwrap_or_default();
+            let requires_bins_json =
+                serde_json::to_string(&skill.metadata.requires_bins).unwrap_or_default();
+            let requires_any_bins_json =
+                serde_json::to_string(&skill.metadata.requires_any_bins).unwrap_or_default();
+            let command_dispatch_tool =
+                if skill.metadata.command_dispatch.as_deref() == Some("tool") {
+                    skill.metadata.command_tool.clone()
+                } else {
+                    None
+                };
+            let install_specs_json =
+                serde_json::to_string(&skill.metadata.install).unwrap_or_else(|_| "[]".to_string());
+            let requires_config_json = serde_json::to_string(&skill.metadata.requires_config)
+                .unwrap_or_else(|_| "[]".to_string());
 
-                conn.execute(
-                    r"
+            conn.execute(
+                r"
                     UPDATE installed_skills
                     SET content = ?1, description = ?2, always_include = ?3,
                         user_invocable = ?4, disable_model_invocation = ?5,
@@ -403,45 +435,44 @@ impl SkillRepo {
                         updated_at = datetime('now')
                     WHERE id = ?15
                     ",
-                    rusqlite::params![
-                        skill.content,
-                        skill.metadata.description,
-                        skill.metadata.always,
-                        skill.metadata.user_invocable,
-                        skill.metadata.disable_model_invocation,
-                        skill.metadata.emoji,
-                        requires_env_json,
-                        os_json,
-                        requires_bins_json,
-                        requires_any_bins_json,
-                        skill.metadata.primary_env,
-                        command_dispatch_tool,
-                        install_specs_json,
-                        requires_config_json,
-                        existing.skill.id,
-                    ],
-                )?;
-
-                tracing::debug!(name = %skill.metadata.name, "updated bundled skill content");
-
-                // Return with preserved settings
-                return Ok(InstalledSkill {
-                    skill: Skill {
-                        id: existing.skill.id,
-                        metadata: skill.metadata.clone(),
-                        content: skill.content.clone(),
-                        source: SkillSource::Bundled,
-                    },
-                    installed_at: existing.installed_at,
-                    enabled: existing.enabled,
-                    priority: existing.priority,
-                    command_name: existing.command_name,
-                    user_id: None,
+                rusqlite::params![
+                    skill.content,
+                    skill.metadata.description,
+                    skill.metadata.always,
+                    skill.metadata.user_invocable,
+                    skill.metadata.disable_model_invocation,
+                    skill.metadata.emoji,
+                    requires_env_json,
+                    os_json,
+                    requires_bins_json,
+                    requires_any_bins_json,
+                    skill.metadata.primary_env,
                     command_dispatch_tool,
-                    api_key: existing.api_key,
-                    skill_env: existing.skill_env,
-                });
-            }
+                    install_specs_json,
+                    requires_config_json,
+                    existing.skill.id,
+                ],
+            )?;
+
+            tracing::debug!(name = %skill.metadata.name, "updated bundled skill content");
+
+            // Return with preserved settings
+            return Ok(InstalledSkill {
+                skill: Skill {
+                    id: existing.skill.id,
+                    metadata: skill.metadata.clone(),
+                    content: skill.content.clone(),
+                    source: SkillSource::Bundled,
+                },
+                installed_at: existing.installed_at,
+                enabled: existing.enabled,
+                priority: existing.priority,
+                command_name: existing.command_name,
+                user_id: None,
+                command_dispatch_tool,
+                api_key: existing.api_key,
+                skill_env: existing.skill_env,
+            });
         }
 
         // Not found or not bundled — fresh install
@@ -456,7 +487,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn set_enabled(&self, skill_id: &str, enabled: bool) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = conn.execute(
             r"
@@ -480,7 +514,10 @@ impl SkillRepo {
     ///
     /// Returns error if database operation fails
     pub fn set_priority(&self, skill_id: &str, priority: SkillPriority) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = conn.execute(
             r"
@@ -498,7 +535,7 @@ impl SkillRepo {
         Ok(rows > 0)
     }
 
-    /// Update skill configuration (api_key and/or env overrides)
+    /// Update skill configuration (`api_key` and/or env overrides)
     ///
     /// # Errors
     ///
@@ -509,7 +546,10 @@ impl SkillRepo {
         api_key: Option<&str>,
         env: Option<&HashMap<String, String>>,
     ) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut updates = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -531,14 +571,15 @@ impl SkillRepo {
             return Ok(false);
         }
 
-        updates.push(format!("updated_at = datetime('now')"));
+        updates.push("updated_at = datetime('now')".to_string());
         let sql = format!(
             "UPDATE installed_skills SET {} WHERE id = ?{idx}",
             updates.join(", ")
         );
         params.push(Box::new(skill_id.to_string()));
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(AsRef::as_ref).collect();
         let rows = conn.execute(&sql, param_refs.as_slice())?;
 
         if rows > 0 {
@@ -549,6 +590,7 @@ impl SkillRepo {
     }
 
     /// Convert a database row to an `InstalledSkill`
+    #[allow(clippy::too_many_lines)]
     fn row_to_installed_skill(row: &rusqlite::Row<'_>) -> rusqlite::Result<InstalledSkill> {
         let id: String = row.get(0)?;
         let name: String = row.get(1)?;
@@ -563,45 +605,59 @@ impl SkillRepo {
         let source_repository: Option<String> = row.get(10)?;
         let enabled: bool = row.get(11)?;
         let installed_at: String = row.get(12)?;
-        let priority_str: String = row.get::<_, Option<String>>(13)?
+        let priority_str: String = row
+            .get::<_, Option<String>>(13)?
             .unwrap_or_else(|| "standard".to_string());
         let always: bool = row.get::<_, Option<bool>>(14)?.unwrap_or(false);
         let user_invocable: bool = row.get::<_, Option<bool>>(15)?.unwrap_or(true);
         let disable_model_invocation: bool = row.get::<_, Option<bool>>(16)?.unwrap_or(false);
         let emoji: Option<String> = row.get(17)?;
-        let requires_env_json: String = row.get::<_, Option<String>>(18)?
+        let requires_env_json: String = row
+            .get::<_, Option<String>>(18)?
             .unwrap_or_else(|| "[]".to_string());
         let command_name: Option<String> = row.get(19)?;
         let user_id: Option<String> = row.get(20)?;
 
         // v14 columns (safe defaults for pre-migration DBs)
-        let os_json: String = row.get::<_, Option<String>>(21)?
+        let os_json: String = row
+            .get::<_, Option<String>>(21)?
             .unwrap_or_else(|| "[]".to_string());
-        let requires_bins_json: String = row.get::<_, Option<String>>(22)?
+        let requires_bins_json: String = row
+            .get::<_, Option<String>>(22)?
             .unwrap_or_else(|| "[]".to_string());
-        let requires_any_bins_json: String = row.get::<_, Option<String>>(23)?
+        let requires_any_bins_json: String = row
+            .get::<_, Option<String>>(23)?
             .unwrap_or_else(|| "[]".to_string());
         let primary_env: Option<String> = row.get(24)?;
         let command_dispatch_tool: Option<String> = row.get(25)?;
         let api_key: Option<String> = row.get(26)?;
-        let skill_env_json: String = row.get::<_, Option<String>>(27)?
+        let skill_env_json: String = row
+            .get::<_, Option<String>>(27)?
             .unwrap_or_else(|| "{}".to_string());
 
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         let permissions: Vec<String> = serde_json::from_str(&permissions_json).unwrap_or_default();
-        let requires_env: Vec<String> = serde_json::from_str(&requires_env_json).unwrap_or_default();
+        let requires_env: Vec<String> =
+            serde_json::from_str(&requires_env_json).unwrap_or_default();
         let os: Vec<String> = serde_json::from_str(&os_json).unwrap_or_default();
-        let requires_bins: Vec<String> = serde_json::from_str(&requires_bins_json).unwrap_or_default();
-        let requires_any_bins: Vec<String> = serde_json::from_str(&requires_any_bins_json).unwrap_or_default();
+        let requires_bins: Vec<String> =
+            serde_json::from_str(&requires_bins_json).unwrap_or_default();
+        let requires_any_bins: Vec<String> =
+            serde_json::from_str(&requires_any_bins_json).unwrap_or_default();
         // v15/v16 columns
-        let install_specs_json: String = row.get::<_, Option<String>>(28)?
+        let install_specs_json: String = row
+            .get::<_, Option<String>>(28)?
             .unwrap_or_else(|| "[]".to_string());
-        let requires_config_json: String = row.get::<_, Option<String>>(29)?
+        let requires_config_json: String = row
+            .get::<_, Option<String>>(29)?
             .unwrap_or_else(|| "[]".to_string());
 
-        let skill_env: HashMap<String, String> = serde_json::from_str(&skill_env_json).unwrap_or_default();
-        let install: Vec<crate::skills::SkillInstallSpec> = serde_json::from_str(&install_specs_json).unwrap_or_default();
-        let requires_config: Vec<String> = serde_json::from_str(&requires_config_json).unwrap_or_default();
+        let skill_env: HashMap<String, String> =
+            serde_json::from_str(&skill_env_json).unwrap_or_default();
+        let install: Vec<crate::skills::SkillInstallSpec> =
+            serde_json::from_str(&install_specs_json).unwrap_or_default();
+        let requires_config: Vec<String> =
+            serde_json::from_str(&requires_config_json).unwrap_or_default();
 
         let source = match source_type.as_str() {
             "manifold" => SkillSource::Manifold {
@@ -770,8 +826,17 @@ mod tests {
         let fetched = repo.get(&installed.skill.id).unwrap().unwrap();
 
         assert_eq!(fetched.skill.metadata.install.len(), 1);
-        assert_eq!(fetched.skill.metadata.install[0].kind, crate::skills::InstallKind::Brew);
-        assert_eq!(fetched.skill.metadata.install[0].formula.as_deref(), Some("jq"));
-        assert_eq!(fetched.skill.metadata.requires_config, vec!["voice.enabled"]);
+        assert_eq!(
+            fetched.skill.metadata.install[0].kind,
+            crate::skills::InstallKind::Brew
+        );
+        assert_eq!(
+            fetched.skill.metadata.install[0].formula.as_deref(),
+            Some("jq")
+        );
+        assert_eq!(
+            fetched.skill.metadata.requires_config,
+            vec!["voice.enabled"]
+        );
     }
 }

@@ -6,13 +6,15 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+
+use base64::Engine;
 
 use crate::tools::{BrowserController, BrowserControllerConfig};
 
@@ -97,7 +99,9 @@ pub fn router(browser: SharedBrowser) -> Router {
 }
 
 /// Ensure browser is launched, launching if needed
-async fn ensure_running(browser: &BrowserController) -> Result<(), (StatusCode, Json<BrowserError>)> {
+async fn ensure_running(
+    browser: &BrowserController,
+) -> Result<(), (StatusCode, Json<BrowserError>)> {
     if !browser.is_running().await {
         browser.launch().await.map_err(|e| {
             (
@@ -116,10 +120,10 @@ async fn navigate(
     State(browser): State<SharedBrowser>,
     Json(req): Json<NavigateRequest>,
 ) -> Result<Json<NavigateResponse>, (StatusCode, Json<BrowserError>)> {
-    let browser = browser.lock().await;
-    ensure_running(&browser).await?;
+    let guard = browser.lock().await;
+    ensure_running(&guard).await?;
 
-    let content = browser.navigate(&req.url).await.map_err(|e| {
+    let content = guard.navigate(&req.url).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(BrowserError {
@@ -140,22 +144,18 @@ async fn screenshot(
     State(browser): State<SharedBrowser>,
     Json(req): Json<ScreenshotRequest>,
 ) -> Result<Json<ScreenshotResponse>, (StatusCode, Json<BrowserError>)> {
-    let browser = browser.lock().await;
-    ensure_running(&browser).await?;
+    let guard = browser.lock().await;
+    ensure_running(&guard).await?;
 
-    let shot = browser
-        .screenshot(req.url.as_deref())
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(BrowserError {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    let shot = guard.screenshot(req.url.as_deref()).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(BrowserError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
-    use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(&shot.data);
 
     Ok(Json(ScreenshotResponse {
@@ -169,10 +169,10 @@ async fn click(
     State(browser): State<SharedBrowser>,
     Json(req): Json<ClickRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<BrowserError>)> {
-    let browser = browser.lock().await;
-    ensure_running(&browser).await?;
+    let guard = browser.lock().await;
+    ensure_running(&guard).await?;
 
-    browser.click(&req.selector).await.map_err(|e| {
+    guard.click(&req.selector).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(BrowserError {
@@ -189,17 +189,20 @@ async fn type_text(
     State(browser): State<SharedBrowser>,
     Json(req): Json<TypeRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<BrowserError>)> {
-    let browser = browser.lock().await;
-    ensure_running(&browser).await?;
+    let guard = browser.lock().await;
+    ensure_running(&guard).await?;
 
-    browser.type_text(&req.selector, &req.text).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(BrowserError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    guard
+        .type_text(&req.selector, &req.text)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(BrowserError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(StatusCode::OK)
 }
@@ -209,10 +212,10 @@ async fn execute(
     State(browser): State<SharedBrowser>,
     Json(req): Json<ExecuteRequest>,
 ) -> Result<Json<ExecuteResponse>, (StatusCode, Json<BrowserError>)> {
-    let browser = browser.lock().await;
-    ensure_running(&browser).await?;
+    let guard = browser.lock().await;
+    ensure_running(&guard).await?;
 
-    let result = browser.execute_js(&req.script).await.map_err(|e| {
+    let result = guard.execute_js(&req.script).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(BrowserError {
@@ -225,11 +228,7 @@ async fn execute(
 }
 
 /// Get browser status
-async fn status(
-    State(browser): State<SharedBrowser>,
-) -> Json<BrowserStatus> {
-    let browser = browser.lock().await;
-    Json(BrowserStatus {
-        running: browser.is_running().await,
-    })
+async fn status(State(browser): State<SharedBrowser>) -> Json<BrowserStatus> {
+    let running = browser.lock().await.is_running().await;
+    Json(BrowserStatus { running })
 }

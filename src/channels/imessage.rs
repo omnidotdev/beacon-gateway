@@ -69,8 +69,10 @@ struct RpcResponse {
 /// JSON-RPC error
 #[derive(Debug, Deserialize)]
 struct RpcError {
+    #[allow(dead_code)]
     code: Option<i32>,
     message: Option<String>,
+    #[allow(dead_code)]
     data: Option<serde_json::Value>,
 }
 
@@ -181,8 +183,8 @@ impl IMessageChannel {
             params,
         };
 
-        let request_line =
-            serde_json::to_string(&request).map_err(|e| Error::Channel(format!("JSON error: {e}")))?;
+        let request_line = serde_json::to_string(&request)
+            .map_err(|e| Error::Channel(format!("JSON error: {e}")))?;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -262,7 +264,10 @@ impl IMessageChannel {
         });
 
         let result: SendResult = self.request("send", params).await?;
-        Ok(result.message_id.or(result.ok).unwrap_or_else(|| "sent".to_string()))
+        Ok(result
+            .message_id
+            .or(result.ok)
+            .unwrap_or_else(|| "sent".to_string()))
     }
 
     /// Send a message to a chat by ID
@@ -278,7 +283,10 @@ impl IMessageChannel {
         });
 
         let result: SendResult = self.request("send", params).await?;
-        Ok(result.message_id.or(result.ok).unwrap_or_else(|| "sent".to_string()))
+        Ok(result
+            .message_id
+            .or(result.ok)
+            .unwrap_or_else(|| "sent".to_string()))
     }
 
     /// Start watching for new messages
@@ -318,59 +326,61 @@ impl IMessageChannel {
                 if let Ok(response) = serde_json::from_str::<RpcResponse>(&line) {
                     // Check if this is a notification (no id, has method)
                     if response.id.is_none() && response.method.as_deref() == Some("message") {
-                        if let Some(params) = response.params {
-                            if let Ok(msg) = serde_json::from_value::<IMessageMessage>(params) {
-                                // Extract attachments from local filesystem
-                                let attachments = msg
-                                    .attachments
-                                    .as_ref()
-                                    .map(|atts| {
-                                        atts.iter()
-                                            .map(|att| {
-                                                let mime = att.mime.clone().unwrap_or_else(|| "application/octet-stream".to_string());
-                                                let filename = att.name.clone();
+                        if let Some(params) = response.params
+                            && let Ok(msg) = serde_json::from_value::<IMessageMessage>(params)
+                        {
+                            // Extract attachments from local filesystem
+                            let attachments = msg
+                                .attachments
+                                .as_ref()
+                                .map(|atts| {
+                                    atts.iter()
+                                        .map(|att| {
+                                            let mime = att.mime.clone().unwrap_or_else(|| {
+                                                "application/octet-stream".to_string()
+                                            });
+                                            let filename = att.name.clone();
 
-                                                // Try to read file data from path
-                                                if let Some(path) = &att.path {
-                                                    if let Ok(data) = std::fs::read(path) {
-                                                        return Attachment::from_data(data, mime, filename);
-                                                    }
-                                                }
+                                            // Try to read file data from path
+                                            if let Some(path) = &att.path
+                                                && let Ok(data) = std::fs::read(path)
+                                            {
+                                                return Attachment::from_data(data, mime, filename);
+                                            }
 
-                                                // If no path or read failed, still include metadata
-                                                Attachment {
-                                                    kind: AttachmentKind::from_mime(&mime),
-                                                    url: None,
-                                                    data: None,
-                                                    mime_type: mime,
-                                                    filename,
-                                                }
-                                            })
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
+                                            // If no path or read failed, still include metadata
+                                            Attachment {
+                                                kind: AttachmentKind::from_mime(&mime),
+                                                url: None,
+                                                data: None,
+                                                mime_type: mime,
+                                                filename,
+                                            }
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
 
-                                let incoming = IncomingMessage {
-                                    id: msg.id.to_string(),
-                                    channel_id: msg.chat_id.to_string(),
-                                    sender_id: msg.sender.clone().unwrap_or_default(),
-                                    sender_name: msg.sender.unwrap_or_default(),
-                                    content: msg.text.unwrap_or_default(),
-                                    is_dm: true,
-                                    reply_to: None,
-                                    attachments,
-                                    thread_id: None,
-                                    callback_data: None,
-                                };
-                                let _ = tx.blocking_send(incoming);
-                            }
+                            let incoming = IncomingMessage {
+                                id: msg.id.to_string(),
+                                channel_id: msg.chat_id.to_string(),
+                                sender_id: msg.sender.clone().unwrap_or_default(),
+                                sender_name: msg.sender.unwrap_or_default(),
+                                content: msg.text.unwrap_or_default(),
+                                is_dm: true,
+                                reply_to: None,
+                                attachments,
+                                thread_id: None,
+                                callback_data: None,
+                            };
+                            let _ = tx.blocking_send(incoming);
                         }
                     } else if let Some(id) = response.id {
                         // This is a response to a pending request
-                        if let Ok(mut guard) = state.lock() {
-                            if let Some(sender) = guard.pending.remove(&id) {
-                                let _ = sender.send(response);
-                            }
+                        if let Ok(mut guard) = state.lock()
+                            && let Some(sender) = guard.pending.remove(&id)
+                        {
+                            let _ = sender.send(response);
                         }
                     }
                 }
@@ -450,7 +460,8 @@ impl Channel for IMessageChannel {
             self.send_to_chat(chat_id, &message.content).await?;
         } else {
             // Treat as phone number or email
-            self.send_message(&message.channel_id, &message.content).await?;
+            self.send_message(&message.channel_id, &message.content)
+                .await?;
         }
         Ok(())
     }
@@ -462,10 +473,10 @@ impl Channel for IMessageChannel {
 
 impl Drop for IMessageChannel {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.state.lock() {
-            if let Some(mut child) = state.child.take() {
-                let _ = child.kill();
-            }
+        if let Ok(mut state) = self.state.lock()
+            && let Some(mut child) = state.child.take()
+        {
+            let _ = child.kill();
         }
     }
 }

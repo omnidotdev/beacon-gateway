@@ -40,25 +40,25 @@ impl UpdateDedup {
 
         // Evict expired entries periodically (when at capacity)
         if self.cache.len() >= self.max_entries {
-            self.cache.retain(|_, ts| now.duration_since(*ts) < self.ttl);
+            self.cache
+                .retain(|_, ts| now.duration_since(*ts) < self.ttl);
         }
 
         // If still at capacity after eviction, remove oldest entry
-        if self.cache.len() >= self.max_entries {
-            if let Some(oldest_key) = self
+        if self.cache.len() >= self.max_entries
+            && let Some(oldest_key) = self
                 .cache
                 .iter()
                 .min_by_key(|(_, ts)| *ts)
                 .map(|(k, _)| k.clone())
-            {
-                self.cache.remove(&oldest_key);
-            }
+        {
+            self.cache.remove(&oldest_key);
         }
 
-        if let Some(ts) = self.cache.get(key) {
-            if now.duration_since(*ts) < self.ttl {
-                return true;
-            }
+        if let Some(ts) = self.cache.get(key)
+            && now.duration_since(*ts) < self.ttl
+        {
+            return true;
         }
 
         self.cache.insert(key.to_string(), now);

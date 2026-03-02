@@ -1,7 +1,7 @@
 //! Context builder for assembling conversation context
 
-use crate::db::{Memory, MemoryRepo, Message, MessageRole, SessionRepo, UserContext, UserRepo};
 use crate::Result;
+use crate::db::{Memory, MemoryRepo, Message, MessageRole, SessionRepo, UserContext, UserRepo};
 
 use super::life_json::{LifeJson, LifeJsonReader};
 
@@ -72,7 +72,10 @@ impl BuiltContext {
 
         // Add user context if present
         if !self.system_context.is_empty() {
-            parts.push(format!("<user-context>\n{}\n</user-context>", self.system_context));
+            parts.push(format!(
+                "<user-context>\n{}\n</user-context>",
+                self.system_context
+            ));
         }
 
         // Add conversation history if present
@@ -192,12 +195,12 @@ impl ContextBuilder {
         let mut system_parts = Vec::new();
 
         // Load life.json context
-        if let Some(path) = life_json_path {
-            if let Ok(life_json) = LifeJsonReader::read(path) {
-                let life_context = life_json.build_context_string(&self.config.persona_id);
-                if !life_context.is_empty() {
-                    system_parts.push(life_context);
-                }
+        if let Some(path) = life_json_path
+            && let Ok(life_json) = LifeJsonReader::read(path)
+        {
+            let life_context = life_json.build_context_string(&self.config.persona_id);
+            if !life_context.is_empty() {
+                system_parts.push(life_context);
             }
         }
 
@@ -237,8 +240,7 @@ impl ContextBuilder {
         };
 
         // Convert to context messages and apply pruning
-        let (context_messages, estimated_tokens) =
-            self.prune_messages(&messages, &system_context);
+        let (context_messages, estimated_tokens) = self.prune_messages(&messages, &system_context);
 
         Ok(BuiltContext {
             persona_prompt: self.config.persona_system_prompt.clone(),
@@ -316,8 +318,7 @@ impl ContextBuilder {
         let messages = session_repo
             .get_messages(session_id, self.config.max_messages)
             .unwrap_or_default();
-        let (context_messages, estimated_tokens) =
-            self.prune_messages(&messages, &system_context);
+        let (context_messages, estimated_tokens) = self.prune_messages(&messages, &system_context);
 
         Ok(BuiltContext {
             persona_prompt: self.config.persona_system_prompt.clone(),
@@ -472,17 +473,15 @@ mod tests {
 
     #[test]
     fn test_format_user_context() {
-        let contexts = vec![
-            UserContext {
-                id: "1".to_string(),
-                user_id: "u1".to_string(),
-                key: "timezone".to_string(),
-                value: "America/Los_Angeles".to_string(),
-                source: "learned".to_string(),
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            },
-        ];
+        let contexts = vec![UserContext {
+            id: "1".to_string(),
+            user_id: "u1".to_string(),
+            key: "timezone".to_string(),
+            value: "America/Los_Angeles".to_string(),
+            source: "learned".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }];
 
         let formatted = format_user_context(&contexts);
         assert!(formatted.contains("timezone: America/Los_Angeles"));
@@ -580,7 +579,10 @@ mod tests {
         let result = format_memories(&[mem]);
         assert!(result.contains("<relevant-memories>"), "must wrap in tag");
         assert!(result.contains("</relevant-memories>"), "must close tag");
-        assert!(result.contains("untrusted"), "must include untrusted warning");
+        assert!(
+            result.contains("untrusted"),
+            "must include untrusted warning"
+        );
     }
 
     #[test]
@@ -677,7 +679,11 @@ mod tests {
         assert!(result.is_ok());
         // Memory with "Rust" should have been retrieved (keyword match)
         let ctx = result.unwrap();
-        assert!(ctx.system_context.contains("Rust"), "memory should be in context: {}", ctx.system_context);
+        assert!(
+            ctx.system_context.contains("Rust"),
+            "memory should be in context: {}",
+            ctx.system_context
+        );
     }
 
     #[test]
@@ -701,6 +707,10 @@ mod tests {
             None,
             Some(&fake_embedding),
         );
-        assert!(result.is_ok(), "build_with_semantic_memory must not fail: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "build_with_semantic_memory must not fail: {:?}",
+            result.err()
+        );
     }
 }

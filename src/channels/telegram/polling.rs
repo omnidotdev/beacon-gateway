@@ -97,10 +97,12 @@ impl super::TelegramChannel {
     ///
     /// Polls every `interval` and forwards received messages into the mpsc channel.
     /// Deletes any existing webhook before starting to avoid conflicts.
-    pub fn start_polling(
-        &self,
-        interval: std::time::Duration,
-    ) -> tokio::task::JoinHandle<()> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `message_tx` is `None` (channel was not created with `with_receiver`)
+    #[must_use]
+    pub fn start_polling(&self, interval: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let token = self.token.clone();
         let client = self.client.clone();
         let tx = self
@@ -142,23 +144,23 @@ async fn polling_loop(
 
         match client.post(&url).json(&params).send().await {
             Ok(resp) => {
-                if let Ok(body) = resp.text().await {
-                    if let Ok(updates) = serde_json::from_str::<GetUpdatesResponse>(&body) {
-                        for update in &updates.result {
-                            // Advance offset past this update
-                            offset = Some(update.update_id + 1);
+                if let Ok(body) = resp.text().await
+                    && let Ok(updates) = serde_json::from_str::<GetUpdatesResponse>(&body)
+                {
+                    for update in &updates.result {
+                        // Advance offset past this update
+                        offset = Some(update.update_id + 1);
 
-                            // Dedup check
-                            let key = format!("poll:{}", update.update_id);
-                            if dedup.is_duplicate(&key) {
-                                continue;
-                            }
+                        // Dedup check
+                        let key = format!("poll:{}", update.update_id);
+                        if dedup.is_duplicate(&key) {
+                            continue;
+                        }
 
-                            if let Some(msg) = update_to_incoming(update) {
-                                if let Err(e) = tx.send(msg).await {
-                                    tracing::warn!(error = %e, "failed to forward Telegram message");
-                                }
-                            }
+                        if let Some(msg) = update_to_incoming(update)
+                            && let Err(e) = tx.send(msg).await
+                        {
+                            tracing::warn!(error = %e, "failed to forward Telegram message");
                         }
                     }
                 }
@@ -177,20 +179,23 @@ fn extract_media_refs(msg: &PollingMessage) -> Vec<MediaFileRef> {
     let mut refs = Vec::new();
 
     // Photo: pick largest size (last in array)
-    if let Some(photos) = &msg.photo {
-        if let Some(largest) = photos.last() {
-            refs.push(MediaFileRef {
-                file_id: largest.file_id.clone(),
-                mime_type: "image/jpeg".to_string(),
-                filename: None,
-            });
-        }
+    if let Some(photos) = &msg.photo
+        && let Some(largest) = photos.last()
+    {
+        refs.push(MediaFileRef {
+            file_id: largest.file_id.clone(),
+            mime_type: "image/jpeg".to_string(),
+            filename: None,
+        });
     }
 
     if let Some(doc) = &msg.document {
         refs.push(MediaFileRef {
             file_id: doc.file_id.clone(),
-            mime_type: doc.mime_type.clone().unwrap_or_else(|| "application/octet-stream".to_string()),
+            mime_type: doc
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
             filename: doc.file_name.clone(),
         });
     }
@@ -198,7 +203,10 @@ fn extract_media_refs(msg: &PollingMessage) -> Vec<MediaFileRef> {
     if let Some(voice) = &msg.voice {
         refs.push(MediaFileRef {
             file_id: voice.file_id.clone(),
-            mime_type: voice.mime_type.clone().unwrap_or_else(|| "audio/ogg".to_string()),
+            mime_type: voice
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "audio/ogg".to_string()),
             filename: None,
         });
     }
@@ -206,7 +214,10 @@ fn extract_media_refs(msg: &PollingMessage) -> Vec<MediaFileRef> {
     if let Some(audio) = &msg.audio {
         refs.push(MediaFileRef {
             file_id: audio.file_id.clone(),
-            mime_type: audio.mime_type.clone().unwrap_or_else(|| "audio/mpeg".to_string()),
+            mime_type: audio
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "audio/mpeg".to_string()),
             filename: audio.title.clone(),
         });
     }
@@ -214,7 +225,10 @@ fn extract_media_refs(msg: &PollingMessage) -> Vec<MediaFileRef> {
     if let Some(video) = &msg.video {
         refs.push(MediaFileRef {
             file_id: video.file_id.clone(),
-            mime_type: video.mime_type.clone().unwrap_or_else(|| "video/mp4".to_string()),
+            mime_type: video
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "video/mp4".to_string()),
             filename: None,
         });
     }

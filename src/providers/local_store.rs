@@ -1,7 +1,7 @@
-//! Local SQLite storage for gateway-level provider keys (self-hosted deployments)
+//! Local `SQLite` storage for gateway-level provider keys (self-hosted deployments)
 
-use crate::db::DbPool;
 use crate::Result;
+use crate::db::DbPool;
 
 /// A stored provider key from the local database
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct LocalKeyStore {
 impl LocalKeyStore {
     /// Create a new local key store backed by the given pool
     #[must_use]
-    pub fn new(db: DbPool) -> Self {
+    pub const fn new(db: DbPool) -> Self {
         Self { db }
     }
 
@@ -55,12 +55,7 @@ impl LocalKeyStore {
     /// # Errors
     ///
     /// Returns an error if the database write fails.
-    pub fn set(
-        &self,
-        provider: &str,
-        api_key: &str,
-        model_preference: Option<&str>,
-    ) -> Result<()> {
+    pub fn set(&self, provider: &str, api_key: &str, model_preference: Option<&str>) -> Result<()> {
         let conn = self
             .db
             .get()

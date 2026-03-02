@@ -35,10 +35,8 @@ fn token_cache() -> &'static RwLock<Option<String>> {
 }
 
 /// Retrieve the cached token, authenticating if the cache is empty.
-async fn cached_token(
-    client: &reqwest::Client,
-    config: &EventsConfig,
-) -> anyhow::Result<String> {
+#[allow(clippy::significant_drop_tightening)]
+async fn cached_token(client: &reqwest::Client, config: &EventsConfig) -> anyhow::Result<String> {
     // Fast path: read-lock
     {
         let r = token_cache().read().await;
@@ -378,10 +376,7 @@ async fn inner_send(
         .await?;
     if !topic_resp.status().is_success() {
         let _ = client
-            .post(format!(
-                "{}/streams/{STREAM_NAME}/topics",
-                config.base_url
-            ))
+            .post(format!("{}/streams/{STREAM_NAME}/topics", config.base_url))
             .bearer_auth(token)
             .json(&CreateTopicRequest {
                 name: topic_id,

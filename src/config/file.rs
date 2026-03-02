@@ -97,7 +97,7 @@ pub struct ChannelsFileConfig {
     pub imessage: Option<IMessageFileConfig>,
 }
 
-/// Simple channel toggle (token lives in api_keys)
+/// Simple channel toggle (token lives in `api_keys`)
 #[derive(Debug, Default, Deserialize)]
 pub struct ChannelToggle {
     pub enabled: Option<bool>,
@@ -196,6 +196,7 @@ pub fn load_config_file() -> BeaconConfigFile {
 }
 
 /// Return the config file path: `~/.config/omni/beacon/config.toml`
+#[must_use]
 pub fn config_file_path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|d| {
         d.config_dir()

@@ -16,7 +16,7 @@ pub fn check_env_requirements(requires_env: &[String]) -> bool {
     requires_env.iter().all(|var| std::env::var(var).is_ok())
 }
 
-/// Check env requirements considering stored api_key for primary_env
+/// Check env requirements considering stored `api_key` for `primary_env`
 #[must_use]
 pub fn check_env_requirements_with_config(
     requires_env: &[String],
@@ -79,14 +79,15 @@ pub fn compact_path(path: &str) -> String {
 /// 3. Fill optional skills in priority order until budget exhausted
 /// 4. Drop supplementary first, then standard
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn build_system_prompt_with_budget(
     persona_name: &str,
     persona_prompt: &str,
     skills: &[InstalledSkill],
     budget: &PromptBudget,
 ) -> String {
-    // Filter eligible skills
-    let eligible: Vec<&InstalledSkill> = skills
+    // Partition eligible skills into must-include and optional
+    let (must_include, optional): (Vec<&InstalledSkill>, Vec<&InstalledSkill>) = skills
         .iter()
         .filter(|s| {
             s.enabled
@@ -101,13 +102,7 @@ pub fn build_system_prompt_with_budget(
                 && check_any_bins_requirement(&s.skill.metadata.requires_any_bins)
                 && check_config_requirement(&s.skill.metadata.requires_config, budget.voice_enabled)
         })
-        .collect();
-
-    // Partition into must-include and optional
-    let (must_include, optional): (Vec<&InstalledSkill>, Vec<&InstalledSkill>) =
-        eligible.into_iter().partition(|s| {
-            s.priority == SkillPriority::Override || s.skill.metadata.always
-        });
+        .partition(|s| s.priority == SkillPriority::Override || s.skill.metadata.always);
 
     // Sort optional by priority: Standard before Supplementary
     let standard: Vec<&InstalledSkill> = optional
@@ -122,16 +117,15 @@ pub fn build_system_prompt_with_budget(
         .collect();
 
     // Track budget
-    let mut total_chars: usize = must_include
-        .iter()
-        .map(|s| s.skill.content.len())
-        .sum();
+    let mut total_chars: usize = must_include.iter().map(|s| s.skill.content.len()).sum();
     let mut total_count = must_include.len();
 
     // Fill standard skills within budget
     let mut included_standard = Vec::new();
     for s in &standard {
-        if total_count >= budget.max_skills || total_chars + s.skill.content.len() > budget.max_chars {
+        if total_count >= budget.max_skills
+            || total_chars + s.skill.content.len() > budget.max_chars
+        {
             break;
         }
         total_chars += s.skill.content.len();
@@ -142,7 +136,9 @@ pub fn build_system_prompt_with_budget(
     // Fill supplementary skills within remaining budget
     let mut included_supplementary = Vec::new();
     for s in &supplementary {
-        if total_count >= budget.max_skills || total_chars + s.skill.content.len() > budget.max_chars {
+        if total_count >= budget.max_skills
+            || total_chars + s.skill.content.len() > budget.max_chars
+        {
             break;
         }
         total_chars += s.skill.content.len();
@@ -150,8 +146,8 @@ pub fn build_system_prompt_with_budget(
         included_supplementary.push(*s);
     }
 
-    let dropped = standard.len() - included_standard.len()
-        + supplementary.len() - included_supplementary.len();
+    let dropped = standard.len() - included_standard.len() + supplementary.len()
+        - included_supplementary.len();
     if dropped > 0 {
         tracing::warn!(
             dropped,
@@ -394,22 +390,36 @@ mod tests {
 
     #[test]
     fn override_skills_appear_before_persona() {
-        let skills = vec![make_skill("pirate", "Speak like a pirate", SkillPriority::Override)];
+        let skills = vec![make_skill(
+            "pirate",
+            "Speak like a pirate",
+            SkillPriority::Override,
+        )];
         let result = build_system_prompt("Orin", "You are a helpful otter.", &skills);
 
         let override_pos = result.find("MANDATORY INSTRUCTIONS").unwrap();
         let persona_pos = result.find("You are a helpful otter.").unwrap();
-        assert!(override_pos < persona_pos, "override must come before persona");
+        assert!(
+            override_pos < persona_pos,
+            "override must come before persona"
+        );
     }
 
     #[test]
     fn standard_skills_appear_after_persona() {
-        let skills = vec![make_skill("weather", "Check weather", SkillPriority::Standard)];
+        let skills = vec![make_skill(
+            "weather",
+            "Check weather",
+            SkillPriority::Standard,
+        )];
         let result = build_system_prompt("Orin", "You are a helpful otter.", &skills);
 
         let persona_pos = result.find("You are a helpful otter.").unwrap();
         let standard_pos = result.find("extend your capabilities").unwrap();
-        assert!(standard_pos > persona_pos, "standard must come after persona");
+        assert!(
+            standard_pos > persona_pos,
+            "standard must come after persona"
+        );
     }
 
     #[test]
@@ -422,7 +432,10 @@ mod tests {
 
         let standard_pos = result.find("extend your capabilities").unwrap();
         let supplementary_pos = result.find("Additional context").unwrap();
-        assert!(supplementary_pos > standard_pos, "supplementary must come after standard");
+        assert!(
+            supplementary_pos > standard_pos,
+            "supplementary must come after standard"
+        );
     }
 
     #[test]
@@ -457,7 +470,11 @@ mod tests {
     fn budget_drops_supplementary_first() {
         let skills = vec![
             make_skill("std1", "standard content", SkillPriority::Standard),
-            make_skill("sup1", "supplementary content that is long enough to bust budget", SkillPriority::Supplementary),
+            make_skill(
+                "sup1",
+                "supplementary content that is long enough to bust budget",
+                SkillPriority::Supplementary,
+            ),
         ];
         let budget = PromptBudget {
             max_skills: 1,
@@ -519,16 +536,26 @@ mod tests {
     fn bins_requirement_all_present() {
         // ls is universally available
         assert!(check_bins_requirement(&["ls".to_string()]));
-        assert!(!check_bins_requirement(&["nonexistent_binary_xyz_12345".to_string()]));
-        assert!(!check_bins_requirement(&["ls".to_string(), "nonexistent_binary_xyz_12345".to_string()]));
+        assert!(!check_bins_requirement(&[
+            "nonexistent_binary_xyz_12345".to_string()
+        ]));
+        assert!(!check_bins_requirement(&[
+            "ls".to_string(),
+            "nonexistent_binary_xyz_12345".to_string()
+        ]));
     }
 
     #[test]
     fn any_bins_requirement() {
         assert!(check_any_bins_requirement(&[]));
         assert!(check_any_bins_requirement(&["ls".to_string()]));
-        assert!(check_any_bins_requirement(&["nonexistent_binary_xyz".to_string(), "ls".to_string()]));
-        assert!(!check_any_bins_requirement(&["nonexistent_binary_xyz".to_string()]));
+        assert!(check_any_bins_requirement(&[
+            "nonexistent_binary_xyz".to_string(),
+            "ls".to_string()
+        ]));
+        assert!(!check_any_bins_requirement(&[
+            "nonexistent_binary_xyz".to_string()
+        ]));
     }
 
     #[test]
@@ -587,13 +614,22 @@ mod tests {
 
     #[test]
     fn config_requirement_voice_enabled() {
-        assert!(check_config_requirement(&["voice.enabled".to_string()], true));
-        assert!(!check_config_requirement(&["voice.enabled".to_string()], false));
+        assert!(check_config_requirement(
+            &["voice.enabled".to_string()],
+            true
+        ));
+        assert!(!check_config_requirement(
+            &["voice.enabled".to_string()],
+            false
+        ));
     }
 
     #[test]
     fn config_requirement_unknown_fails_closed() {
-        assert!(!check_config_requirement(&["unknown.path".to_string()], true));
+        assert!(!check_config_requirement(
+            &["unknown.path".to_string()],
+            true
+        ));
     }
 
     #[test]
@@ -603,7 +639,11 @@ mod tests {
 
     #[test]
     fn config_requirement_filters_from_budget_prompt() {
-        let mut skill = make_skill("voice_skill", "voice gated content", SkillPriority::Standard);
+        let mut skill = make_skill(
+            "voice_skill",
+            "voice gated content",
+            SkillPriority::Standard,
+        );
         skill.skill.metadata.requires_config = vec!["voice.enabled".to_string()];
 
         // With voice disabled, skill should be excluded
@@ -612,7 +652,8 @@ mod tests {
             max_chars: 30_000,
             voice_enabled: false,
         };
-        let result = build_system_prompt_with_budget("Orin", "", &[skill.clone()], &budget_no_voice);
+        let result =
+            build_system_prompt_with_budget("Orin", "", &[skill.clone()], &budget_no_voice);
         assert!(!result.contains("voice gated content"));
 
         // With voice enabled, skill should be included

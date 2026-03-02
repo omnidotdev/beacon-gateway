@@ -217,11 +217,11 @@ impl PairingManager {
         };
 
         // Check expiry
-        if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str) {
-            if Utc::now() > expires_at.with_timezone(&Utc) {
-                tracing::debug!(sender_id, channel, "pairing code expired");
-                return Ok(false);
-            }
+        if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str)
+            && Utc::now() > expires_at.with_timezone(&Utc)
+        {
+            tracing::debug!(sender_id, channel, "pairing code expired");
+            return Ok(false);
         }
 
         // Clear the code to mark as paired
@@ -311,9 +311,7 @@ impl PairingManager {
                     channel: row.get(2)?,
                     paired_at: parse_datetime(&row.get::<_, String>(3)?),
                     pairing_code: row.get(4)?,
-                    code_expires_at: row
-                        .get::<_, Option<String>>(5)?
-                        .map(|s| parse_datetime(&s)),
+                    code_expires_at: row.get::<_, Option<String>>(5)?.map(|s| parse_datetime(&s)),
                 })
             })
             .map_err(|e| Error::Database(e.to_string()))?
@@ -351,9 +349,7 @@ impl PairingManager {
                     channel: row.get(2)?,
                     paired_at: parse_datetime(&row.get::<_, String>(3)?),
                     pairing_code: row.get(4)?,
-                    code_expires_at: row
-                        .get::<_, Option<String>>(5)?
-                        .map(|s| parse_datetime(&s)),
+                    code_expires_at: row.get::<_, Option<String>>(5)?.map(|s| parse_datetime(&s)),
                 })
             })
             .map_err(|e| Error::Database(e.to_string()))?
@@ -376,10 +372,12 @@ fn generate_code(length: usize) -> String {
     for i in 0..length {
         let mut hasher = hasher_builder.build_hasher();
         hasher.write_usize(i);
-        hasher.write_u128(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos());
+        hasher.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+        );
         #[allow(clippy::cast_possible_truncation)]
         let idx = hasher.finish() as usize % CHARSET.len();
         code.push(CHARSET[idx] as char);
@@ -443,16 +441,28 @@ mod tests {
         assert!(!manager.is_allowed("newuser", "telegram").unwrap());
 
         // Wrong code fails
-        assert!(!manager.verify_pairing("newuser", "telegram", "WRONG1").unwrap());
+        assert!(
+            !manager
+                .verify_pairing("newuser", "telegram", "WRONG1")
+                .unwrap()
+        );
 
         // Correct code succeeds
-        assert!(manager.verify_pairing("newuser", "telegram", &code).unwrap());
+        assert!(
+            manager
+                .verify_pairing("newuser", "telegram", &code)
+                .unwrap()
+        );
 
         // Now allowed
         assert!(manager.is_allowed("newuser", "telegram").unwrap());
 
         // Code can't be reused
-        assert!(!manager.verify_pairing("newuser", "telegram", &code).unwrap());
+        assert!(
+            !manager
+                .verify_pairing("newuser", "telegram", &code)
+                .unwrap()
+        );
     }
 
     #[test]

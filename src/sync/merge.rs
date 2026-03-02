@@ -36,7 +36,7 @@ pub fn merge_memory(local: &Memory, remote: &Memory) -> Memory {
 
     // Keep the cloud_id if either side has one
     if merged.cloud_id.is_none() {
-        merged.cloud_id = loser.cloud_id.clone();
+        merged.cloud_id.clone_from(&loser.cloud_id);
     }
 
     merged

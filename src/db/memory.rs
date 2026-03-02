@@ -19,6 +19,7 @@ const DECAY_WEIGHT: f64 = 0.3;
 /// Returns a value in `[0.0, 1.0]` where 1.0 means just accessed and ~0.0 means very old.
 #[must_use]
 pub fn temporal_decay_factor(accessed_at: &DateTime<Utc>, now: &DateTime<Utc>) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
     let elapsed_days = (*now - *accessed_at).num_seconds().max(0) as f64 / 86400.0;
     // Exponential decay: 2^(-t/half_life)
     (-elapsed_days / DECAY_HALF_LIFE_DAYS).exp2()
@@ -51,7 +52,10 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    (dot / denom) as f32
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        (dot / denom) as f32
+    }
 }
 
 /// Candidate for MMR re-ranking
@@ -99,19 +103,16 @@ fn mmr_rerank(candidates: Vec<MmrCandidate>, limit: usize, lambda: f64) -> Vec<M
             let max_sim = if selected.is_empty() {
                 0.0
             } else {
-                candidate
-                    .memory
-                    .embedding
-                    .as_ref()
-                    .map(|emb| {
-                        selected
-                            .iter()
-                            .filter_map(|(_, sel_emb)| {
-                                sel_emb.as_ref().map(|se| f64::from(cosine_similarity(emb, se)))
-                            })
-                            .fold(0.0_f64, f64::max)
-                    })
-                    .unwrap_or(0.0)
+                candidate.memory.embedding.as_ref().map_or(0.0, |emb| {
+                    selected
+                        .iter()
+                        .filter_map(|(_, sel_emb)| {
+                            sel_emb
+                                .as_ref()
+                                .map(|se| f64::from(cosine_similarity(emb, se)))
+                        })
+                        .fold(0.0_f64, f64::max)
+                })
             };
 
             let mmr_score = lambda * relevance - (1.0 - lambda) * max_sim;
@@ -180,6 +181,7 @@ impl MemoryCategory {
         }
     }
 
+    #[must_use]
     pub fn from_str_value(s: &str) -> Option<Self> {
         match s {
             "preference" => Some(Self::Preference),
@@ -316,7 +318,10 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn add(&self, memory: &Memory) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let tags_json = serde_json::to_string(&memory.tags).unwrap_or_else(|_| "[]".to_string());
 
         // Convert embedding to bytes if present
@@ -368,10 +373,13 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn get(&self, id: &str) -> Result<Option<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
-            &format!("SELECT {} FROM memories WHERE id = ?1 AND deleted_at IS NULL", MEMORY_COLUMNS),
+            &format!("SELECT {MEMORY_COLUMNS} FROM memories WHERE id = ?1 AND deleted_at IS NULL"),
             [id],
             row_to_memory_row,
         );
@@ -396,10 +404,13 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn get_without_access_update(&self, id: &str) -> Result<Option<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
-            &format!("SELECT {} FROM memories WHERE id = ?1", MEMORY_COLUMNS),
+            &format!("SELECT {MEMORY_COLUMNS} FROM memories WHERE id = ?1"),
             [id],
             row_to_memory_row,
         );
@@ -417,20 +428,21 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn list(&self, user_id: &str, category: Option<MemoryCategory>) -> Result<Vec<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = category.map_or_else(
             || {
                 format!(
-                    "SELECT {} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC",
-                    MEMORY_COLUMNS
+                    "SELECT {MEMORY_COLUMNS} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC"
                 )
             },
             |cat| {
+                let cat_str = cat.as_str();
                 format!(
-                    "SELECT {} FROM memories WHERE user_id = ?1 AND category = '{}' AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC",
-                    MEMORY_COLUMNS,
-                    cat.as_str()
+                    "SELECT {MEMORY_COLUMNS} FROM memories WHERE user_id = ?1 AND category = '{cat_str}' AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC"
                 )
             },
         );
@@ -448,12 +460,14 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn search(&self, user_id: &str, query: &str) -> Result<Vec<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let pattern = format!("%{query}%");
 
         let sql = format!(
-            "SELECT {} FROM memories WHERE user_id = ?1 AND (content LIKE ?2 OR tags LIKE ?2) AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC",
-            MEMORY_COLUMNS
+            "SELECT {MEMORY_COLUMNS} FROM memories WHERE user_id = ?1 AND (content LIKE ?2 OR tags LIKE ?2) AND deleted_at IS NULL ORDER BY pinned DESC, accessed_at DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
 
@@ -469,11 +483,13 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn get_context(&self, user_id: &str, max_items: usize) -> Result<Vec<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
-            "SELECT {} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, access_count DESC, accessed_at DESC LIMIT ?2",
-            MEMORY_COLUMNS
+            "SELECT {MEMORY_COLUMNS} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, access_count DESC, accessed_at DESC LIMIT ?2"
         );
         let mut stmt = conn.prepare(&sql)?;
 
@@ -493,8 +509,16 @@ impl MemoryRepo {
     /// # Errors
     ///
     /// Returns error if database operation fails
-    pub fn search_similar(&self, user_id: &str, embedding: &[f32], limit: usize) -> Result<Vec<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+    pub fn search_similar(
+        &self,
+        user_id: &str,
+        embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<Memory>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let embedding_bytes = super::embedder::Embedder::to_bytes(embedding);
 
         // Over-fetch 3x candidates for temporal decay + MMR re-ranking
@@ -592,7 +616,10 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn delete(&self, id: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Delete from vector table (no longer needed for search)
         conn.execute("DELETE FROM memories_vec WHERE memory_id = ?1", [id])?;
@@ -611,7 +638,10 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn purge_tombstones(&self, cutoff_days: u32) -> Result<usize> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let deleted = conn.execute(
             "DELETE FROM memories WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?1)",
@@ -631,7 +661,10 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn set_embedding(&self, id: &str, embedding: &[f32]) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let embedding_bytes = super::embedder::Embedder::to_bytes(embedding);
 
         // Update in memories table
@@ -660,7 +693,10 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn update(&self, id: &str, content: Option<&str>, pinned: Option<bool>) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut updates = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -686,27 +722,26 @@ impl MemoryRepo {
 
         params.push(Box::new(id.to_string()));
 
-        let sql = format!(
-            "UPDATE memories SET {} WHERE id = ?",
-            updates.join(", ")
-        );
+        let sql = format!("UPDATE memories SET {} WHERE id = ?", updates.join(", "));
 
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(AsRef::as_ref).collect();
         let rows_affected = conn.execute(&sql, params_refs.as_slice())?;
         Ok(rows_affected > 0)
     }
 
-    /// Query memories that need syncing (updated_at > synced_at or never synced)
+    /// Query memories that need syncing (`updated_at` > `synced_at` or never synced)
     ///
     /// # Errors
     ///
     /// Returns error if database operation fails
     pub fn unsynced(&self) -> Result<Vec<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
-            "SELECT {} FROM memories WHERE synced_at IS NULL OR updated_at > synced_at ORDER BY updated_at ASC",
-            MEMORY_COLUMNS
+            "SELECT {MEMORY_COLUMNS} FROM memories WHERE synced_at IS NULL OR updated_at > synced_at ORDER BY updated_at ASC"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], row_to_memory_row)?;
@@ -725,26 +760,33 @@ impl MemoryRepo {
             return Ok(());
         }
 
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
             "UPDATE memories SET synced_at = datetime('now') WHERE id IN ({})",
             placeholders.join(", ")
         );
 
-        let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
         conn.execute(&sql, params.as_slice())?;
 
         Ok(())
     }
 
-    /// Set the cloud_id for a memory after successful push
+    /// Set the `cloud_id` for a memory after successful push
     ///
     /// # Errors
     ///
     /// Returns error if database operation fails
     pub fn set_cloud_id(&self, id: &str, cloud_id: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let updated = conn.execute(
             "UPDATE memories SET cloud_id = ?1 WHERE id = ?2",
@@ -756,14 +798,17 @@ impl MemoryRepo {
 
     /// Upsert a memory from a remote sync (used during pull)
     ///
-    /// Uses content_hash for dedup: if a memory with the same user_id and
-    /// content_hash exists, apply LWW merge. Otherwise insert as new.
+    /// Uses `content_hash` for dedup: if a memory with the same `user_id` and
+    /// `content_hash` exists, apply LWW merge. Otherwise insert as new.
     ///
     /// # Errors
     ///
     /// Returns error if database operation fails
     pub fn upsert_from_remote(&self, memory: &Memory) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let tags_json = serde_json::to_string(&memory.tags).unwrap_or_else(|_| "[]".to_string());
 
         // Check for existing memory by content_hash (dedup)
@@ -838,7 +883,10 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn exists_by_content_hash(&self, user_id: &str, content_hash: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM memories WHERE user_id = ?1 AND content_hash = ?2 AND deleted_at IS NULL",
@@ -855,11 +903,13 @@ impl MemoryRepo {
     ///
     /// Returns error if database operation fails
     pub fn get_exportable(&self, user_id: &str, max_items: usize) -> Result<Vec<Memory>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let sql = format!(
-            "SELECT {} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, access_count DESC, accessed_at DESC LIMIT ?2",
-            MEMORY_COLUMNS
+            "SELECT {MEMORY_COLUMNS} FROM memories WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY pinned DESC, access_count DESC, accessed_at DESC LIMIT ?2"
         );
         let mut stmt = conn.prepare(&sql)?;
 
@@ -918,7 +968,8 @@ impl MemoryRow {
         Memory {
             id: self.id,
             user_id: self.user_id,
-            category: MemoryCategory::from_str_value(&self.category).unwrap_or(MemoryCategory::General),
+            category: MemoryCategory::from_str_value(&self.category)
+                .unwrap_or(MemoryCategory::General),
             content: self.content,
             tags: serde_json::from_str(&self.tags).unwrap_or_default(),
             pinned: self.pinned != 0,
@@ -991,8 +1042,17 @@ mod tests {
         let user = user_repo.find_or_create("context_user").unwrap();
 
         // Add some memories
-        let m1 = Memory::new(user.id.clone(), MemoryCategory::Preference, "Prefers vim".to_string());
-        let m2 = Memory::new(user.id.clone(), MemoryCategory::Fact, "Lives in Seattle".to_string()).pinned();
+        let m1 = Memory::new(
+            user.id.clone(),
+            MemoryCategory::Preference,
+            "Prefers vim".to_string(),
+        );
+        let m2 = Memory::new(
+            user.id.clone(),
+            MemoryCategory::Fact,
+            "Lives in Seattle".to_string(),
+        )
+        .pinned();
         repo.add(&m1).unwrap();
         repo.add(&m2).unwrap();
 
@@ -1010,8 +1070,16 @@ mod tests {
         let user_repo = crate::db::UserRepo::new(repo.pool.clone());
         let user = user_repo.find_or_create("hybrid_user").unwrap();
 
-        let m1 = Memory::new(user.id.clone(), MemoryCategory::Preference, "Likes dark mode".to_string());
-        let m2 = Memory::new(user.id.clone(), MemoryCategory::Fact, "Works at Acme Corp".to_string());
+        let m1 = Memory::new(
+            user.id.clone(),
+            MemoryCategory::Preference,
+            "Likes dark mode".to_string(),
+        );
+        let m2 = Memory::new(
+            user.id.clone(),
+            MemoryCategory::Fact,
+            "Works at Acme Corp".to_string(),
+        );
         repo.add(&m1).unwrap();
         repo.add(&m2).unwrap();
 
@@ -1033,7 +1101,10 @@ mod tests {
         let now = Utc::now();
         let old = now - chrono::Duration::days(30);
         let factor = super::temporal_decay_factor(&old, &now);
-        assert!(factor < 0.1, "factor for 30 days ago should be < 0.1, got {factor}");
+        assert!(
+            factor < 0.1,
+            "factor for 30 days ago should be < 0.1, got {factor}"
+        );
     }
 
     #[test]
@@ -1051,7 +1122,10 @@ mod tests {
     fn cosine_similarity_identical_is_one() {
         let v = vec![1.0_f32, 2.0, 3.0];
         let sim = super::cosine_similarity(&v, &v);
-        assert!((sim - 1.0).abs() < 0.001, "identical vectors should have sim ~1.0, got {sim}");
+        assert!(
+            (sim - 1.0).abs() < 0.001,
+            "identical vectors should have sim ~1.0, got {sim}"
+        );
     }
 
     #[test]
@@ -1059,7 +1133,10 @@ mod tests {
         let a = vec![1.0_f32, 0.0, 0.0];
         let b = vec![0.0_f32, 1.0, 0.0];
         let sim = super::cosine_similarity(&a, &b);
-        assert!(sim.abs() < 0.001, "orthogonal vectors should have sim ~0.0, got {sim}");
+        assert!(
+            sim.abs() < 0.001,
+            "orthogonal vectors should have sim ~0.0, got {sim}"
+        );
     }
 
     #[test]
@@ -1075,18 +1152,30 @@ mod tests {
 
         let candidates = vec![
             super::MmrCandidate {
-                memory: Memory::new("u1".to_string(), MemoryCategory::Fact, "Dark mode".to_string())
-                    .with_embedding(emb_a),
+                memory: Memory::new(
+                    "u1".to_string(),
+                    MemoryCategory::Fact,
+                    "Dark mode".to_string(),
+                )
+                .with_embedding(emb_a),
                 score: 0.9,
             },
             super::MmrCandidate {
-                memory: Memory::new("u1".to_string(), MemoryCategory::Fact, "Dark theme".to_string())
-                    .with_embedding(emb_a2),
+                memory: Memory::new(
+                    "u1".to_string(),
+                    MemoryCategory::Fact,
+                    "Dark theme".to_string(),
+                )
+                .with_embedding(emb_a2),
                 score: 0.9,
             },
             super::MmrCandidate {
-                memory: Memory::new("u1".to_string(), MemoryCategory::Fact, "Works at Acme".to_string())
-                    .with_embedding(emb_b),
+                memory: Memory::new(
+                    "u1".to_string(),
+                    MemoryCategory::Fact,
+                    "Works at Acme".to_string(),
+                )
+                .with_embedding(emb_b),
                 score: 0.9,
             },
         ];
@@ -1105,8 +1194,16 @@ mod tests {
     #[test]
     fn test_format_for_prompt() {
         let memories = vec![
-            Memory::new("u1".to_string(), MemoryCategory::Preference, "Uses vim".to_string()),
-            Memory::new("u1".to_string(), MemoryCategory::Fact, "Works at Acme".to_string()),
+            Memory::new(
+                "u1".to_string(),
+                MemoryCategory::Preference,
+                "Uses vim".to_string(),
+            ),
+            Memory::new(
+                "u1".to_string(),
+                MemoryCategory::Fact,
+                "Works at Acme".to_string(),
+            ),
         ];
 
         let formatted = MemoryRepo::format_for_prompt(&memories);

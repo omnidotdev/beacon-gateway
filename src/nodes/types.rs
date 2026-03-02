@@ -26,7 +26,7 @@ pub struct InvokeRequest {
     pub idempotency_key: Option<String>,
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     30_000
 }
 

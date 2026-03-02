@@ -10,10 +10,12 @@ pub struct DiscoveredHook {
     /// Hook name
     pub name: String,
     /// Directory containing the hook
+    #[allow(dead_code)]
     pub path: PathBuf,
     /// Path to handler executable
     pub handler_path: PathBuf,
     /// Parsed manifest
+    #[allow(dead_code)]
     pub manifest: HookManifest,
     /// Events this hook subscribes to
     pub events: Vec<HookAction>,
@@ -84,8 +86,8 @@ fn load_hook(dir: &Path) -> Result<Option<DiscoveredHook>, String> {
     let manifest_content = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("failed to read HOOK.toml: {e}"))?;
 
-    let manifest: HookManifest = toml::from_str(&manifest_content)
-        .map_err(|e| format!("failed to parse HOOK.toml: {e}"))?;
+    let manifest: HookManifest =
+        toml::from_str(&manifest_content).map_err(|e| format!("failed to parse HOOK.toml: {e}"))?;
 
     // Check if enabled
     if !manifest.enabled {

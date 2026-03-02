@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::{routing::post, Router};
+use axum::{Router, routing::post};
 
 use super::ApiState;
 
@@ -15,7 +15,10 @@ pub mod vortex;
 pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
         .route("/telegram", post(telegram::handle_update))
-        .route("/telegram/{account_id}", post(telegram::handle_account_update))
+        .route(
+            "/telegram/{account_id}",
+            post(telegram::handle_account_update),
+        )
         .route("/teams", post(teams::handle_activity))
         .route("/google-chat", post(google_chat::handle_event))
         .route("/vortex", post(vortex::handle_vortex_callback))

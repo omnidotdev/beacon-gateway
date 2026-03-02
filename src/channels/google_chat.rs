@@ -249,9 +249,7 @@ impl GoogleChatChannel {
     ///
     /// Returns the channel and a receiver for incoming messages
     #[must_use]
-    pub fn with_receiver(
-        service_account_path: PathBuf,
-    ) -> (Self, mpsc::Receiver<IncomingMessage>) {
+    pub fn with_receiver(service_account_path: PathBuf) -> (Self, mpsc::Receiver<IncomingMessage>) {
         let (tx, rx) = mpsc::channel(100);
         let channel = Self {
             service_account_path,
@@ -392,10 +390,10 @@ impl GoogleChatChannel {
             .ok_or_else(|| Error::Channel("Event without space".to_string()))?;
 
         // Skip bot messages
-        if let Some(sender) = &message.sender {
-            if sender.user_type.as_deref() == Some("BOT") {
-                return Ok(());
-            }
+        if let Some(sender) = &message.sender
+            && sender.user_type.as_deref() == Some("BOT")
+        {
+            return Ok(());
         }
 
         let sender = message.sender.as_ref();
@@ -420,9 +418,10 @@ impl GoogleChatChannel {
                         let filename = att.content_name.clone();
 
                         // Try to get download URL from attachment_data_ref
-                        let url = att.attachment_data_ref.as_ref().map(|r| {
-                            format!("{GOOGLE_CHAT_API_URL}/{}/media", r.resource_name)
-                        });
+                        let url = att
+                            .attachment_data_ref
+                            .as_ref()
+                            .map(|r| format!("{GOOGLE_CHAT_API_URL}/{}/media", r.resource_name));
 
                         // Only include if we have a URL
                         url.map(|u| Attachment::from_url(u, mime_type, filename))

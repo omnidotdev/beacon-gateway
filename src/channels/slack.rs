@@ -131,10 +131,10 @@ impl SlackChannel {
             }
 
             // Skip if it's our own message
-            if let Some(ref bot_id) = self.bot_user_id {
-                if msg.user.as_deref() == Some(bot_id) {
-                    return Ok(());
-                }
+            if let Some(ref bot_id) = self.bot_user_id
+                && msg.user.as_deref() == Some(bot_id)
+            {
+                return Ok(());
             }
 
             // Parse file attachments
@@ -382,12 +382,7 @@ impl Channel for SlackChannel {
         Ok(())
     }
 
-    async fn remove_reaction(
-        &self,
-        channel_id: &str,
-        message_id: &str,
-        emoji: &str,
-    ) -> Result<()> {
+    async fn remove_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> Result<()> {
         // Slack expects emoji name without colons
         let name = emoji.trim_matches(':');
 

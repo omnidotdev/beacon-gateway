@@ -90,7 +90,10 @@ impl KeyResolver {
             if let Some(cached) = cache.get(identity_provider_id)
                 && cached.expires_at > Instant::now()
             {
-                return Ok(cached.keys.get(provider).cloned()
+                return Ok(cached
+                    .keys
+                    .get(provider)
+                    .cloned()
                     .or_else(|| self.env_fallback(provider)));
             }
         }
@@ -100,19 +103,27 @@ impl KeyResolver {
             Ok(resp) => {
                 let mut keys_map: HashMap<String, ResolvedKey> = HashMap::new();
                 for k in &resp.provider_keys {
-                    keys_map.insert(k.provider.clone(), ResolvedKey {
-                        api_key: k.decrypted_key.clone(),
-                        model_override: k.model_preference.clone(),
-                        is_user_key: true,
-                    });
+                    keys_map.insert(
+                        k.provider.clone(),
+                        ResolvedKey {
+                            api_key: k.decrypted_key.clone(),
+                            model_override: k.model_preference.clone(),
+                            is_user_key: true,
+                        },
+                    );
                 }
                 let result = keys_map.get(provider).cloned();
-                let mut cache = self.cache.write().await;
-                cache.insert(identity_provider_id.to_string(), CachedUserKeys {
-                    keys: keys_map,
-                    default_provider: resp.default_provider,
-                    expires_at: Instant::now() + self.ttl,
-                });
+                {
+                    let mut cache = self.cache.write().await;
+                    cache.insert(
+                        identity_provider_id.to_string(),
+                        CachedUserKeys {
+                            keys: keys_map,
+                            default_provider: resp.default_provider,
+                            expires_at: Instant::now() + self.ttl,
+                        },
+                    );
+                }
                 Ok(result.or_else(|| self.env_fallback(provider)))
             }
             Err(e) => {
@@ -131,7 +142,8 @@ impl KeyResolver {
             "{}/internal/resolve-provider-keys",
             self.synapse_api_url.trim_end_matches('/')
         );
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("x-gateway-secret", &self.gateway_secret)
             .json(&ResolveProviderKeysRequest {
@@ -162,7 +174,11 @@ impl KeyResolver {
             "openrouter" => self.env_keys.openrouter.clone(),
             _ => None,
         };
-        key.map(|api_key| ResolvedKey { api_key, model_override: None, is_user_key: false })
+        key.map(|api_key| ResolvedKey {
+            api_key,
+            model_override: None,
+            is_user_key: false,
+        })
     }
 
     /// Clear the cached keys for a user
@@ -221,11 +237,14 @@ impl KeyResolver {
             Ok(resp) => {
                 let mut keys_map: HashMap<String, ResolvedKey> = HashMap::new();
                 for k in &resp.provider_keys {
-                    keys_map.insert(k.provider.clone(), ResolvedKey {
-                        api_key: k.decrypted_key.clone(),
-                        model_override: k.model_preference.clone(),
-                        is_user_key: true,
-                    });
+                    keys_map.insert(
+                        k.provider.clone(),
+                        ResolvedKey {
+                            api_key: k.decrypted_key.clone(),
+                            model_override: k.model_preference.clone(),
+                            is_user_key: true,
+                        },
+                    );
                 }
                 let cached = CachedUserKeys {
                     keys: keys_map,
@@ -254,11 +273,14 @@ impl KeyResolver {
             ("openrouter", &self.env_keys.openrouter),
         ] {
             if let Some(key) = key_opt {
-                return Some((provider.to_string(), ResolvedKey {
-                    api_key: key.clone(),
-                    model_override: None,
-                    is_user_key: false,
-                }));
+                return Some((
+                    provider.to_string(),
+                    ResolvedKey {
+                        api_key: key.clone(),
+                        model_override: None,
+                        is_user_key: false,
+                    },
+                ));
             }
         }
         None
@@ -278,21 +300,31 @@ impl KeyResolver {
         // Fetch from Synapse
         match self.fetch_from_synapse(identity_provider_id).await {
             Ok(resp) => {
-                let providers: Vec<String> = resp.provider_keys.iter().map(|k| k.provider.clone()).collect();
+                let providers: Vec<String> = resp
+                    .provider_keys
+                    .iter()
+                    .map(|k| k.provider.clone())
+                    .collect();
                 let mut keys_map = HashMap::new();
                 for k in resp.provider_keys {
-                    keys_map.insert(k.provider.clone(), ResolvedKey {
-                        api_key: k.decrypted_key,
-                        model_override: k.model_preference,
-                        is_user_key: true,
-                    });
+                    keys_map.insert(
+                        k.provider.clone(),
+                        ResolvedKey {
+                            api_key: k.decrypted_key,
+                            model_override: k.model_preference,
+                            is_user_key: true,
+                        },
+                    );
                 }
                 let mut cache = self.cache.write().await;
-                cache.insert(identity_provider_id.to_string(), CachedUserKeys {
-                    keys: keys_map,
-                    default_provider: resp.default_provider,
-                    expires_at: Instant::now() + self.ttl,
-                });
+                cache.insert(
+                    identity_provider_id.to_string(),
+                    CachedUserKeys {
+                        keys: keys_map,
+                        default_provider: resp.default_provider,
+                        expires_at: Instant::now() + self.ttl,
+                    },
+                );
                 providers
             }
             Err(e) => {
@@ -321,16 +353,22 @@ mod tests {
     #[test]
     fn preferred_from_cache_uses_default_provider() {
         let mut keys = HashMap::new();
-        keys.insert("anthropic".to_string(), ResolvedKey {
-            api_key: "sk-ant".to_string(),
-            model_override: None,
-            is_user_key: true,
-        });
-        keys.insert("openai".to_string(), ResolvedKey {
-            api_key: "sk-openai".to_string(),
-            model_override: None,
-            is_user_key: true,
-        });
+        keys.insert(
+            "anthropic".to_string(),
+            ResolvedKey {
+                api_key: "sk-ant".to_string(),
+                model_override: None,
+                is_user_key: true,
+            },
+        );
+        keys.insert(
+            "openai".to_string(),
+            ResolvedKey {
+                api_key: "sk-openai".to_string(),
+                model_override: None,
+                is_user_key: true,
+            },
+        );
 
         let cached = CachedUserKeys {
             keys,
@@ -348,11 +386,14 @@ mod tests {
     #[test]
     fn preferred_from_cache_falls_back_to_priority_when_no_default() {
         let mut keys = HashMap::new();
-        keys.insert("openai".to_string(), ResolvedKey {
-            api_key: "sk-openai".to_string(),
-            model_override: None,
-            is_user_key: true,
-        });
+        keys.insert(
+            "openai".to_string(),
+            ResolvedKey {
+                api_key: "sk-openai".to_string(),
+                model_override: None,
+                is_user_key: true,
+            },
+        );
 
         let cached = CachedUserKeys {
             keys,
@@ -383,16 +424,22 @@ mod tests {
         // If default_provider points to an env fallback key, it should be skipped
         // and fall through to the priority list
         let mut keys = HashMap::new();
-        keys.insert("anthropic".to_string(), ResolvedKey {
-            api_key: "sk-ant-env".to_string(),
-            model_override: None,
-            is_user_key: false, // env fallback, not user key
-        });
-        keys.insert("openai".to_string(), ResolvedKey {
-            api_key: "sk-openai-user".to_string(),
-            model_override: None,
-            is_user_key: true,
-        });
+        keys.insert(
+            "anthropic".to_string(),
+            ResolvedKey {
+                api_key: "sk-ant-env".to_string(),
+                model_override: None,
+                is_user_key: false, // env fallback, not user key
+            },
+        );
+        keys.insert(
+            "openai".to_string(),
+            ResolvedKey {
+                api_key: "sk-openai-user".to_string(),
+                model_override: None,
+                is_user_key: true,
+            },
+        );
 
         let cached = CachedUserKeys {
             keys,

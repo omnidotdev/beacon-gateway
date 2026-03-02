@@ -66,10 +66,7 @@ impl ManifoldClient {
 
     /// List tags in a repository via OCI tag list API
     async fn list_tags(&self, namespace: &str, repo: &str) -> Result<Vec<String>> {
-        let url = format!(
-            "{}/v2/{}/{}/tags/list",
-            self.base_url, namespace, repo
-        );
+        let url = format!("{}/v2/{}/{}/tags/list", self.base_url, namespace, repo);
 
         let response = self
             .client
@@ -160,10 +157,7 @@ impl ManifoldClient {
             .into_iter()
             .filter(|s| {
                 s.metadata.name.to_lowercase().contains(&query_lower)
-                    || s.metadata
-                        .description
-                        .to_lowercase()
-                        .contains(&query_lower)
+                    || s.metadata.description.to_lowercase().contains(&query_lower)
                     || s.metadata
                         .tags
                         .iter()

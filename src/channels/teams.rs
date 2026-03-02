@@ -158,7 +158,7 @@ enum AdaptiveCardElement {
         weight: Option<&'static str>,
     },
     Container {
-        items: Vec<AdaptiveCardElement>,
+        items: Vec<Self>,
         #[serde(skip_serializing_if = "Option::is_none")]
         style: Option<&'static str>,
     },
@@ -317,10 +317,10 @@ impl TeamsChannel {
         }
 
         // Skip bot messages
-        if let Some(from) = &activity.from {
-            if from.id == self.bot_id {
-                return Ok(None);
-            }
+        if let Some(from) = &activity.from
+            && from.id == self.bot_id
+        {
+            return Ok(None);
         }
 
         let conversation = activity
@@ -351,7 +351,11 @@ impl TeamsChannel {
                             .content_type
                             .clone()
                             .unwrap_or_else(|| "application/octet-stream".to_string());
-                        Some(Attachment::from_url(content_url, mime_type, att.name.clone()))
+                        Some(Attachment::from_url(
+                            content_url,
+                            mime_type,
+                            att.name.clone(),
+                        ))
                     })
                     .collect()
             })
@@ -377,10 +381,13 @@ impl TeamsChannel {
         }
 
         // Return reply context for webhook handler
-        let reply_context = activity.service_url.as_ref().map(|service_url| ReplyContext {
-            service_url: service_url.clone(),
-            conversation: conversation.clone(),
-        });
+        let reply_context = activity
+            .service_url
+            .as_ref()
+            .map(|service_url| ReplyContext {
+                service_url: service_url.clone(),
+                conversation: conversation.clone(),
+            });
 
         Ok(reply_context)
     }
@@ -570,8 +577,7 @@ impl Channel for TeamsChannel {
         let service_url = "https://smba.trafficmanager.net/teams";
         let url = format!(
             "{}/v3/conversations/{}/activities",
-            service_url,
-            message.channel_id
+            service_url, message.channel_id
         );
 
         let activity = build_teams_activity(&message);

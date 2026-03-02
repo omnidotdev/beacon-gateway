@@ -9,12 +9,17 @@ mod policy;
 mod sessions;
 mod web;
 
-pub use browser::{BrowserController, BrowserControllerConfig, ElementInfo, PageContent, Screenshot};
-pub use memory::BuiltinMemoryTools;
+pub use browser::{
+    BrowserController, BrowserControllerConfig, ElementInfo, PageContent, Screenshot,
+};
 pub use cron::{BuiltinCronTools, CronTools, ScheduleInfo, ScheduleParams};
+pub use memory::BuiltinMemoryTools;
 pub use policy::{ToolPolicy, ToolPolicyConfig, ToolProfile};
 pub use sessions::{MessageInfo, SessionInfo, SessionTools};
-pub use web::{extract_article, Article, SearchProvider, SearchResult, WebFetchTool, WebResponse, WebSearchTool};
+pub use web::{
+    Article, SearchProvider, SearchResult, WebFetchTool, WebResponse, WebSearchTool,
+    extract_article,
+};
 
 /// Format a short display summary for a tool invocation.
 ///
@@ -36,18 +41,14 @@ pub fn format_invocation(name: &str, arguments: &str) -> String {
                 .as_object()
                 .and_then(|o| o.values().find(|v| v.is_string()))
             {
-                return val
-                    .as_str()
-                    .unwrap_or(name)
-                    .chars()
-                    .take(60)
-                    .collect();
+                return val.as_str().unwrap_or(name).chars().take(60).collect();
             }
             return name.to_string();
         }
     };
 
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .map_or_else(|| name.to_string(), |s| s.chars().take(60).collect::<String>())
+    args.get(key).and_then(|v| v.as_str()).map_or_else(
+        || name.to_string(),
+        |s| s.chars().take(60).collect::<String>(),
+    )
 }

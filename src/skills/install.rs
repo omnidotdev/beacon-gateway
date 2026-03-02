@@ -28,17 +28,18 @@ pub fn select_install_spec<'a>(
     }
 
     // Preference chain
-    if prefs.prefer_brew && has_binary("brew") {
-        if let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Brew) {
-            return Some(spec);
-        }
+    if prefs.prefer_brew
+        && has_binary("brew")
+        && let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Brew)
+    {
+        return Some(spec);
     }
 
     // Uv
-    if has_binary("uv") {
-        if let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Uv) {
-            return Some(spec);
-        }
+    if has_binary("uv")
+        && let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Uv)
+    {
+        return Some(spec);
     }
 
     // Node (check if preferred manager is on PATH)
@@ -48,17 +49,17 @@ pub fn select_install_spec<'a>(
         NodeManager::Yarn => "yarn",
         NodeManager::Bun => "bun",
     };
-    if has_binary(node_bin) {
-        if let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Node) {
-            return Some(spec);
-        }
+    if has_binary(node_bin)
+        && let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Node)
+    {
+        return Some(spec);
     }
 
     // Go
-    if has_binary("go") {
-        if let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Go) {
-            return Some(spec);
-        }
+    if has_binary("go")
+        && let Some(spec) = compatible.iter().find(|s| s.kind == InstallKind::Go)
+    {
+        return Some(spec);
     }
 
     // Download (always available)
@@ -181,6 +182,7 @@ async fn install_uv(spec: &SkillInstallSpec) -> Result<SkillInstallResult, Error
     run_command("uv", &["tool", "install", package]).await
 }
 
+#[allow(clippy::too_many_lines)]
 async fn install_download(spec: &SkillInstallSpec) -> Result<SkillInstallResult, Error> {
     let url = spec
         .url
@@ -189,9 +191,10 @@ async fn install_download(spec: &SkillInstallSpec) -> Result<SkillInstallResult,
 
     let target_dir = spec.target_dir.as_deref().map_or_else(
         || {
-            directories::BaseDirs::new()
-                .map(|d| d.home_dir().join(".local").join("bin"))
-                .unwrap_or_else(|| PathBuf::from("/usr/local/bin"))
+            directories::BaseDirs::new().map_or_else(
+                || PathBuf::from("/usr/local/bin"),
+                |d| d.home_dir().join(".local").join("bin"),
+            )
         },
         PathBuf::from,
     );
@@ -230,20 +233,18 @@ async fn install_download(spec: &SkillInstallSpec) -> Result<SkillInstallResult,
         .map_err(|e: std::io::Error| Error::Install(format!("failed to write temp file: {e}")))?;
 
     // Detect archive type and extract
-    let archive_type = spec
-        .archive
-        .as_deref()
-        .or_else(|| {
-            if url.ends_with(".tar.gz") || url.ends_with(".tgz") {
-                Some("tar.gz")
-            } else if url.ends_with(".tar.bz2") {
-                Some("tar.bz2")
-            } else if url.ends_with(".zip") {
-                Some("zip")
-            } else {
-                None
-            }
-        });
+    #[allow(clippy::case_sensitive_file_extension_comparisons)] // URLs are case-sensitive
+    let archive_type = spec.archive.as_deref().or_else(|| {
+        if url.ends_with(".tar.gz") || url.ends_with(".tgz") {
+            Some("tar.gz")
+        } else if url.ends_with(".tar.bz2") {
+            Some("tar.bz2")
+        } else if url.ends_with(".zip") {
+            Some("zip")
+        } else {
+            None
+        }
+    });
 
     let strip = spec.strip_components.unwrap_or(0);
     let target_str = target_dir.to_string_lossy().to_string();
@@ -253,7 +254,13 @@ async fn install_download(spec: &SkillInstallSpec) -> Result<SkillInstallResult,
             let strip_arg = format!("--strip-components={strip}");
             run_command(
                 "tar",
-                &["xzf", &temp_path.to_string_lossy(), &strip_arg, "-C", &target_str],
+                &[
+                    "xzf",
+                    &temp_path.to_string_lossy(),
+                    &strip_arg,
+                    "-C",
+                    &target_str,
+                ],
             )
             .await
         }
@@ -261,7 +268,13 @@ async fn install_download(spec: &SkillInstallSpec) -> Result<SkillInstallResult,
             let strip_arg = format!("--strip-components={strip}");
             run_command(
                 "tar",
-                &["xjf", &temp_path.to_string_lossy(), &strip_arg, "-C", &target_str],
+                &[
+                    "xjf",
+                    &temp_path.to_string_lossy(),
+                    &strip_arg,
+                    "-C",
+                    &target_str,
+                ],
             )
             .await
         }
@@ -274,14 +287,13 @@ async fn install_download(spec: &SkillInstallSpec) -> Result<SkillInstallResult,
         }
         _ => {
             // Not an archive — move directly to target
-            let file_name = url
-                .rsplit('/')
-                .next()
-                .unwrap_or("downloaded_binary");
+            let file_name = url.rsplit('/').next().unwrap_or("downloaded_binary");
             let dest = target_dir.join(file_name);
             tokio::fs::copy(&temp_path, &dest)
                 .await
-                .map_err(|e: std::io::Error| Error::Install(format!("failed to copy binary: {e}")))?;
+                .map_err(|e: std::io::Error| {
+                    Error::Install(format!("failed to copy binary: {e}"))
+                })?;
 
             // Make executable on Unix
             #[cfg(unix)]

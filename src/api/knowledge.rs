@@ -3,16 +3,16 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     middleware,
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{auth::require_api_key, ApiState};
-use crate::knowledge::{select_knowledge, KnowledgePackResolver};
+use super::{ApiState, auth::require_api_key};
+use crate::knowledge::{KnowledgePackResolver, select_knowledge};
 use crate::persona::{KnowledgeChunk, KnowledgePackRef};
 use crate::skills::ManifoldClient;
 
@@ -106,7 +106,7 @@ fn error_response(code: &str, message: &str) -> Json<ErrorResponse> {
 
 fn chunk_to_response(chunk: &KnowledgeChunk) -> ChunkResponse {
     ChunkResponse {
-        topic: chunk.topic.clone(),
+        topic: chunk.topic.clone().unwrap_or_default(),
         tags: chunk.tags.clone(),
         content: chunk.content.clone(),
         rules: chunk.rules.clone(),
@@ -232,7 +232,7 @@ async fn preview_chunks(
     let max_tokens = query.max_tokens.unwrap_or(state.max_context_tokens);
     let selected = select_knowledge(&state.persona_knowledge, &query.message, max_tokens);
 
-    let chunks: Vec<ChunkResponse> = selected.iter().map(|c| chunk_to_response(c)).collect();
+    let chunks: Vec<ChunkResponse> = selected.into_iter().map(chunk_to_response).collect();
     let total = chunks.len();
 
     Json(ChunkPreviewResponse { chunks, total })
@@ -265,20 +265,18 @@ fn read_cached_packs(
 
             for file_entry in std::fs::read_dir(&pack_path)?.flatten() {
                 let file_path = file_entry.path();
-                if file_path.extension().is_some_and(|ext| ext == "json") {
-                    if let Ok(content) = std::fs::read_to_string(&file_path) {
-                        if let Ok(pack) =
-                            serde_json::from_str::<crate::persona::KnowledgePack>(&content)
-                        {
-                            packs.push(PackSummary {
-                                name: pack.name,
-                                description: pack.description,
-                                chunks: pack.chunks.len(),
-                                tags: pack.tags,
-                                version: pack.version,
-                            });
-                        }
-                    }
+                if file_path.extension().is_some_and(|ext| ext == "json")
+                    && let Ok(content) = std::fs::read_to_string(&file_path)
+                    && let Ok(pack) =
+                        serde_json::from_str::<crate::persona::KnowledgePack>(&content)
+                {
+                    packs.push(PackSummary {
+                        name: pack.name,
+                        description: pack.description,
+                        chunks: pack.chunks.len(),
+                        tags: pack.tags,
+                        version: pack.version,
+                    });
                 }
             }
         }
@@ -316,24 +314,18 @@ fn remove_cached_pack(
 
             for file_entry in std::fs::read_dir(&pack_path)?.flatten() {
                 let file_path = file_entry.path();
-                if file_path.extension().is_some_and(|ext| ext == "json") {
-                    if let Ok(content) = std::fs::read_to_string(&file_path) {
-                        if let Ok(pack) =
-                            serde_json::from_str::<crate::persona::KnowledgePack>(&content)
-                        {
-                            if pack.name == name {
-                                std::fs::remove_file(&file_path)?;
-                                removed = true;
+                if file_path.extension().is_some_and(|ext| ext == "json")
+                    && let Ok(content) = std::fs::read_to_string(&file_path)
+                    && let Ok(pack) =
+                        serde_json::from_str::<crate::persona::KnowledgePack>(&content)
+                    && pack.name == name
+                {
+                    std::fs::remove_file(&file_path)?;
+                    removed = true;
 
-                                // Clean up empty parent directories
-                                if pack_path
-                                    .read_dir()
-                                    .map_or(false, |mut d| d.next().is_none())
-                                {
-                                    let _ = std::fs::remove_dir(&pack_path);
-                                }
-                            }
-                        }
+                    // Clean up empty parent directories
+                    if pack_path.read_dir().is_ok_and(|mut d| d.next().is_none()) {
+                        let _ = std::fs::remove_dir(&pack_path);
                     }
                 }
             }

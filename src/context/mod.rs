@@ -5,10 +5,10 @@
 //! - User context (learned preferences)
 //! - life.json data (portable identity)
 
-mod life_json;
-pub mod life_json_sync;
 mod builder;
 pub mod compaction;
+mod life_json;
+pub mod life_json_sync;
 
 pub use builder::{BuiltContext, ContextBuilder, ContextConfig, ContextMessage};
 pub use compaction::{CompactionConfig, CompactionResult, SessionCompactor};

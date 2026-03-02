@@ -1,7 +1,13 @@
 //! Raw Telegram Bot API calls
 
 use super::html::markdown_to_telegram_html;
-use super::types::*;
+use super::types::{
+    API_BASE, AnswerCallbackQueryRequest, BotCommand, DeleteMessageRequest, EditMessageTextRequest,
+    FILE_BASE, GetFileRequest, ReactionEmoji, SendChatActionRequest, SendMessageRequest,
+    SendPollRequest, SendStickerRequest, SendVideoNoteRequest, SendVoiceRequest, SentMessage,
+    SetMessageReactionRequest, SetMyCommandsRequest, SetWebhookRequest, TelegramFile,
+    TelegramResponse,
+};
 use crate::{Error, Result};
 
 impl super::TelegramChannel {
@@ -12,7 +18,12 @@ impl super::TelegramChannel {
     /// # Errors
     ///
     /// Returns error if the API request fails
-    pub async fn send_message(&self, chat_id: i64, text: &str, reply_to: Option<i64>) -> Result<()> {
+    pub async fn send_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to: Option<i64>,
+    ) -> Result<()> {
         let url = format!("{API_BASE}{}/sendMessage", self.token);
 
         let html_text = markdown_to_telegram_html(text);
@@ -196,7 +207,11 @@ impl super::TelegramChannel {
 
         // If the thread/topic is gone, retry once without thread_id
         if parsed.result.is_none() && thread_id.is_some() {
-            let desc = parsed.description.as_deref().unwrap_or_default().to_lowercase();
+            let desc = parsed
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase();
             if desc.contains("message thread not found")
                 || desc.contains("topic_closed")
                 || desc.contains("topic_deleted")
@@ -231,27 +246,24 @@ impl super::TelegramChannel {
                     .await
                     .map_err(|e| Error::Channel(format!("Telegram response read error: {e}")))?;
 
-                let retry_parsed: TelegramResponse<SentMessage> =
-                    serde_json::from_str(&retry_body).map_err(|e| {
-                        Error::Channel(format!("Telegram response parse error: {e}"))
-                    })?;
+                let retry_parsed: TelegramResponse<SentMessage> = serde_json::from_str(&retry_body)
+                    .map_err(|e| Error::Channel(format!("Telegram response parse error: {e}")))?;
 
-                return retry_parsed
-                    .result
-                    .map(|m| m.message_id)
-                    .ok_or_else(|| {
-                        Error::Channel(format!(
-                            "Telegram API error: {}",
-                            retry_parsed.description.unwrap_or_default()
-                        ))
-                    });
+                return retry_parsed.result.map(|m| m.message_id).ok_or_else(|| {
+                    Error::Channel(format!(
+                        "Telegram API error: {}",
+                        retry_parsed.description.unwrap_or_default()
+                    ))
+                });
             }
         }
 
-        parsed
-            .result
-            .map(|m| m.message_id)
-            .ok_or_else(|| Error::Channel(format!("Telegram API error: {}", parsed.description.unwrap_or_default())))
+        parsed.result.map(|m| m.message_id).ok_or_else(|| {
+            Error::Channel(format!(
+                "Telegram API error: {}",
+                parsed.description.unwrap_or_default()
+            ))
+        })
     }
 
     /// Edit an existing message's text
@@ -261,12 +273,7 @@ impl super::TelegramChannel {
     /// # Errors
     ///
     /// Returns error if the API request fails
-    pub async fn edit_message_text(
-        &self,
-        chat_id: i64,
-        message_id: i64,
-        text: &str,
-    ) -> Result<()> {
+    pub async fn edit_message_text(&self, chat_id: i64, message_id: i64, text: &str) -> Result<()> {
         let url = format!("{API_BASE}{}/editMessageText", self.token);
 
         let html_text = markdown_to_telegram_html(text);
@@ -319,7 +326,10 @@ impl super::TelegramChannel {
                 let fallback_body = fallback_resp.text().await.unwrap_or_default();
 
                 // Suppress "message is not modified" in fallback path too
-                if fallback_body.to_lowercase().contains("message is not modified") {
+                if fallback_body
+                    .to_lowercase()
+                    .contains("message is not modified")
+                {
                     return Ok(());
                 }
 
@@ -394,16 +404,16 @@ impl super::TelegramChannel {
         let parsed: TelegramResponse<TelegramFile> = serde_json::from_str(&body)
             .map_err(|e| Error::Channel(format!("Telegram getFile parse error: {e}")))?;
 
-        let file = parsed
-            .result
-            .ok_or_else(|| Error::Channel(format!(
+        let file = parsed.result.ok_or_else(|| {
+            Error::Channel(format!(
                 "Telegram getFile error: {}",
                 parsed.description.unwrap_or_default()
-            )))?;
-
-        let file_path = file.file_path.ok_or_else(|| {
-            Error::Channel("Telegram getFile returned no file_path".to_string())
+            ))
         })?;
+
+        let file_path = file
+            .file_path
+            .ok_or_else(|| Error::Channel("Telegram getFile returned no file_path".to_string()))?;
 
         let download_url = format!("{FILE_BASE}{}/{file_path}", self.token);
         let data = self
@@ -485,7 +495,16 @@ impl super::TelegramChannel {
     /// Set a reaction on a message
     ///
     /// Gracefully degrades if the bot lacks admin permission.
-    pub async fn set_message_reaction(&self, chat_id: i64, message_id: i64, emoji: &str) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the API request fails
+    pub async fn set_message_reaction(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        emoji: &str,
+    ) -> Result<()> {
         let url = format!("{API_BASE}{}/setMessageReaction", self.token);
         let request = SetMessageReactionRequest {
             chat_id,
@@ -518,6 +537,10 @@ impl super::TelegramChannel {
     }
 
     /// Clear all reactions from a message
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the API request fails
     pub async fn clear_message_reaction(&self, chat_id: i64, message_id: i64) -> Result<()> {
         let url = format!("{API_BASE}{}/setMessageReaction", self.token);
         let request = SetMessageReactionRequest {
@@ -547,7 +570,11 @@ impl super::TelegramChannel {
     /// # Errors
     ///
     /// Returns error if the API request fails
-    pub async fn answer_callback_query(&self, callback_query_id: &str, text: Option<&str>) -> Result<()> {
+    pub async fn answer_callback_query(
+        &self,
+        callback_query_id: &str,
+        text: Option<&str>,
+    ) -> Result<()> {
         let url = format!("{API_BASE}{}/answerCallbackQuery", self.token);
 
         let request = AnswerCallbackQueryRequest {
@@ -597,7 +624,7 @@ impl super::TelegramChannel {
         Ok(())
     }
 
-    /// Send a sticker by file_id
+    /// Send a sticker by `file_id`
     ///
     /// # Errors
     ///

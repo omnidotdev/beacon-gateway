@@ -151,7 +151,9 @@ impl SyncClient {
                 access_count: m.access_count,
                 source_session_id: m.source_session_id.clone(),
                 source_channel: m.source_channel.clone(),
-                origin_device_id: m.origin_device_id.clone()
+                origin_device_id: m
+                    .origin_device_id
+                    .clone()
                     .or_else(|| Some(self.device_id.clone())),
                 created_at: m.created_at.to_rfc3339(),
                 updated_at: m.updated_at.clone(),
@@ -162,16 +164,18 @@ impl SyncClient {
         let input_json = serde_json::to_string(&payloads)
             .map_err(|e| Error::Database(format!("failed to serialize push payload: {e}")))?;
 
-        let query = format!(
-            r#"mutation {{ pushMemories(input: {input_json}) {{ pushed merged }} }}"#
-        );
+        let query =
+            format!(r"mutation {{ pushMemories(input: {input_json}) {{ pushed merged }} }}");
 
         let response = self.graphql_request(&query).await?;
         let parsed: PushMemoriesResponse = response.json().await?;
 
         if let Some(errors) = parsed.errors {
             let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-            return Err(Error::Database(format!("push sync errors: {}", msgs.join(", "))));
+            return Err(Error::Database(format!(
+                "push sync errors: {}",
+                msgs.join(", ")
+            )));
         }
 
         let result = parsed
@@ -224,7 +228,10 @@ impl SyncClient {
 
             if let Some(errors) = parsed.errors {
                 let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-                return Err(Error::Database(format!("pull sync errors: {}", msgs.join(", "))));
+                return Err(Error::Database(format!(
+                    "pull sync errors: {}",
+                    msgs.join(", ")
+                )));
             }
 
             let result = parsed
@@ -295,9 +302,7 @@ impl SyncClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Database(format!(
-                "sync API error {status}: {body}"
-            )));
+            return Err(Error::Database(format!("sync API error {status}: {body}")));
         }
 
         Ok(response)
@@ -320,9 +325,7 @@ fn remote_to_memory(remote: &RemoteMemory, _device_id: &str) -> Memory {
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
-        serde_json::Value::String(s) => {
-            serde_json::from_str(s).unwrap_or_default()
-        }
+        serde_json::Value::String(s) => serde_json::from_str(s).unwrap_or_default(),
         _ => Vec::new(),
     };
 

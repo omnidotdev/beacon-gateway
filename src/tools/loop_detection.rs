@@ -129,9 +129,7 @@ impl LoopDetector {
             .window
             .iter()
             .filter(|r| {
-                r.name == name
-                    && r.params_hash == *params_hash
-                    && r.outcome_hash == *outcome_hash
+                r.name == name && r.params_hash == *params_hash && r.outcome_hash == *outcome_hash
             })
             .count();
 
@@ -254,9 +252,13 @@ mod tests {
     fn generic_repeat_triggers_warning() {
         let mut detector = LoopDetector::default();
         for i in 0..WARNING_THRESHOLD {
-            let severity = detector.record("web_search", "{\"q\": \"rust\"}", &format!("result_{i}"));
+            let severity =
+                detector.record("web_search", "{\"q\": \"rust\"}", &format!("result_{i}"));
             if i + 1 >= WARNING_THRESHOLD {
-                assert!(severity >= LoopSeverity::Warning, "expected Warning at iteration {i}");
+                assert!(
+                    severity >= LoopSeverity::Warning,
+                    "expected Warning at iteration {i}"
+                );
             }
         }
     }
@@ -267,7 +269,10 @@ mod tests {
         for i in 0..CRITICAL_THRESHOLD {
             let severity = detector.record("read_file", "{\"path\": \"/a\"}", "contents");
             if i + 1 >= CRITICAL_THRESHOLD {
-                assert!(severity >= LoopSeverity::Critical, "expected Critical at iteration {i}");
+                assert!(
+                    severity >= LoopSeverity::Critical,
+                    "expected Critical at iteration {i}"
+                );
             }
         }
     }
@@ -297,7 +302,11 @@ mod tests {
             let severity = detector.record("repeat_tool", "{\"a\": 1}", "result");
             // Should not trigger yet because old entries are being evicted
             if i + 1 < WARNING_THRESHOLD {
-                assert_eq!(severity, LoopSeverity::None, "false positive at iteration {i}");
+                assert_eq!(
+                    severity,
+                    LoopSeverity::None,
+                    "false positive at iteration {i}"
+                );
             }
         }
     }

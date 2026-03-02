@@ -6,9 +6,9 @@ pub mod types;
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
 use serde::Serialize;
 
 use self::types::TelegramUpdate;
@@ -69,7 +69,11 @@ async fn handle_update_for_account(
     }
 
     // Debug logging for raw updates (when TELEGRAM_DEBUG_UPDATES is enabled)
-    if state.telegram_config.as_ref().is_some_and(|c| c.debug_updates) {
+    if state
+        .telegram_config
+        .as_ref()
+        .is_some_and(|c| c.debug_updates)
+    {
         match serde_json::to_string(&update) {
             Ok(json) => tracing::debug!(raw = %json, "Telegram raw update"),
             Err(e) => tracing::warn!(error = %e, "failed to serialize update for debug"),
@@ -77,14 +81,24 @@ async fn handle_update_for_account(
     }
 
     let label = account_id.as_deref().unwrap_or("default");
-    tracing::debug!(update_id = update.update_id, account = label, "received Telegram update");
+    tracing::debug!(
+        update_id = update.update_id,
+        account = label,
+        "received Telegram update"
+    );
 
     // Dedup check — prevent processing the same update twice
     {
         let key = format!("update:{}:{}", label, update.update_id);
-        let mut dedup = state.telegram_dedup.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut dedup = state
+            .telegram_dedup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if dedup.is_duplicate(&key) {
-            tracing::debug!(update_id = update.update_id, "duplicate Telegram update, skipping");
+            tracing::debug!(
+                update_id = update.update_id,
+                "duplicate Telegram update, skipping"
+            );
             return (StatusCode::OK, Json(WebhookResponse { ok: true }));
         }
     }
@@ -109,15 +123,16 @@ async fn handle_update_for_account(
             let callback_id = callback.id;
 
             // Resolve the Telegram channel to answer the callback query
-            let telegram = if let Some(ref aid) = account_id {
-                state
-                    .telegram_registry
-                    .as_ref()
-                    .and_then(|r| r.get(aid))
-                    .map(|a| &a.channel)
-            } else {
-                state.telegram.as_ref()
-            };
+            let telegram = account_id.as_ref().map_or_else(
+                || state.telegram.as_ref(),
+                |aid| {
+                    state
+                        .telegram_registry
+                        .as_ref()
+                        .and_then(|r| r.get(aid))
+                        .map(|a| &a.channel)
+                },
+            );
 
             // Answer the callback query to dismiss the loading spinner
             if let Some(tg) = telegram {
@@ -125,7 +140,11 @@ async fn handle_update_for_account(
             }
 
             tokio::spawn(async move {
-                if let Err(e) = process::process_telegram_message(state, cb_message, text, has_media, account_id).await {
+                if let Err(e) = process::process_telegram_message(
+                    state, cb_message, text, has_media, account_id,
+                )
+                .await
+                {
                     tracing::error!(error = %e, "Telegram callback query processing failed");
                 }
             });
@@ -181,8 +200,7 @@ async fn handle_update_for_account(
         .unwrap_or(false);
 
     // Mention gating: skip group messages that don't mention the bot
-    let is_group_chat = message.chat.chat_type == "group"
-        || message.chat.chat_type == "supergroup";
+    let is_group_chat = message.chat.chat_type == "group" || message.chat.chat_type == "supergroup";
 
     if is_group_chat {
         let chat_id_str = message.chat.id.to_string();
@@ -211,9 +229,7 @@ async fn handle_update_for_account(
 
             let mentioned = bot_username
                 .as_ref()
-                .is_some_and(|username| {
-                    text_for_check.contains(&format!("@{username}"))
-                })
+                .is_some_and(|username| text_for_check.contains(&format!("@{username}")))
                 || message.reply_to_message.is_some();
 
             if !mentioned {
@@ -242,7 +258,9 @@ async fn handle_update_for_account(
 
     // For sticker-only messages, use emoji as content
     if text.is_empty() && message.sticker.is_some() {
-        let sticker_emoji = message.sticker.as_ref()
+        let sticker_emoji = message
+            .sticker
+            .as_ref()
             .and_then(|s| s.emoji.as_deref())
             .unwrap_or("\u{1f3ad}");
         text = format!("[Sticker: {sticker_emoji}]");
@@ -260,7 +278,9 @@ async fn handle_update_for_account(
 
     // Spawn processing in background so we return 200 immediately
     tokio::spawn(async move {
-        if let Err(e) = process::process_telegram_message(state, message, text, has_media, account_id).await {
+        if let Err(e) =
+            process::process_telegram_message(state, message, text, has_media, account_id).await
+        {
             tracing::error!(error = %e, "Telegram message processing failed");
         }
     });

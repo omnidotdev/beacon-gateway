@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::integrations::{ScheduleRequest, VortexClient};
 use crate::Result;
+use crate::integrations::{ScheduleRequest, VortexClient};
 
 /// Tools for managing scheduled tasks via Vortex
 #[derive(Debug, Clone)]
@@ -315,8 +315,9 @@ impl BuiltinCronTools {
     pub async fn execute(&self, name: &str, arguments: &str) -> crate::Result<String> {
         match name {
             "cron_schedule" => {
-                let params: ScheduleParams = serde_json::from_str(arguments)
-                    .map_err(|e| crate::Error::Tool(format!("cron_schedule: invalid arguments: {e}")))?;
+                let params: ScheduleParams = serde_json::from_str(arguments).map_err(|e| {
+                    crate::Error::Tool(format!("cron_schedule: invalid arguments: {e}"))
+                })?;
                 let id = self.cron.schedule_with_options(params).await?;
                 Ok(serde_json::json!({ "status": "scheduled", "id": id }).to_string())
             }
@@ -329,10 +330,14 @@ impl BuiltinCronTools {
                 struct CancelArgs {
                     schedule_id: String,
                 }
-                let args: CancelArgs = serde_json::from_str(arguments)
-                    .map_err(|e| crate::Error::Tool(format!("cron_cancel: invalid arguments: {e}")))?;
+                let args: CancelArgs = serde_json::from_str(arguments).map_err(|e| {
+                    crate::Error::Tool(format!("cron_cancel: invalid arguments: {e}"))
+                })?;
                 self.cron.cancel(&args.schedule_id).await?;
-                Ok(serde_json::json!({ "status": "cancelled", "id": args.schedule_id }).to_string())
+                Ok(
+                    serde_json::json!({ "status": "cancelled", "id": args.schedule_id })
+                        .to_string(),
+                )
             }
             "cron_get" => {
                 #[derive(serde::Deserialize)]

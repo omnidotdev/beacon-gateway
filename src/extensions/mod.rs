@@ -21,8 +21,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::channels::Channel;
 use crate::Result;
+use crate::channels::Channel;
 
 /// Extension trait for plugins
 ///
@@ -298,7 +298,9 @@ mod tests {
     #[test]
     fn test_registry_get() {
         let mut registry = ExtensionRegistry::new(PathBuf::from("/tmp/test-extensions"));
-        registry.register(Box::new(MockExtension::new("test-ext"))).unwrap();
+        registry
+            .register(Box::new(MockExtension::new("test-ext")))
+            .unwrap();
 
         let ext = registry.get("test-ext");
         assert!(ext.is_some());
@@ -311,8 +313,12 @@ mod tests {
     #[test]
     fn test_registry_list() {
         let mut registry = ExtensionRegistry::new(PathBuf::from("/tmp/test-extensions"));
-        registry.register(Box::new(MockExtension::new("ext-1"))).unwrap();
-        registry.register(Box::new(MockExtension::new("ext-2"))).unwrap();
+        registry
+            .register(Box::new(MockExtension::new("ext-1")))
+            .unwrap();
+        registry
+            .register(Box::new(MockExtension::new("ext-2")))
+            .unwrap();
 
         let list = registry.list();
         assert_eq!(list.len(), 2);

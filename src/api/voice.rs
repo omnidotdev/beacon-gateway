@@ -3,12 +3,12 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::State,
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::post,
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,10 +52,9 @@ async fn transcribe(
     State(state): State<Arc<ApiState>>,
     body: Bytes,
 ) -> Result<Json<TranscribeResponse>, VoiceError> {
-    let synapse = state
-        .synapse
-        .as_ref()
-        .ok_or(VoiceError::NotConfigured("STT not configured (no Synapse client)"))?;
+    let synapse = state.synapse.as_ref().ok_or(VoiceError::NotConfigured(
+        "STT not configured (no Synapse client)",
+    ))?;
 
     if body.is_empty() {
         return Err(VoiceError::BadRequest("Empty audio data"));
@@ -66,7 +65,9 @@ async fn transcribe(
         .await
         .map_err(|e| VoiceError::TranscriptionFailed(e.to_string()))?;
 
-    Ok(Json(TranscribeResponse { text: transcription.text }))
+    Ok(Json(TranscribeResponse {
+        text: transcription.text,
+    }))
 }
 
 /// Synthesis request
@@ -82,10 +83,9 @@ async fn synthesize(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<SynthesizeRequest>,
 ) -> Result<Response, VoiceError> {
-    let synapse = state
-        .synapse
-        .as_ref()
-        .ok_or(VoiceError::NotConfigured("TTS not configured (no Synapse client)"))?;
+    let synapse = state.synapse.as_ref().ok_or(VoiceError::NotConfigured(
+        "TTS not configured (no Synapse client)",
+    ))?;
 
     if request.text.is_empty() {
         return Err(VoiceError::BadRequest("Empty text"));
@@ -135,12 +135,28 @@ impl IntoResponse for VoiceError {
         }
 
         let (status, code, message) = match self {
-            Self::NotConfigured(msg) => (StatusCode::SERVICE_UNAVAILABLE, "not_configured", msg.to_string()),
+            Self::NotConfigured(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not_configured",
+                msg.to_string(),
+            ),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.to_string()),
-            Self::TranscriptionFailed(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "transcription_failed", msg),
-            Self::SynthesisFailed(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "synthesis_failed", msg),
+            Self::TranscriptionFailed(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transcription_failed",
+                msg,
+            ),
+            Self::SynthesisFailed(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "synthesis_failed", msg)
+            }
         };
 
-        (status, Json(ErrorResponse { error: ErrorBody { code, message } })).into_response()
+        (
+            status,
+            Json(ErrorResponse {
+                error: ErrorBody { code, message },
+            }),
+        )
+            .into_response()
     }
 }

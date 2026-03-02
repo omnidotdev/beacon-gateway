@@ -10,7 +10,7 @@ pub struct MediaConfig {
     pub enabled: bool,
     /// Maximum file size in bytes (default 10MB)
     pub max_file_size: usize,
-    /// OpenAI Vision configuration
+    /// `OpenAI` Vision configuration
     pub openai: OpenAIMediaConfig,
     /// Whisper transcription configuration
     pub whisper: WhisperConfig,
@@ -27,11 +27,11 @@ impl Default for MediaConfig {
     }
 }
 
-/// OpenAI Vision provider configuration
+/// `OpenAI` Vision provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAIMediaConfig {
-    /// Enable OpenAI Vision
+    /// Enable `OpenAI` Vision
     pub enabled: bool,
     /// Model to use (default gpt-4o)
     pub model: String,

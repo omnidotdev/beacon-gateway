@@ -136,22 +136,25 @@ impl ToolPolicy {
     #[must_use]
     pub fn with_env_overrides(mut self) -> Self {
         // Global default override
-        if let Ok(val) = std::env::var("BEACON_TOOL_PROFILE") {
-            if let Some(profile) = ToolProfile::from_str_value(&val) {
-                self.default_profile = profile;
-                tracing::info!(profile = val, "tool profile default overridden by env");
-            }
+        if let Ok(val) = std::env::var("BEACON_TOOL_PROFILE")
+            && let Some(profile) = ToolProfile::from_str_value(&val)
+        {
+            self.default_profile = profile;
+            tracing::info!(profile = val, "tool profile default overridden by env");
         }
 
         // Per-channel overrides
-        let channels = ["telegram", "discord", "slack", "voice", "teams", "signal", "matrix"];
+        let channels = [
+            "telegram", "discord", "slack", "voice", "teams", "signal", "matrix",
+        ];
         for channel in &channels {
             let env_key = format!("BEACON_TOOL_PROFILE_{}", channel.to_uppercase());
-            if let Ok(val) = std::env::var(&env_key) {
-                if let Some(profile) = ToolProfile::from_str_value(&val) {
-                    self.channel_profiles.insert((*channel).to_string(), profile);
-                    tracing::info!(channel, profile = val, "tool profile overridden by env");
-                }
+            if let Ok(val) = std::env::var(&env_key)
+                && let Some(profile) = ToolProfile::from_str_value(&val)
+            {
+                self.channel_profiles
+                    .insert((*channel).to_string(), profile);
+                tracing::info!(channel, profile = val, "tool profile overridden by env");
             }
         }
 
@@ -203,13 +206,25 @@ mod tests {
     #[test]
     fn from_str_value_parses_all_profiles() {
         assert_eq!(ToolProfile::from_str_value("none"), Some(ToolProfile::None));
-        assert_eq!(ToolProfile::from_str_value("minimal"), Some(ToolProfile::Minimal));
-        assert_eq!(ToolProfile::from_str_value("messaging"), Some(ToolProfile::Messaging));
+        assert_eq!(
+            ToolProfile::from_str_value("minimal"),
+            Some(ToolProfile::Minimal)
+        );
+        assert_eq!(
+            ToolProfile::from_str_value("messaging"),
+            Some(ToolProfile::Messaging)
+        );
         assert_eq!(ToolProfile::from_str_value("full"), Some(ToolProfile::Full));
-        assert_eq!(ToolProfile::from_str_value("custom"), Some(ToolProfile::Custom));
+        assert_eq!(
+            ToolProfile::from_str_value("custom"),
+            Some(ToolProfile::Custom)
+        );
         // Case insensitive
         assert_eq!(ToolProfile::from_str_value("Full"), Some(ToolProfile::Full));
-        assert_eq!(ToolProfile::from_str_value("MESSAGING"), Some(ToolProfile::Messaging));
+        assert_eq!(
+            ToolProfile::from_str_value("MESSAGING"),
+            Some(ToolProfile::Messaging)
+        );
         // Invalid
         assert_eq!(ToolProfile::from_str_value("invalid"), None);
         assert_eq!(ToolProfile::from_str_value(""), None);

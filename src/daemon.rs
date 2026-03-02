@@ -10,22 +10,19 @@ use tokio::sync::mpsc;
 
 use crate::api::{ApiServerBuilder, ModelInfo};
 use crate::attachments::{AttachmentProcessor, VisionClient};
-use futures::StreamExt as _;
+#[cfg(target_os = "macos")]
+use crate::channels::IMessageChannel;
 use crate::channels::{
     Channel, ChannelCapability, DiscordChannel, GoogleChatChannel, IncomingMessage, MatrixChannel,
     OutgoingMessage, SignalChannel, SlackChannel, TeamsChannel, TelegramChannel, WhatsAppChannel,
 };
-#[cfg(target_os = "macos")]
-use crate::channels::IMessageChannel;
 use crate::context::{ContextBuilder, ContextConfig};
 use crate::db::{self, DbPool, MessageRole, SessionRepo, SkillRepo, UserRepo};
-use crate::security::{DmPolicy, PairingManager};
-use crate::voice::{
-    AudioCapture, AudioPlayback, SAMPLE_RATE, WakeWordDetector,
-    samples_to_wav,
-};
 use crate::hooks::{HookAction, HookEvent, HookManager};
+use crate::security::{DmPolicy, PairingManager};
+use crate::voice::{AudioCapture, AudioPlayback, SAMPLE_RATE, WakeWordDetector, samples_to_wav};
 use crate::{Config, Error, Result};
+use futures::StreamExt as _;
 
 /// Audio processing chunk size (100ms at 16kHz)
 const CHUNK_SIZE: usize = 1600;
@@ -67,15 +64,14 @@ impl Daemon {
 
     /// Initialize the Synapse AI router client
     ///
-    /// Returns (client, model_info) - client is None only if the URL is invalid.
+    /// Returns (client, `model_info`) - client is None only if the URL is invalid.
     /// In embedded mode (default), runs LLM/STT/TTS in-process.
     /// In cloud mode or without the feature, connects to a remote Synapse server.
     async fn init_synapse(&self) -> (Option<Arc<SynapseClient>>, Option<ModelInfo>) {
         #[cfg(feature = "embedded-synapse")]
         if !self.config.cloud_mode {
-            let synapse_cfg =
-                crate::config::synapse_bridge::build_synapse_config(&self.config);
-            match SynapseClient::embedded(synapse_cfg).await {
+            let synapse_cfg = crate::config::synapse_bridge::build_synapse_config(&self.config);
+            match Box::pin(SynapseClient::embedded(synapse_cfg)).await {
                 Ok(client) => {
                     let model_id = &self.config.llm_model;
                     tracing::info!(model = %model_id, "embedded synapse initialized");
@@ -120,6 +116,10 @@ impl Daemon {
     /// # Errors
     ///
     /// Returns error if the daemon encounters a fatal error
+    ///
+    /// # Panics
+    ///
+    /// Panics if Telegram public URL is expected but missing
     #[allow(clippy::future_not_send, clippy::too_many_lines)]
     pub async fn run(self) -> Result<()> {
         tracing::info!(
@@ -132,29 +132,30 @@ impl Daemon {
         crate::events::init_publisher(crate::events::EventsConfig::from_env());
 
         // Initialize cron tools when Vortex is configured
-        let cron_tools: Option<Arc<crate::tools::BuiltinCronTools>> =
-            if let Some(ref vortex_url) = self.config.api_server.vortex_url {
-                tracing::info!(url = %vortex_url, "Vortex scheduling integration available");
-                let vortex_api_key = std::env::var("VORTEX_API_KEY").ok();
-                let vortex_client = crate::integrations::VortexClient::new(vortex_url, vortex_api_key);
-                let callback_url = self
-                    .config
-                    .api_server
-                    .public_url
-                    .as_deref()
-                    .map_or_else(
-                        || format!("http://localhost:{}/api/webhooks/vortex", self.config.api_server.port),
-                        |url| format!("{}/api/webhooks/vortex", url.trim_end_matches('/')),
-                    );
-                Some(Arc::new(crate::tools::BuiltinCronTools::new(
-                    crate::tools::CronTools::new(vortex_client, callback_url),
-                )))
-            } else {
-                None
-            };
+        let cron_tools: Option<Arc<crate::tools::BuiltinCronTools>> = if let Some(ref vortex_url) =
+            self.config.api_server.vortex_url
+        {
+            tracing::info!(url = %vortex_url, "Vortex scheduling integration available");
+            let vortex_api_key = std::env::var("VORTEX_API_KEY").ok();
+            let vortex_client = crate::integrations::VortexClient::new(vortex_url, vortex_api_key);
+            let callback_url = self.config.api_server.public_url.as_deref().map_or_else(
+                || {
+                    format!(
+                        "http://localhost:{}/api/webhooks/vortex",
+                        self.config.api_server.port
+                    )
+                },
+                |url| format!("{}/api/webhooks/vortex", url.trim_end_matches('/')),
+            );
+            Some(Arc::new(crate::tools::BuiltinCronTools::new(
+                crate::tools::CronTools::new(vortex_client, callback_url),
+            )))
+        } else {
+            None
+        };
 
         // Initialize Synapse AI router client
-        let (synapse, model_info) = self.init_synapse().await;
+        let (synapse, model_info) = Box::pin(self.init_synapse()).await;
 
         // Get tool policy from persona, applying env var overrides
         let tool_policy = Arc::new(self.config.persona.tool_policy().with_env_overrides());
@@ -179,9 +180,8 @@ impl Daemon {
         // Discover and sync skills from all roots (including plugin skills)
         let skill_repo = SkillRepo::new(self.db.clone());
         {
-            let mut registry = crate::skills::SkillRegistry::new(
-                self.config.skills.managed_dir.clone(),
-            );
+            let mut registry =
+                crate::skills::SkillRegistry::new(self.config.skills.managed_dir.clone());
             match registry.discover_all_roots(&self.config.skills) {
                 Ok(count) => {
                     if count > 0 {
@@ -224,16 +224,20 @@ impl Daemon {
         let model_id = self.config.llm_model.clone();
 
         // Initialize BYOK key resolver if Synapse API is configured
-        let (key_resolver, jwt_cache) = if let (Some(api_url), Some(secret)) =
-            (&self.config.synapse_api_url, &self.config.synapse_gateway_secret)
-        {
+        let (key_resolver, jwt_cache) = if let (Some(api_url), Some(secret)) = (
+            &self.config.synapse_api_url,
+            &self.config.synapse_gateway_secret,
+        ) {
             tracing::info!(url = %api_url, "BYOK enabled via Synapse");
             let resolver = Arc::new(crate::providers::KeyResolver::new(
                 api_url.clone(),
                 secret.clone(),
                 self.config.api_keys.clone(),
             ));
-            let auth_url = self.config.auth_base_url.clone()
+            let auth_url = self
+                .config
+                .auth_base_url
+                .clone()
                 .unwrap_or_else(|| api_url.clone());
             let jwks = Arc::new(crate::api::jwt::JwksCache::new(auth_url));
             (Some(resolver), Some(jwks))
@@ -242,27 +246,36 @@ impl Daemon {
         };
 
         // Initialize key provisioner if Synapse API is configured
-        let key_provisioner =
-            if let (Some(api_url), Some(secret)) = (&self.config.synapse_api_url, &self.config.synapse_gateway_secret)
-            {
-                tracing::info!(url = %api_url, "key provisioning enabled via Synapse API");
-                Some(Arc::new(crate::providers::KeyProvisioner::new(
-                    api_url.clone(),
-                    secret.clone(),
-                )))
-            } else {
-                None
-            };
+        let key_provisioner = if let (Some(api_url), Some(secret)) = (
+            &self.config.synapse_api_url,
+            &self.config.synapse_gateway_secret,
+        ) {
+            tracing::info!(url = %api_url, "key provisioning enabled via Synapse API");
+            Some(Arc::new(crate::providers::KeyProvisioner::new(
+                api_url.clone(),
+                secret.clone(),
+            )))
+        } else {
+            None
+        };
 
         // Resolve knowledge packs from Manifold and merge with inline chunks
-        let resolved_knowledge = if !self.config.persona.knowledge.packs.is_empty() {
-            let manifold_url = self.config.api_server.manifold_url.as_deref()
+        let resolved_knowledge = if self.config.persona.knowledge.packs.is_empty() {
+            Vec::new()
+        } else {
+            let manifold_url = self
+                .config
+                .api_server
+                .manifold_url
+                .as_deref()
                 .unwrap_or("https://api.manifold.omni.dev");
             let resolver = crate::knowledge::KnowledgePackResolver::new(
                 manifold_url,
                 self.config.knowledge_cache_dir.clone(),
             );
-            let results = resolver.resolve_all(&self.config.persona.knowledge.packs).await;
+            let results = resolver
+                .resolve_all(&self.config.persona.knowledge.packs)
+                .await;
             let mut extra_chunks = Vec::new();
             for result in results {
                 match result {
@@ -276,8 +289,6 @@ impl Daemon {
                 }
             }
             extra_chunks
-        } else {
-            Vec::new()
         };
 
         // Merge inline knowledge with resolved pack knowledge
@@ -290,10 +301,8 @@ impl Daemon {
 
         // Spawn periodic memory sync if configured
         if let Some(ref sync_config) = self.config.sync {
-            let sync_client = crate::sync::SyncClient::new(
-                &sync_config.api_url,
-                &sync_config.device_id,
-            );
+            let sync_client =
+                crate::sync::SyncClient::new(&sync_config.api_url, &sync_config.device_id);
             let sync_db = self.db.clone();
             let sync_interval = sync_config.interval_secs;
 
@@ -334,7 +343,7 @@ impl Daemon {
         let mut telegram_polling_rx: Option<tokio::sync::mpsc::Receiver<IncomingMessage>> = None;
 
         let telegram = if let Some(token) = &telegram_token {
-            if telegram_public_url.is_some() {
+            if let Some(ref pub_url) = telegram_public_url {
                 // Webhook mode: create simple channel for API state
                 let mut tg = TelegramChannel::new(token.clone());
                 if let Err(e) = tg.connect().await {
@@ -342,11 +351,13 @@ impl Daemon {
                     None
                 } else {
                     // Auto-register webhook
-                    let webhook_url = format!(
-                        "{}/api/webhooks/telegram",
-                        telegram_public_url.as_ref().unwrap().trim_end_matches('/')
-                    );
-                    let webhook_secret = self.config.telegram.as_ref().and_then(|c| c.webhook_secret.as_deref());
+                    let webhook_url =
+                        format!("{}/api/webhooks/telegram", pub_url.trim_end_matches('/'));
+                    let webhook_secret = self
+                        .config
+                        .telegram
+                        .as_ref()
+                        .and_then(|c| c.webhook_secret.as_deref());
                     if let Err(e) = tg.set_webhook(&webhook_url, webhook_secret).await {
                         tracing::error!(error = %e, "Telegram webhook registration failed");
                     }
@@ -403,7 +414,9 @@ impl Daemon {
                             config: crate::config::TelegramAccountConfig {
                                 bot_token: tg_config.bot_token.clone(),
                                 bot_username: tg_config.bot_username.clone(),
-                                require_mention_in_groups: Some(tg_config.require_mention_in_groups),
+                                require_mention_in_groups: Some(
+                                    tg_config.require_mention_in_groups,
+                                ),
                                 reaction_level: Some(tg_config.reaction_level),
                                 ack_reaction: Some(tg_config.ack_reaction.clone()),
                                 done_reaction: Some(tg_config.done_reaction.clone()),
@@ -428,7 +441,11 @@ impl Daemon {
                             "{}/api/webhooks/telegram/{acct_id}",
                             base.trim_end_matches('/')
                         );
-                        let webhook_secret = self.config.telegram.as_ref().and_then(|c| c.webhook_secret.as_deref());
+                        let webhook_secret = self
+                            .config
+                            .telegram
+                            .as_ref()
+                            .and_then(|c| c.webhook_secret.as_deref());
                         if let Err(e) = tg.set_webhook(&webhook_url, webhook_secret).await {
                             tracing::error!(account = %acct_id, error = %e, "Telegram account webhook failed");
                         }
@@ -442,7 +459,8 @@ impl Daemon {
                         );
                     } else {
                         // Polling mode for this account
-                        let (mut tg, _rx) = TelegramChannel::with_receiver(acct_config.bot_token.clone());
+                        let (mut tg, _rx) =
+                            TelegramChannel::with_receiver(acct_config.bot_token.clone());
                         if let Err(e) = tg.connect().await {
                             tracing::error!(account = %acct_id, error = %e, "Telegram account connect failed");
                             continue;
@@ -468,7 +486,10 @@ impl Daemon {
                         accounts = ?accounts.keys().collect::<Vec<_>>(),
                         "Telegram multi-account registry initialized"
                     );
-                    Some(TelegramAccountRegistry::new(accounts, "default".to_string()))
+                    Some(TelegramAccountRegistry::new(
+                        accounts,
+                        "default".to_string(),
+                    ))
                 }
             }
         } else {
@@ -482,10 +503,12 @@ impl Daemon {
             .iter()
             .filter(|s| s.skill.metadata.user_invocable)
             .filter_map(|s| {
-                s.command_name.as_ref().map(|cmd| crate::channels::BotCommand {
-                    command: cmd.clone(),
-                    description: s.skill.metadata.description.clone(),
-                })
+                s.command_name
+                    .as_ref()
+                    .map(|cmd| crate::channels::BotCommand {
+                        command: cmd.clone(),
+                        description: s.skill.metadata.description.clone(),
+                    })
             })
             .take(100) // Telegram limit
             .collect();
@@ -498,19 +521,20 @@ impl Daemon {
                         tracing::warn!(account = %acct_id, error = %e, "failed to sync Telegram bot commands");
                     }
                 }
-            } else if let Some(ref tg) = telegram {
-                if let Err(e) = tg.sync_commands(&skill_commands).await {
-                    tracing::warn!(error = %e, "failed to sync Telegram bot commands");
-                }
+            } else if let Some(ref tg) = telegram
+                && let Err(e) = tg.sync_commands(&skill_commands).await
+            {
+                tracing::warn!(error = %e, "failed to sync Telegram bot commands");
             }
         }
 
         // Initialize vision client for image analysis (if Anthropic key available)
-        let vision = self.config.api_keys.anthropic.as_ref().and_then(|key| {
-            VisionClient::new(key.clone())
-                .map(Arc::new)
-                .ok()
-        });
+        let vision = self
+            .config
+            .api_keys
+            .anthropic
+            .as_ref()
+            .and_then(|key| VisionClient::new(key.clone()).map(Arc::new).ok());
 
         // Create attachment processor with vision and Synapse (for audio transcription)
         let attachment_processor = Arc::new(AttachmentProcessor::new(
@@ -637,9 +661,9 @@ impl Daemon {
 
         // Run voice loop on main thread (cpal streams aren't Send)
         // Only run if voice is enabled AND synapse is configured
-        if self.config.voice.enabled && synapse.is_some() {
+        if let Some(syn) = synapse.as_ref().filter(|_| self.config.voice.enabled) {
             self.run_voice_loop(
-                Arc::clone(synapse.as_ref().unwrap()),
+                Arc::clone(syn),
                 model_id,
                 system_prompt,
                 MAX_TOKENS,
@@ -1061,7 +1085,8 @@ impl Daemon {
 
         // Google Chat
         if let Some(service_account_path) = &self.config.api_keys.google_chat_service_account {
-            let (mut google_chat, rx) = GoogleChatChannel::with_receiver(service_account_path.clone());
+            let (mut google_chat, rx) =
+                GoogleChatChannel::with_receiver(service_account_path.clone());
 
             if let Err(e) = google_chat.connect().await {
                 tracing::error!(error = %e, "Google Chat connect failed");
@@ -1156,7 +1181,7 @@ impl Daemon {
     }
 
     /// Run voice processing loop
-    #[allow(clippy::future_not_send)]
+    #[allow(clippy::future_not_send, clippy::too_many_arguments)]
     async fn run_voice_loop(
         &self,
         synapse: Arc<SynapseClient>,
@@ -1170,11 +1195,10 @@ impl Daemon {
         // Available for future tool filtering by channel policy
         let _ = &tool_policy;
 
-        let wake_word = self
-            .config
-            .persona
-            .wake_word()
-            .ok_or_else(|| Error::Config("voice.wakeWord required for voice mode".to_string()))?;
+        let wake_word =
+            self.config.persona.wake_word().ok_or_else(|| {
+                Error::Config("voice.wakeWord required for voice mode".to_string())
+            })?;
         let persona_id = self.config.persona.id();
 
         let stt_model = self.config.voice.stt_model.clone();
@@ -1266,18 +1290,30 @@ impl Daemon {
                 tracing::debug!(samples = speech_samples.len(), "checking for wake word");
 
                 let wav = samples_to_wav(&speech_samples, SAMPLE_RATE)?;
-                let transcription = synapse
-                    .transcribe(wav.into(), "audio.wav", stt_model)
-                    .await;
+                let transcription = synapse.transcribe(wav.into(), "audio.wav", stt_model).await;
                 if let Ok(result) = transcription {
                     tracing::debug!(transcript = %result.text, "transcribed");
 
                     if detector.check_wake_word(&result.text) {
                         let command = extract_command(&result.text, wake_word);
                         if command.is_empty() {
-                            speak(playback, synapse, tts_model, tts_voice, tts_speed, "Yes?").await?;
+                            speak(playback, synapse, tts_model, tts_voice, tts_speed, "Yes?")
+                                .await?;
                         } else {
-                            handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &command, voice_context, plugin_manager).await?;
+                            handle_voice_command(
+                                playback,
+                                synapse,
+                                model_id,
+                                system_prompt,
+                                max_tokens,
+                                tts_model,
+                                tts_voice,
+                                tts_speed,
+                                &command,
+                                voice_context,
+                                plugin_manager,
+                            )
+                            .await?;
                         }
                         detector.reset();
                     }
@@ -1291,11 +1327,32 @@ impl Daemon {
             match synapse.transcribe(wav.into(), "audio.wav", stt_model).await {
                 Ok(result) => {
                     tracing::info!(command = %result.text, "command received");
-                    handle_voice_command(playback, synapse, model_id, system_prompt, max_tokens, tts_model, tts_voice, tts_speed, &result.text, voice_context, plugin_manager).await?;
+                    handle_voice_command(
+                        playback,
+                        synapse,
+                        model_id,
+                        system_prompt,
+                        max_tokens,
+                        tts_model,
+                        tts_voice,
+                        tts_speed,
+                        &result.text,
+                        voice_context,
+                        plugin_manager,
+                    )
+                    .await?;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "STT failed");
-                    speak(playback, synapse, tts_model, tts_voice, tts_speed, "Sorry, I didn't catch that").await?;
+                    speak(
+                        playback,
+                        synapse,
+                        tts_model,
+                        tts_voice,
+                        tts_speed,
+                        "Sorry, I didn't catch that",
+                    )
+                    .await?;
                 }
             }
             detector.reset();
@@ -1532,7 +1589,11 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             }
             Ok(_) => {} // existing session, don't re-publish started
             Err(e) => {
-                tracing::warn!("failed to check message count for session {}: {}", session.id, e);
+                tracing::warn!(
+                    "failed to check message count for session {}: {}",
+                    session.id,
+                    e
+                );
             }
         }
 
@@ -1614,10 +1675,12 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             .filter(|_| channel_name == "telegram")
             .map_or("\u{1F440}", |c| c.ack_reaction.as_str());
 
-        if reaction_level != crate::config::ReactionLevel::Off {
-            if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, ack_emoji).await {
-                tracing::debug!(error = %e, "ack reaction failed");
-            }
+        if reaction_level != crate::config::ReactionLevel::Off
+            && let Err(e) = channel
+                .add_reaction(&msg.channel_id, &msg.id, ack_emoji)
+                .await
+        {
+            tracing::debug!(error = %e, "ack reaction failed");
         }
 
         // Process attachments to augment message content
@@ -1638,17 +1701,17 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
         };
 
         // Inject knowledge based on user message
-        if let Ok(ref mut ctx) = built_context {
-            if !knowledge_chunks.is_empty() {
-                let max_knowledge_tokens = max_context_tokens / 4;
-                let selected = crate::knowledge::select_knowledge(
-                    &knowledge_chunks,
-                    &content_with_attachments,
-                    max_knowledge_tokens,
-                );
-                if !selected.is_empty() {
-                    ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
-                }
+        if let Ok(ref mut ctx) = built_context
+            && !knowledge_chunks.is_empty()
+        {
+            let max_knowledge_tokens = max_context_tokens / 4;
+            let selected = crate::knowledge::select_knowledge(
+                &knowledge_chunks,
+                &content_with_attachments,
+                max_knowledge_tokens,
+            );
+            if !selected.is_empty() {
+                ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
             }
         }
 
@@ -1664,13 +1727,14 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
         }
 
         // Hook: message:before_agent - can provide direct reply or skip agent
-        let hook_event = HookEvent::new(HookAction::BeforeAgent, channel_name, &msg)
-            .with_session(&session.id);
+        let hook_event =
+            HookEvent::new(HookAction::BeforeAgent, channel_name, &msg).with_session(&session.id);
         let hook_result = hook_manager.trigger(&hook_event).await;
 
         // If hook provides a reply and wants to skip agent, send and move on
-        if hook_result.skip_agent && hook_result.reply.is_some() {
-            let reply = hook_result.reply.unwrap();
+        if hook_result.skip_agent
+            && let Some(reply) = hook_result.reply
+        {
             let outgoing = OutgoingMessage {
                 channel_id: msg.channel_id.clone(),
                 content: reply,
@@ -1706,11 +1770,16 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
 
         // Fetch available tools from Synapse MCP and plugins
         let tools = {
-            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+            let executor = crate::tools::executor::ToolExecutor::new(
+                Arc::clone(&synapse),
+                plugin_manager.clone(),
+            );
             executor.list_tools().await.ok()
         };
 
-        let use_streaming = channel.capabilities().contains(&ChannelCapability::Streaming);
+        let use_streaming = channel
+            .capabilities()
+            .contains(&ChannelCapability::Streaming);
 
         // Start streaming placeholder if channel supports it
         let streaming_msg_id = if use_streaming {
@@ -1734,7 +1803,10 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 synapse_client::Message::user(&augmented_prompt),
             ];
             let mut final_response = String::new();
-            let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(&synapse), plugin_manager.clone());
+            let executor = crate::tools::executor::ToolExecutor::new(
+                Arc::clone(&synapse),
+                plugin_manager.clone(),
+            );
             let mut loop_detector = crate::tools::loop_detection::LoopDetector::default();
 
             for _turn in 0..10 {
@@ -1750,6 +1822,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                     tool_choice: None,
                 };
 
+                #[allow(clippy::redundant_else)]
                 if use_streaming {
                     // Streaming path: use chat_completion_stream
                     match synapse.chat_completion_stream(&request).await {
@@ -1764,25 +1837,40 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                         turn_text.push_str(&text);
                                         if let Some(ref mid) = streaming_msg_id {
                                             let _ = channel
-                                                .send_streaming_update(&msg.channel_id, mid, &turn_text)
+                                                .send_streaming_update(
+                                                    &msg.channel_id,
+                                                    mid,
+                                                    &turn_text,
+                                                )
                                                 .await;
                                         }
                                     }
-                                    Ok(synapse_client::ChatEvent::ToolCallStart { index, id, name }) => {
+                                    Ok(synapse_client::ChatEvent::ToolCallStart {
+                                        index,
+                                        id,
+                                        name,
+                                    }) => {
                                         let idx = index as usize;
                                         while pending_tool_calls.len() <= idx {
-                                            pending_tool_calls.push(DaemonPendingToolCall::default());
+                                            pending_tool_calls
+                                                .push(DaemonPendingToolCall::default());
                                         }
                                         pending_tool_calls[idx].id = id;
                                         pending_tool_calls[idx].name = name;
                                     }
-                                    Ok(synapse_client::ChatEvent::ToolCallDelta { index, arguments }) => {
+                                    Ok(synapse_client::ChatEvent::ToolCallDelta {
+                                        index,
+                                        arguments,
+                                    }) => {
                                         let idx = index as usize;
                                         if idx < pending_tool_calls.len() {
                                             pending_tool_calls[idx].arguments.push_str(&arguments);
                                         }
                                     }
-                                    Ok(synapse_client::ChatEvent::Done { finish_reason: fr, .. }) => {
+                                    Ok(synapse_client::ChatEvent::Done {
+                                        finish_reason: fr,
+                                        ..
+                                    }) => {
                                         finish_reason = fr;
                                         break;
                                     }
@@ -1802,7 +1890,9 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                             }
 
                             // Handle tool calls from streaming
-                            if finish_reason.as_deref() == Some("tool_calls") && !pending_tool_calls.is_empty() {
+                            if finish_reason.as_deref() == Some("tool_calls")
+                                && !pending_tool_calls.is_empty()
+                            {
                                 let tool_calls: Vec<synapse_client::ToolCall> = pending_tool_calls
                                     .iter()
                                     .map(|tc| synapse_client::ToolCall {
@@ -1888,7 +1978,8 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                         Err(e) => {
                             tracing::error!(error = %e, "synapse stream error");
                             final_response =
-                                "Sorry, I encountered an error processing your message.".to_string();
+                                "Sorry, I encountered an error processing your message."
+                                    .to_string();
                             break;
                         }
                     }
@@ -1896,44 +1987,45 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                     // Non-streaming path: use chat_completion
                     match synapse.chat_completion(&request).await {
                         Ok(resp) => {
-                            let choice = match resp.choices.first() {
-                                Some(c) => c,
-                                None => break,
+                            let Some(choice) = resp.choices.first() else {
+                                break;
                             };
 
                             if let Some(ref text) = choice.message.content {
                                 final_response.push_str(text);
                             }
 
-                            if choice.finish_reason.as_deref() == Some("tool_calls") {
-                                if let Some(ref tool_calls) = choice.message.tool_calls {
-                                    let assistant_content = choice
-                                        .message
-                                        .content
-                                        .as_ref()
-                                        .map(|t| serde_json::Value::String(t.clone()))
-                                        .unwrap_or(serde_json::Value::Null);
-
-                                    llm_messages.push(synapse_client::Message {
-                                        role: "assistant".to_owned(),
-                                        content: assistant_content,
-                                        tool_calls: Some(tool_calls.clone()),
-                                        tool_call_id: None,
+                            if choice.finish_reason.as_deref() == Some("tool_calls")
+                                && let Some(ref tool_calls) = choice.message.tool_calls
+                            {
+                                let assistant_content = choice
+                                    .message
+                                    .content
+                                    .as_ref()
+                                    .map_or(serde_json::Value::Null, |t| {
+                                        serde_json::Value::String(t.clone())
                                     });
 
-                                    let mut should_break = false;
-                                    for tc in tool_calls {
-                                        let result = executor
-                                            .execute(&tc.function.name, &tc.function.arguments)
-                                            .await
-                                            .unwrap_or_else(|e| format!("Error: {e}"));
+                                llm_messages.push(synapse_client::Message {
+                                    role: "assistant".to_owned(),
+                                    content: assistant_content,
+                                    tool_calls: Some(tool_calls.clone()),
+                                    tool_call_id: None,
+                                });
 
-                                        let severity = loop_detector.record(
-                                            &tc.function.name,
-                                            &tc.function.arguments,
-                                            &result,
-                                        );
-                                        match severity {
+                                let mut should_break = false;
+                                for tc in tool_calls {
+                                    let result = executor
+                                        .execute(&tc.function.name, &tc.function.arguments)
+                                        .await
+                                        .unwrap_or_else(|e| format!("Error: {e}"));
+
+                                    let severity = loop_detector.record(
+                                        &tc.function.name,
+                                        &tc.function.arguments,
+                                        &result,
+                                    );
+                                    match severity {
                                             crate::tools::loop_detection::LoopSeverity::CircuitBreaker => {
                                                 tracing::warn!(
                                                     tool = %tc.function.name,
@@ -1968,22 +2060,21 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                             }
                                         }
 
-                                        let tool_success = !result.starts_with("Error: ");
-                                        crate::events::publish(
-                                            crate::events::build_tool_executed_event(
-                                                &session.id,
-                                                &tc.function.name,
-                                                tool_success,
-                                                &msg.sender_id,
-                                            ),
-                                        );
-                                    }
-
-                                    if should_break {
-                                        break;
-                                    }
-                                    continue;
+                                    let tool_success = !result.starts_with("Error: ");
+                                    crate::events::publish(
+                                        crate::events::build_tool_executed_event(
+                                            &session.id,
+                                            &tc.function.name,
+                                            tool_success,
+                                            &msg.sender_id,
+                                        ),
+                                    );
                                 }
+
+                                if should_break {
+                                    break;
+                                }
+                                continue;
                             }
 
                             break;
@@ -2050,7 +2141,10 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 .as_ref()
                 .filter(|_| channel_name == "telegram")
                 .map_or("\u{2705}", |c| c.done_reaction.as_str());
-            if let Err(e) = channel.add_reaction(&msg.channel_id, &msg.id, done_emoji).await {
+            if let Err(e) = channel
+                .add_reaction(&msg.channel_id, &msg.id, done_emoji)
+                .await
+            {
                 tracing::debug!(error = %e, "done reaction failed");
             }
         }
@@ -2106,7 +2200,8 @@ async fn handle_voice_command(
 
     // Fetch available tools from Synapse MCP and plugins
     let tools = {
-        let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
+        let executor =
+            crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
         executor.list_tools().await.ok()
     };
 
@@ -2115,7 +2210,8 @@ async fn handle_voice_command(
         synapse_client::Message::user(&prompt),
     ];
     let mut final_text = String::new();
-    let executor = crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
+    let executor =
+        crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
 
     for _turn in 0..10 {
         let request = synapse_client::ChatRequest {
@@ -2135,9 +2231,8 @@ async fn handle_voice_command(
             .await
             .map_err(|e| Error::Agent(e.to_string()))?;
 
-        let choice = match response.choices.first() {
-            Some(c) => c,
-            None => break,
+        let Some(choice) = response.choices.first() else {
+            break;
         };
 
         // Overwrite each turn so we speak only the final answer
@@ -2145,40 +2240,49 @@ async fn handle_voice_command(
             final_text = text.clone();
         }
 
-        if choice.finish_reason.as_deref() == Some("tool_calls") {
-            if let Some(ref tool_calls) = choice.message.tool_calls {
-                let assistant_content = choice
-                    .message
-                    .content
-                    .as_ref()
-                    .map(|t| serde_json::Value::String(t.clone()))
-                    .unwrap_or(serde_json::Value::Null);
-
-                messages.push(synapse_client::Message {
-                    role: "assistant".to_owned(),
-                    content: assistant_content,
-                    tool_calls: Some(tool_calls.clone()),
-                    tool_call_id: None,
+        if choice.finish_reason.as_deref() == Some("tool_calls")
+            && let Some(ref tool_calls) = choice.message.tool_calls
+        {
+            let assistant_content = choice
+                .message
+                .content
+                .as_ref()
+                .map_or(serde_json::Value::Null, |t| {
+                    serde_json::Value::String(t.clone())
                 });
 
-                for tc in tool_calls {
-                    let result = executor
-                        .execute(&tc.function.name, &tc.function.arguments)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"));
+            messages.push(synapse_client::Message {
+                role: "assistant".to_owned(),
+                content: assistant_content,
+                tool_calls: Some(tool_calls.clone()),
+                tool_call_id: None,
+            });
 
-                    messages.push(synapse_client::Message::tool(&tc.id, &result));
-                }
+            for tc in tool_calls {
+                let result = executor
+                    .execute(&tc.function.name, &tc.function.arguments)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
 
-                continue;
+                messages.push(synapse_client::Message::tool(&tc.id, &result));
             }
+
+            continue;
         }
 
         break;
     }
 
     tracing::debug!(response_len = final_text.len(), "synapse responded");
-    speak(playback, synapse, tts_model, tts_voice, tts_speed, &final_text).await
+    speak(
+        playback,
+        synapse,
+        tts_model,
+        tts_voice,
+        tts_speed,
+        &final_text,
+    )
+    .await
 }
 
 /// Speak via Synapse TTS

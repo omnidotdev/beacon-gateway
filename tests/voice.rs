@@ -2,7 +2,7 @@
 //!
 //! Tests voice components without requiring audio hardware
 
-use beacon_gateway::voice::{DetectorState, WakeWordDetector, SAMPLE_RATE, samples_to_wav};
+use beacon_gateway::voice::{DetectorState, SAMPLE_RATE, WakeWordDetector, samples_to_wav};
 use std::io::Cursor;
 
 mod common;
@@ -48,11 +48,8 @@ fn test_wake_word_detector_multiple_words() {
 
 #[test]
 fn test_wake_word_normalization() {
-    let detector = WakeWordDetector::new(vec![
-        "  Hey ORIN  ".to_string(),
-        "HELLO".to_string(),
-    ])
-    .unwrap();
+    let detector =
+        WakeWordDetector::new(vec!["  Hey ORIN  ".to_string(), "HELLO".to_string()]).unwrap();
 
     // Should be normalized to lowercase and trimmed
     assert_eq!(detector.wake_words(), &["hey orin", "hello"]);

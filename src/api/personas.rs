@@ -3,17 +3,17 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use super::ApiState;
+use crate::Persona;
 use crate::db::PersonaRepo;
 use crate::skills::ManifoldClient;
-use crate::Persona;
 
 /// Build personas router
 pub fn router(state: Arc<ApiState>) -> Router {
@@ -143,7 +143,10 @@ async fn search(
         .map(|p| {
             let mut resp = PersonaResponse::from(p);
             resp.source = PersonaSource::Manifold {
-                namespace: query.namespace.clone().unwrap_or_else(|| "community".to_string()),
+                namespace: query
+                    .namespace
+                    .clone()
+                    .unwrap_or_else(|| "community".to_string()),
             };
             resp
         })
@@ -216,15 +219,17 @@ async fn install(
 
     // Store in database
     let persona_repo = PersonaRepo::new(state.db.clone());
-    let installed = persona_repo.install(&persona, &req.namespace).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                code: "database_error".to_string(),
-                message: e.to_string(),
-            }),
-        )
-    })?;
+    let installed = persona_repo
+        .install(&persona, &req.namespace)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    code: "database_error".to_string(),
+                    message: e.to_string(),
+                }),
+            )
+        })?;
 
     let mut resp = PersonaResponse::from(&installed.persona);
     resp.source = PersonaSource::Manifold {

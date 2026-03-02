@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentRunConfig, run_agent_turn};
@@ -63,7 +63,9 @@ impl std::str::FromStr for DeliveryChannel {
             "discord" => Ok(Self::Discord),
             "slack" => Ok(Self::Slack),
             "ws_push" => Ok(Self::WsPush),
-            other => Err(crate::Error::Config(format!("unknown delivery channel: {other}"))),
+            other => Err(crate::Error::Config(format!(
+                "unknown delivery channel: {other}"
+            ))),
         }
     }
 }
@@ -91,7 +93,13 @@ pub async fn handle_vortex_callback(
     };
 
     match result {
-        Ok(()) => (StatusCode::OK, Json(VortexResponse { ok: true, error: None })),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(VortexResponse {
+                ok: true,
+                error: None,
+            }),
+        ),
         Err(e) => {
             tracing::error!(error = %e, "Vortex callback handler failed");
             (
@@ -125,10 +133,7 @@ async fn handle_remind(state: &ApiState, callback: &VortexCallback) -> crate::Re
         .and_then(|v| v.as_str())
         .unwrap_or("telegram");
 
-    let channel_id = callback
-        .payload
-        .get("channel_id")
-        .and_then(|v| v.as_str());
+    let channel_id = callback.payload.get("channel_id").and_then(|v| v.as_str());
 
     tracing::info!(
         user_id = %user_id,
@@ -160,6 +165,7 @@ async fn handle_remind(state: &ApiState, callback: &VortexCallback) -> crate::Re
 }
 
 /// Handle `check_in` action
+#[allow(clippy::too_many_lines)]
 async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::Result<()> {
     let user_id = callback
         .payload
@@ -173,10 +179,7 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
         .and_then(|v| v.as_str())
         .unwrap_or("telegram");
 
-    let channel_id = callback
-        .payload
-        .get("channel_id")
-        .and_then(|v| v.as_str());
+    let channel_id = callback.payload.get("channel_id").and_then(|v| v.as_str());
 
     let prompt = callback
         .payload
@@ -246,9 +249,10 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
                     .and_then(|c| c.message.content.clone())
                     .unwrap_or_default();
                 // Store assistant response
-                if let Err(e) = state
-                    .session_repo
-                    .add_message(&session.id, MessageRole::Assistant, &response)
+                if let Err(e) =
+                    state
+                        .session_repo
+                        .add_message(&session.id, MessageRole::Assistant, &response)
                 {
                     tracing::warn!(error = %e, "failed to store check-in message");
                 }
@@ -275,7 +279,9 @@ async fn handle_check_in(state: &ApiState, callback: &VortexCallback) -> crate::
                 .parse::<i64>()
                 .map_err(|e| crate::Error::Config(format!("invalid Telegram chat_id: {e}")))?;
 
-            telegram.send_message(chat_id, &check_in_message, None).await?;
+            telegram
+                .send_message(chat_id, &check_in_message, None)
+                .await?;
         }
         _ => {
             tracing::warn!(channel = %channel, "unsupported channel for check_in");
@@ -312,10 +318,8 @@ async fn handle_agent_run(state: &ApiState, callback: &VortexCallback) -> crate:
     )?;
 
     // Build context with memory
-    let context_config = crate::api::ApiServer::context_config(
-        persona_id,
-        state.persona_system_prompt.clone(),
-    );
+    let context_config =
+        crate::api::ApiServer::context_config(persona_id, state.persona_system_prompt.clone());
     let context_builder = ContextBuilder::new(context_config);
     let built_context = context_builder.build_with_memory(
         &session.id,
@@ -326,9 +330,10 @@ async fn handle_agent_run(state: &ApiState, callback: &VortexCallback) -> crate:
         Some((&state.memory_repo, &payload.prompt)),
     );
 
-    let augmented_prompt = built_context
-        .as_ref()
-        .map_or_else(|_| payload.prompt.clone(), |ctx| ctx.format_prompt(&payload.prompt));
+    let augmented_prompt = built_context.as_ref().map_or_else(
+        |_| payload.prompt.clone(),
+        |ctx| ctx.format_prompt(&payload.prompt),
+    );
 
     let max_iterations = payload.max_iterations.unwrap_or(10);
 
@@ -423,10 +428,22 @@ mod tests {
 
     #[test]
     fn delivery_channel_parsed_from_string() {
-        assert_eq!("telegram".parse::<DeliveryChannel>().unwrap(), DeliveryChannel::Telegram);
-        assert_eq!("discord".parse::<DeliveryChannel>().unwrap(), DeliveryChannel::Discord);
-        assert_eq!("slack".parse::<DeliveryChannel>().unwrap(), DeliveryChannel::Slack);
-        assert_eq!("ws_push".parse::<DeliveryChannel>().unwrap(), DeliveryChannel::WsPush);
+        assert_eq!(
+            "telegram".parse::<DeliveryChannel>().unwrap(),
+            DeliveryChannel::Telegram
+        );
+        assert_eq!(
+            "discord".parse::<DeliveryChannel>().unwrap(),
+            DeliveryChannel::Discord
+        );
+        assert_eq!(
+            "slack".parse::<DeliveryChannel>().unwrap(),
+            DeliveryChannel::Slack
+        );
+        assert_eq!(
+            "ws_push".parse::<DeliveryChannel>().unwrap(),
+            DeliveryChannel::WsPush
+        );
         assert!("unknown".parse::<DeliveryChannel>().is_err());
     }
 }

@@ -1,4 +1,4 @@
-//! OpenAI Vision provider for image understanding
+//! `OpenAI` Vision provider for image understanding
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::media::{MediaAnalysis, MediaConfig, MediaProvider};
 use crate::{Error, Result};
 
-/// OpenAI Vision provider
+/// `OpenAI` Vision provider
 pub struct OpenAIVisionProvider {
     client: Client,
     api_key: String,
@@ -18,7 +18,7 @@ pub struct OpenAIVisionProvider {
 }
 
 impl OpenAIVisionProvider {
-    /// Create a new OpenAI vision provider
+    /// Create a new `OpenAI` vision provider
     #[must_use]
     pub fn new(api_key: String, config: &MediaConfig) -> Self {
         Self {

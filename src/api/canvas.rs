@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::Message, State, WebSocketUpgrade},
+    Router,
+    extract::{State, WebSocketUpgrade, ws::Message},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -45,16 +45,11 @@ pub enum CanvasWsOutgoing {
 
 /// Build canvas WebSocket router
 pub fn router(canvas: SharedCanvas) -> Router {
-    Router::new()
-        .route("/", get(ws_upgrade))
-        .with_state(canvas)
+    Router::new().route("/", get(ws_upgrade)).with_state(canvas)
 }
 
 /// Handle WebSocket upgrade request
-async fn ws_upgrade(
-    State(canvas): State<SharedCanvas>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+async fn ws_upgrade(State(canvas): State<SharedCanvas>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, canvas))
 }
 
@@ -64,10 +59,10 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, canvas: SharedCanva
 
     // Send connected message
     let connected = CanvasWsOutgoing::Connected;
-    if let Ok(msg) = serde_json::to_string(&connected) {
-        if sender.send(Message::Text(msg.into())).await.is_err() {
-            return;
-        }
+    if let Ok(msg) = serde_json::to_string(&connected)
+        && sender.send(Message::Text(msg.into())).await.is_err()
+    {
+        return;
     }
 
     tracing::info!("Canvas WebSocket connected");
@@ -82,10 +77,10 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, canvas: SharedCanva
     let mut broadcast_task = tokio::spawn(async move {
         while let Ok(cmd) = rx.recv().await {
             let msg = CanvasWsOutgoing::Command(cmd);
-            if let Ok(text) = serde_json::to_string(&msg) {
-                if sender.send(Message::Text(text.into())).await.is_err() {
-                    break;
-                }
+            if let Ok(text) = serde_json::to_string(&msg)
+                && sender.send(Message::Text(text.into())).await.is_err()
+            {
+                break;
             }
         }
     });
@@ -142,11 +137,11 @@ async fn handle_message(text: &str, canvas: &SharedCanvas) -> crate::Result<()> 
 /// Canvas API for programmatic access (non-WebSocket)
 pub mod api {
     use axum::{
+        Json, Router,
         extract::State,
         http::StatusCode,
         response::IntoResponse,
         routing::{get, post},
-        Json, Router,
     };
 
     use super::SharedCanvas;

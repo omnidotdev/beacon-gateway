@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -41,11 +41,10 @@ pub fn router(manager: SharedPluginManager) -> Router {
 }
 
 /// List all installed plugins
-async fn list_plugins(
-    State(manager): State<SharedPluginManager>,
-) -> Json<Vec<PluginResponse>> {
-    let mgr = manager.lock().await;
-    let plugins: Vec<PluginResponse> = mgr
+async fn list_plugins(State(manager): State<SharedPluginManager>) -> Json<Vec<PluginResponse>> {
+    let plugins: Vec<PluginResponse> = manager
+        .lock()
+        .await
         .list()
         .iter()
         .map(|p| PluginResponse {

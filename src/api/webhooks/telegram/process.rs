@@ -35,9 +35,7 @@ fn telegram_to_incoming(message: &TelegramMessage, content: &str) -> IncomingMes
         is_dm,
         reply_to: None,
         attachments: vec![],
-        thread_id: message
-            .message_thread_id
-            .map(|id| id.to_string()),
+        thread_id: message.message_thread_id.map(|id| id.to_string()),
         callback_data: None,
     }
 }
@@ -56,7 +54,7 @@ struct PendingToolCall {
 /// When `account_id` is `Some`, uses the per-account channel from the registry
 /// and scopes session keys by account.
 #[allow(clippy::too_many_lines)]
-pub(crate) async fn process_telegram_message(
+pub async fn process_telegram_message(
     state: Arc<ApiState>,
     message: TelegramMessage,
     text: String,
@@ -98,24 +96,24 @@ pub(crate) async fn process_telegram_message(
     let mut msg = telegram_to_incoming(&message, &content);
 
     // Download media files and build attachments
-    if !media_refs.is_empty() {
-        if let Some(telegram) = &state.telegram {
-            for media_ref in &media_refs {
-                match telegram.download_file(&media_ref.file_id).await {
-                    Ok((data, _file_path)) => {
-                        msg.attachments.push(Attachment::from_data(
-                            data,
-                            media_ref.mime_type.clone(),
-                            media_ref.filename.clone(),
-                        ));
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            file_id = %media_ref.file_id,
-                            error = %e,
-                            "failed to download Telegram media, keeping text annotation"
-                        );
-                    }
+    if !media_refs.is_empty()
+        && let Some(telegram) = &state.telegram
+    {
+        for media_ref in &media_refs {
+            match telegram.download_file(&media_ref.file_id).await {
+                Ok((data, _file_path)) => {
+                    msg.attachments.push(Attachment::from_data(
+                        data,
+                        media_ref.mime_type.clone(),
+                        media_ref.filename.clone(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        file_id = %media_ref.file_id,
+                        error = %e,
+                        "failed to download Telegram media, keeping text annotation"
+                    );
                 }
             }
         }
@@ -134,15 +132,16 @@ pub(crate) async fn process_telegram_message(
     };
 
     // Resolve the Telegram channel — per-account from registry or default
-    let telegram = if let Some(ref aid) = account_id {
-        state
-            .telegram_registry
-            .as_ref()
-            .and_then(|r| r.get(aid))
-            .map(|a| &a.channel)
-    } else {
-        state.telegram.as_ref()
-    };
+    let telegram = account_id.as_ref().map_or_else(
+        || state.telegram.as_ref(),
+        |aid| {
+            state
+                .telegram_registry
+                .as_ref()
+                .and_then(|r| r.get(aid))
+                .map(|a| &a.channel)
+        },
+    );
 
     let Some(telegram) = telegram else {
         tracing::warn!("no Telegram client configured");
@@ -167,7 +166,10 @@ pub(crate) async fn process_telegram_message(
                     // Check for pairing code verification
                     let trimmed = msg.content.trim().to_uppercase();
                     if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
-                        if let Ok(true) = pm.verify_pairing(&msg.sender_id, "telegram", &trimmed) {
+                        if matches!(
+                            pm.verify_pairing(&msg.sender_id, "telegram", &trimmed),
+                            Ok(true)
+                        ) {
                             let _ = telegram
                                 .send_message(
                                     message.chat.id,
@@ -244,7 +246,10 @@ pub(crate) async fn process_telegram_message(
         }
         Ok(_) => {}
         Err(e) => {
-            tracing::warn!("failed to check message count for session {}: {e}", session.id);
+            tracing::warn!(
+                "failed to check message count for session {}: {e}",
+                session.id
+            );
         }
     }
 
@@ -262,23 +267,20 @@ pub(crate) async fn process_telegram_message(
     }
 
     // Run session compaction if needed (non-fatal on failure)
-    if let Some(ref compactor) = state.session_compactor {
-        if let Ok(count) = state.session_repo.message_count(&session.id) {
-            if compactor.needs_compaction(count) {
-                if let Err(e) = compactor
-                    .compact(
-                        &session.id,
-                        &state.session_repo,
-                        &state.memory_repo,
-                        state.indexer.as_deref(),
-                        &user.id,
-                    )
-                    .await
-                {
-                    tracing::warn!(error = %e, "session compaction failed, proceeding normally");
-                }
-            }
-        }
+    if let Some(ref compactor) = state.session_compactor
+        && let Ok(count) = state.session_repo.message_count(&session.id)
+        && compactor.needs_compaction(count)
+        && let Err(e) = compactor
+            .compact(
+                &session.id,
+                &state.session_repo,
+                &state.memory_repo,
+                state.indexer.as_deref(),
+                &user.id,
+            )
+            .await
+    {
+        tracing::warn!(error = %e, "session compaction failed, proceeding normally");
     }
 
     // Build context with thread support
@@ -324,11 +326,16 @@ pub(crate) async fn process_telegram_message(
     );
 
     // Load per-group config for reaction overrides
-    let group_config = if message.chat.chat_type == "group" || message.chat.chat_type == "supergroup" {
-        state.telegram_group_repo.get(&msg.channel_id).ok().flatten()
-    } else {
-        None
-    };
+    let group_config =
+        if message.chat.chat_type == "group" || message.chat.chat_type == "supergroup" {
+            state
+                .telegram_group_repo
+                .get(&msg.channel_id)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
 
     // Resolve per-account config for reaction overrides
     let account_config = account_id.as_ref().and_then(|aid| {
@@ -350,17 +357,24 @@ pub(crate) async fn process_telegram_message(
     let global_ack = account_config
         .as_ref()
         .map(|c| c.ack_reaction.as_str())
-        .or_else(|| state.telegram_config.as_ref().map(|c| c.ack_reaction.as_str()))
+        .or_else(|| {
+            state
+                .telegram_config
+                .as_ref()
+                .map(|c| c.ack_reaction.as_str())
+        })
         .unwrap_or("\u{1F440}");
     let ack_emoji = group_config
         .as_ref()
         .and_then(|gc| gc.ack_reaction.as_deref())
         .unwrap_or(global_ack);
 
-    if reaction_level != crate::config::ReactionLevel::Off {
-        if let Err(e) = telegram.add_reaction(&msg.channel_id, &msg.id, ack_emoji).await {
-            tracing::debug!(error = %e, "ack reaction failed");
-        }
+    if reaction_level != crate::config::ReactionLevel::Off
+        && let Err(e) = telegram
+            .add_reaction(&msg.channel_id, &msg.id, ack_emoji)
+            .await
+    {
+        tracing::debug!(error = %e, "ack reaction failed");
     }
 
     // Process attachments to augment message content
@@ -381,17 +395,17 @@ pub(crate) async fn process_telegram_message(
     };
 
     // Inject knowledge based on user message
-    if let Ok(ref mut ctx) = built_context {
-        if !state.persona_knowledge.is_empty() {
-            let max_knowledge_tokens = state.max_context_tokens / 4;
-            let selected = crate::knowledge::select_knowledge(
-                &state.persona_knowledge,
-                &content_with_attachments,
-                max_knowledge_tokens,
-            );
-            if !selected.is_empty() {
-                ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
-            }
+    if let Ok(ref mut ctx) = built_context
+        && !state.persona_knowledge.is_empty()
+    {
+        let max_knowledge_tokens = state.max_context_tokens / 4;
+        let selected = crate::knowledge::select_knowledge(
+            &state.persona_knowledge,
+            &content_with_attachments,
+            max_knowledge_tokens,
+        );
+        if !selected.is_empty() {
+            ctx.knowledge_context = crate::knowledge::format_knowledge(&selected);
         }
     }
 
@@ -407,12 +421,13 @@ pub(crate) async fn process_telegram_message(
     // Hook: message:before_agent
     let mut skip_agent = false;
     if let Some(ref hm) = state.hook_manager {
-        let hook_event = HookEvent::new(HookAction::BeforeAgent, "telegram", &msg)
-            .with_session(&session.id);
+        let hook_event =
+            HookEvent::new(HookAction::BeforeAgent, "telegram", &msg).with_session(&session.id);
         let hook_result = hm.trigger(&hook_event).await;
 
-        if hook_result.skip_agent && hook_result.reply.is_some() {
-            let reply = hook_result.reply.unwrap();
+        if hook_result.skip_agent
+            && let Some(reply) = hook_result.reply
+        {
             let _ = telegram
                 .send_message(message.chat.id, &reply, Some(message.message_id))
                 .await;
@@ -501,11 +516,7 @@ pub(crate) async fn process_telegram_message(
                                 // Stream update to Telegram (rate limiter handles throttling)
                                 if let Some(ref mid) = streaming_msg_id {
                                     let _ = telegram
-                                        .send_streaming_update(
-                                            &msg.channel_id,
-                                            mid,
-                                            &turn_text,
-                                        )
+                                        .send_streaming_update(&msg.channel_id, mid, &turn_text)
                                         .await;
                                 }
                             }
@@ -523,7 +534,9 @@ pub(crate) async fn process_telegram_message(
                                     pending_tool_calls[idx].arguments.push_str(&arguments);
                                 }
                             }
-                            Ok(synapse_client::ChatEvent::Done { finish_reason: fr, .. }) => {
+                            Ok(synapse_client::ChatEvent::Done {
+                                finish_reason: fr, ..
+                            }) => {
                                 finish_reason = fr;
                                 break;
                             }
@@ -543,7 +556,9 @@ pub(crate) async fn process_telegram_message(
                     }
 
                     // Handle tool calls
-                    if finish_reason.as_deref() == Some("tool_calls") && !pending_tool_calls.is_empty() {
+                    if finish_reason.as_deref() == Some("tool_calls")
+                        && !pending_tool_calls.is_empty()
+                    {
                         let tool_calls: Vec<synapse_client::ToolCall> = pending_tool_calls
                             .iter()
                             .map(|tc| synapse_client::ToolCall {
@@ -608,14 +623,12 @@ pub(crate) async fn process_telegram_message(
                             }
 
                             let tool_success = !result.starts_with("Error: ");
-                            crate::events::publish(
-                                crate::events::build_tool_executed_event(
-                                    &session.id,
-                                    &tc.function.name,
-                                    tool_success,
-                                    &msg.sender_id,
-                                ),
-                            );
+                            crate::events::publish(crate::events::build_tool_executed_event(
+                                &session.id,
+                                &tc.function.name,
+                                tool_success,
+                                &msg.sender_id,
+                            ));
                         }
 
                         if should_break {
@@ -667,13 +680,12 @@ pub(crate) async fn process_telegram_message(
     }
 
     // Send response via Telegram (only if streaming didn't already deliver it)
-    if streaming_msg_id.is_none() {
-        if let Err(e) = telegram
+    if streaming_msg_id.is_none()
+        && let Err(e) = telegram
             .send_message(message.chat.id, &response, Some(message.message_id))
             .await
-        {
-            tracing::error!(error = %e, "failed to send Telegram response");
-        }
+    {
+        tracing::error!(error = %e, "failed to send Telegram response");
     }
 
     // Mark complete with reaction (per-group > per-account > global config)
@@ -681,7 +693,12 @@ pub(crate) async fn process_telegram_message(
         let global_done = account_config
             .as_ref()
             .map(|c| c.done_reaction.as_str())
-            .or_else(|| state.telegram_config.as_ref().map(|c| c.done_reaction.as_str()))
+            .or_else(|| {
+                state
+                    .telegram_config
+                    .as_ref()
+                    .map(|c| c.done_reaction.as_str())
+            })
             .unwrap_or("\u{2705}");
         let done_emoji = group_config
             .as_ref()

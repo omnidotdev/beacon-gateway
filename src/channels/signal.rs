@@ -67,6 +67,11 @@ impl SignalChannel {
     ///
     /// Polls every `interval` and forwards received messages into the `mpsc` channel.
     /// The returned `JoinHandle` can be used to cancel polling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `message_tx` is `None` (channel was not created with `with_receiver`)
+    #[must_use]
     pub fn start_polling(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
         let api_url = self.api_url.clone();
         let sender_number = self.sender_number.clone();
@@ -151,10 +156,10 @@ impl SignalChannel {
                         let filename = att.filename.clone();
 
                         // Decode base64 data if present
-                        if let Some(b64) = &att.data {
-                            if let Ok(data) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                                return Attachment::from_data(data, mime_type, filename);
-                            }
+                        if let Some(b64) = &att.data
+                            && let Ok(data) = base64::engine::general_purpose::STANDARD.decode(b64)
+                        {
+                            return Attachment::from_data(data, mime_type, filename);
                         }
 
                         // No data available, include metadata only
@@ -184,9 +189,9 @@ impl SignalChannel {
         };
 
         if let Some(tx) = &self.message_tx {
-            tx.send(incoming).await.map_err(|e| {
-                Error::Channel(format!("Failed to forward message: {e}"))
-            })?;
+            tx.send(incoming)
+                .await
+                .map_err(|e| Error::Channel(format!("Failed to forward message: {e}")))?;
         }
 
         Ok(())
@@ -278,9 +283,7 @@ impl Channel for SignalChannel {
             return Err(Error::Channel("Signal API URL required".to_string()));
         }
         if self.sender_number.is_empty() {
-            return Err(Error::Channel(
-                "Signal sender number required".to_string(),
-            ));
+            return Err(Error::Channel("Signal sender number required".to_string()));
         }
 
         // Verify API is reachable
@@ -288,9 +291,7 @@ impl Channel for SignalChannel {
         let response = self.client.get(&url).send().await;
 
         if let Err(e) = response {
-            return Err(Error::Channel(format!(
-                "Signal API not reachable: {e}"
-            )));
+            return Err(Error::Channel(format!("Signal API not reachable: {e}")));
         }
 
         self.connected = true;
@@ -320,6 +321,7 @@ pub struct SignalReceiveItem {
     /// The message envelope
     pub envelope: SignalEnvelope,
     /// Account that received the message
+    #[allow(dead_code)]
     pub account: Option<String>,
 }
 
@@ -334,6 +336,7 @@ pub struct SignalEnvelope {
     /// Source UUID
     pub source_uuid: Option<String>,
     /// Source display name
+    #[allow(dead_code)]
     pub source_name: Option<String>,
     /// Envelope timestamp
     pub timestamp: Option<i64>,

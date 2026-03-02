@@ -18,6 +18,8 @@
 /// HTML special characters (`<`, `>`, `&`) are escaped in non-tag content.
 #[must_use]
 pub fn markdown_to_telegram_html(input: &str) -> String {
+    use std::fmt::Write;
+
     let mut output = String::with_capacity(input.len());
     let lines: Vec<&str> = input.lines().collect();
     let mut i = 0;
@@ -41,11 +43,12 @@ pub fn markdown_to_telegram_html(input: &str) -> String {
 
             let code_content = escape_html(&code_lines.join("\n"));
             if lang.is_empty() {
-                output.push_str(&format!("<pre><code>{code_content}</code></pre>"));
+                let _ = write!(output, "<pre><code>{code_content}</code></pre>");
             } else {
-                output.push_str(&format!(
+                let _ = write!(
+                    output,
                     "<pre><code class=\"language-{lang}\">{code_content}</code></pre>"
-                ));
+                );
             }
             output.push('\n');
             continue;
@@ -54,7 +57,7 @@ pub fn markdown_to_telegram_html(input: &str) -> String {
         // Blockquote
         if let Some(rest) = line.strip_prefix("> ") {
             let quoted = convert_inline(&escape_html(rest));
-            output.push_str(&format!("<blockquote>{quoted}</blockquote>"));
+            let _ = write!(output, "<blockquote>{quoted}</blockquote>");
             output.push('\n');
             i += 1;
             continue;
@@ -97,8 +100,10 @@ fn convert_inline(text: &str) -> String {
 
 /// Convert `` `code` `` to `<code>code</code>`
 fn convert_inline_code(text: &str) -> String {
+    use std::fmt::Write;
+
     let mut result = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    let mut chars = text.chars();
 
     while let Some(ch) = chars.next() {
         if ch == '`' {
@@ -112,7 +117,7 @@ fn convert_inline_code(text: &str) -> String {
                 code.push(next);
             }
             if found_close {
-                result.push_str(&format!("<code>{code}</code>"));
+                let _ = write!(result, "<code>{code}</code>");
             } else {
                 // Unmatched backtick, output as-is
                 result.push('`');
@@ -172,6 +177,8 @@ fn convert_strikethrough(text: &str) -> String {
 
 /// Convert `[text](url)` to `<a href="url">text</a>`
 fn convert_links(text: &str) -> String {
+    use std::fmt::Write;
+
     let mut result = String::with_capacity(text.len());
     let mut remaining = text;
 
@@ -185,7 +192,7 @@ fn convert_links(text: &str) -> String {
 
             if let Some(paren_end) = after_paren.find(')') {
                 let url = &after_paren[..paren_end];
-                result.push_str(&format!("<a href=\"{url}\">{link_text}</a>"));
+                let _ = write!(result, "<a href=\"{url}\">{link_text}</a>");
                 remaining = &after_paren[paren_end + 1..];
                 continue;
             }
@@ -235,7 +242,12 @@ fn convert_delimited(text: &str, delimiter: &str, open_tag: &str, close_tag: &st
 }
 
 /// Single-char delimiter converter (for `*italic*`)
-fn convert_single_delimited(text: &str, delimiter: char, open_tag: &str, close_tag: &str) -> String {
+fn convert_single_delimited(
+    text: &str,
+    delimiter: char,
+    open_tag: &str,
+    close_tag: &str,
+) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut open = false;
@@ -243,17 +255,15 @@ fn convert_single_delimited(text: &str, delimiter: char, open_tag: &str, close_t
     while let Some(ch) = chars.next() {
         if ch == delimiter {
             // Don't treat * as italic if preceded/followed by space (list markers, etc.)
-            if !open {
-                // Check if next char is a non-space (opening delimiter)
-                if chars.peek().is_some_and(|c| !c.is_whitespace()) {
-                    result.push_str(open_tag);
-                    open = true;
-                } else {
-                    result.push(ch);
-                }
-            } else {
+            if open {
                 result.push_str(close_tag);
                 open = false;
+            } else if chars.peek().is_some_and(|c| !c.is_whitespace()) {
+                // Check if next char is a non-space (opening delimiter)
+                result.push_str(open_tag);
+                open = true;
+            } else {
+                result.push(ch);
             }
         } else {
             result.push(ch);
@@ -261,14 +271,12 @@ fn convert_single_delimited(text: &str, delimiter: char, open_tag: &str, close_t
     }
 
     // If unmatched, put the delimiter back
-    if open {
-        if let Some(last_open) = result.rfind(open_tag) {
-            let mut fixed = String::with_capacity(result.len());
-            fixed.push_str(&result[..last_open]);
-            fixed.push(delimiter);
-            fixed.push_str(&result[last_open + open_tag.len()..]);
-            return fixed;
-        }
+    if open && let Some(last_open) = result.rfind(open_tag) {
+        let mut fixed = String::with_capacity(result.len());
+        fixed.push_str(&result[..last_open]);
+        fixed.push(delimiter);
+        fixed.push_str(&result[last_open + open_tag.len()..]);
+        return fixed;
     }
 
     result
@@ -280,18 +288,9 @@ mod tests {
 
     #[test]
     fn html_bold_italic_code() {
-        assert_eq!(
-            markdown_to_telegram_html("**bold**"),
-            "<b>bold</b>"
-        );
-        assert_eq!(
-            markdown_to_telegram_html("*italic*"),
-            "<i>italic</i>"
-        );
-        assert_eq!(
-            markdown_to_telegram_html("`code`"),
-            "<code>code</code>"
-        );
+        assert_eq!(markdown_to_telegram_html("**bold**"), "<b>bold</b>");
+        assert_eq!(markdown_to_telegram_html("*italic*"), "<i>italic</i>");
+        assert_eq!(markdown_to_telegram_html("`code`"), "<code>code</code>");
     }
 
     #[test]
@@ -335,18 +334,12 @@ mod tests {
 
     #[test]
     fn html_passthrough_plain_text() {
-        assert_eq!(
-            markdown_to_telegram_html("Hello, world!"),
-            "Hello, world!"
-        );
+        assert_eq!(markdown_to_telegram_html("Hello, world!"), "Hello, world!");
     }
 
     #[test]
     fn html_strikethrough() {
-        assert_eq!(
-            markdown_to_telegram_html("~~struck~~"),
-            "<s>struck</s>"
-        );
+        assert_eq!(markdown_to_telegram_html("~~struck~~"), "<s>struck</s>");
     }
 
     #[test]
@@ -368,10 +361,7 @@ mod tests {
     #[test]
     fn html_inline_code_not_formatted() {
         // Inside inline code, * should not become italic
-        assert_eq!(
-            markdown_to_telegram_html("`a * b`"),
-            "<code>a * b</code>"
-        );
+        assert_eq!(markdown_to_telegram_html("`a * b`"), "<code>a * b</code>");
     }
 
     #[test]

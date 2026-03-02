@@ -113,8 +113,8 @@ impl SkillFilter {
     /// Check whether a skill name passes this filter
     #[must_use]
     pub fn allows(&self, name: &str) -> bool {
-        let included = self.include.is_empty()
-            || self.include.iter().any(|p| pattern_matches(p, name));
+        let included =
+            self.include.is_empty() || self.include.iter().any(|p| pattern_matches(p, name));
         let excluded = self.exclude.iter().any(|p| pattern_matches(p, name));
         included && !excluded
     }
@@ -183,7 +183,7 @@ pub struct SkillMetadata {
     /// Env vars that must be set for this skill to be eligible
     #[serde(default)]
     pub requires_env: Vec<String>,
-    /// OS restrictions (e.g. ["linux", "darwin"]). Empty = all platforms
+    /// OS restrictions (e.g. `["linux", "darwin"]`). Empty = all platforms
     #[serde(default)]
     pub os: Vec<String>,
     /// All listed binaries must be on PATH for eligibility
@@ -192,7 +192,7 @@ pub struct SkillMetadata {
     /// At least one listed binary must be on PATH for eligibility
     #[serde(default)]
     pub requires_any_bins: Vec<String>,
-    /// Primary env var name for API key injection (e.g. "GITHUB_TOKEN")
+    /// Primary env var name for API key injection (e.g. `GITHUB_TOKEN`)
     #[serde(default)]
     pub primary_env: Option<String>,
     /// Tool dispatch: "tool" to dispatch slash command to a tool
@@ -283,7 +283,7 @@ pub struct InstalledSkill {
     pub user_id: Option<String>,
     /// Slash command dispatches to this tool instead of injecting into prompt
     pub command_dispatch_tool: Option<String>,
-    /// API key value for primary_env injection
+    /// API key value for `primary_env` injection
     pub api_key: Option<String>,
     /// Custom env var overrides for this skill
     #[serde(default)]
@@ -296,9 +296,8 @@ pub struct InstalledSkill {
 /// for nested runtime fields and fills in any Beacon fields still at defaults.
 /// Flat fields always win — the merge only fills in defaults.
 pub fn merge_nested_metadata(meta: &mut SkillMetadata, raw: &serde_yaml::Value) {
-    let metadata_map = match raw.get("metadata") {
-        Some(m) => m,
-        None => return,
+    let Some(metadata_map) = raw.get("metadata") else {
+        return;
     };
 
     // Check all three nested metadata alias keys
@@ -306,74 +305,99 @@ pub fn merge_nested_metadata(meta: &mut SkillMetadata, raw: &serde_yaml::Value) 
         .iter()
         .find_map(|key| metadata_map.get(*key));
 
-    let oc = match oc {
-        Some(v) => v,
-        None => return,
+    let Some(oc) = oc else {
+        return;
     };
 
     // requires.env → requires_env
-    if meta.requires_env.is_empty() {
-        if let Some(vals) = oc.get("requires").and_then(|r| r.get("env")).and_then(|v| v.as_sequence()) {
-            meta.requires_env = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        }
+    if meta.requires_env.is_empty()
+        && let Some(vals) = oc
+            .get("requires")
+            .and_then(|r| r.get("env"))
+            .and_then(|v| v.as_sequence())
+    {
+        meta.requires_env = vals
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 
     // requires.bins → requires_bins
-    if meta.requires_bins.is_empty() {
-        if let Some(vals) = oc.get("requires").and_then(|r| r.get("bins")).and_then(|v| v.as_sequence()) {
-            meta.requires_bins = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        }
+    if meta.requires_bins.is_empty()
+        && let Some(vals) = oc
+            .get("requires")
+            .and_then(|r| r.get("bins"))
+            .and_then(|v| v.as_sequence())
+    {
+        meta.requires_bins = vals
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 
     // requires.anyBins → requires_any_bins
-    if meta.requires_any_bins.is_empty() {
-        if let Some(vals) = oc.get("requires").and_then(|r| r.get("anyBins")).and_then(|v| v.as_sequence()) {
-            meta.requires_any_bins = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        }
+    if meta.requires_any_bins.is_empty()
+        && let Some(vals) = oc
+            .get("requires")
+            .and_then(|r| r.get("anyBins"))
+            .and_then(|v| v.as_sequence())
+    {
+        meta.requires_any_bins = vals
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 
     // requires.config → requires_config
-    if meta.requires_config.is_empty() {
-        if let Some(vals) = oc.get("requires").and_then(|r| r.get("config")).and_then(|v| v.as_sequence()) {
-            meta.requires_config = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        }
+    if meta.requires_config.is_empty()
+        && let Some(vals) = oc
+            .get("requires")
+            .and_then(|r| r.get("config"))
+            .and_then(|v| v.as_sequence())
+    {
+        meta.requires_config = vals
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 
     // primaryEnv → primary_env
-    if meta.primary_env.is_none() {
-        if let Some(val) = oc.get("primaryEnv").and_then(|v| v.as_str()) {
-            meta.primary_env = Some(val.to_string());
-        }
+    if meta.primary_env.is_none()
+        && let Some(val) = oc.get("primaryEnv").and_then(|v| v.as_str())
+    {
+        meta.primary_env = Some(val.to_string());
     }
 
     // always (only override if still at default false)
-    if !meta.always {
-        if let Some(val) = oc.get("always").and_then(|v| v.as_bool()) {
-            meta.always = val;
-        }
+    if !meta.always
+        && let Some(val) = oc.get("always").and_then(serde_yaml::Value::as_bool)
+    {
+        meta.always = val;
     }
 
     // emoji
-    if meta.emoji.is_none() {
-        if let Some(val) = oc.get("emoji").and_then(|v| v.as_str()) {
-            meta.emoji = Some(val.to_string());
-        }
+    if meta.emoji.is_none()
+        && let Some(val) = oc.get("emoji").and_then(|v| v.as_str())
+    {
+        meta.emoji = Some(val.to_string());
     }
 
     // os
-    if meta.os.is_empty() {
-        if let Some(vals) = oc.get("os").and_then(|v| v.as_sequence()) {
-            meta.os = vals.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        }
+    if meta.os.is_empty()
+        && let Some(vals) = oc.get("os").and_then(|v| v.as_sequence())
+    {
+        meta.os = vals
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 
     // install
-    if meta.install.is_empty() {
-        if let Some(install_val) = oc.get("install") {
-            if let Ok(specs) = serde_yaml::from_value::<Vec<SkillInstallSpec>>(install_val.clone()) {
-                meta.install = specs;
-            }
-        }
+    if meta.install.is_empty()
+        && let Some(install_val) = oc.get("install")
+        && let Ok(specs) = serde_yaml::from_value::<Vec<SkillInstallSpec>>(install_val.clone())
+    {
+        meta.install = specs;
     }
 }
 
@@ -384,7 +408,13 @@ pub fn merge_nested_metadata(meta: &mut SkillMetadata, raw: &serde_yaml::Value) 
 pub fn sanitize_command_name(name: &str) -> String {
     let sanitized: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .take(32)
         .collect();
     sanitized.trim_matches('_').to_string()
@@ -400,10 +430,10 @@ pub fn has_binary(name: &str) -> bool {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    if let Ok(meta) = std::fs::metadata(&candidate) {
-                        if meta.permissions().mode() & 0o111 != 0 {
-                            return true;
-                        }
+                    if let Ok(meta) = std::fs::metadata(&candidate)
+                        && meta.permissions().mode() & 0o111 != 0
+                    {
+                        return true;
                     }
                 }
                 #[cfg(not(unix))]

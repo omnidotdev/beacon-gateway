@@ -23,15 +23,19 @@ impl TelegramRateLimiter {
         }
     }
 
-    /// Check if an edit is allowed for the given chat. Returns true if allowed.
+    /// Check if an edit is allowed for the given chat. Returns true if allowed
+    #[must_use]
     pub fn check(&self, chat_id: &str) -> bool {
-        let mut map = self.last_edit.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .last_edit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
 
-        if let Some(last) = map.get(chat_id) {
-            if now.duration_since(*last) < self.interval {
-                return false;
-            }
+        if let Some(last) = map.get(chat_id)
+            && now.duration_since(*last) < self.interval
+        {
+            return false;
         }
 
         map.insert(chat_id.to_string(), now);
@@ -40,7 +44,10 @@ impl TelegramRateLimiter {
 
     /// Record a 429 response — push the effective interval forward for this chat
     pub fn backoff(&self, chat_id: &str) {
-        let mut map = self.last_edit.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .last_edit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let future = Instant::now() + self.interval;
         map.insert(chat_id.to_string(), future);
     }

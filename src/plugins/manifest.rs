@@ -120,9 +120,8 @@ mod tests {
     #[test]
     fn round_trip_all_kinds() {
         for kind_str in ["tool", "channel", "provider", "skill", "hook", "service"] {
-            let json = format!(
-                r#"{{"id":"test","name":"Test","version":"1.0.0","kind":"{kind_str}"}}"#
-            );
+            let json =
+                format!(r#"{{"id":"test","name":"Test","version":"1.0.0","kind":"{kind_str}"}}"#);
             let manifest: PluginManifest = serde_json::from_str(&json).unwrap();
             let serialized = serde_json::to_string(&manifest).unwrap();
             assert!(serialized.contains(kind_str));

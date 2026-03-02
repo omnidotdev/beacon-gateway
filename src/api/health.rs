@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 use serde::Serialize;
 
@@ -180,12 +180,11 @@ async fn status(State(state): State<Arc<ApiState>>) -> Json<StatusResponse> {
 
 /// Get current persona info
 async fn get_persona(State(state): State<Arc<ApiState>>) -> Json<PersonaInfo> {
-    let persona = load_persona_file(&state.persona_cache_dir, &state.persona_id)
-        .or_else(|| {
-            Config::load_embedded_persona(&state.persona_id)
-                .ok()
-                .map(|p| persona_to_info(&p))
-        });
+    let persona = load_persona_file(&state.persona_cache_dir, &state.persona_id).or_else(|| {
+        Config::load_embedded_persona(&state.persona_id)
+            .ok()
+            .map(|p| persona_to_info(&p))
+    });
     Json(persona.unwrap_or_else(|| PersonaInfo {
         id: state.persona_id.clone(),
         name: capitalize_first(&state.persona_id),
@@ -203,10 +202,10 @@ async fn list_personas(State(state): State<Arc<ApiState>>) -> Json<PersonaListRe
     let cached_ids: std::collections::HashSet<String> =
         personas.iter().map(|p| p.id.clone()).collect();
     for (_, json) in Config::embedded_personas() {
-        if let Ok(persona) = serde_json::from_str::<Persona>(json) {
-            if !cached_ids.contains(&persona.identity.id) {
-                personas.push(persona_to_info(&persona));
-            }
+        if let Ok(persona) = serde_json::from_str::<Persona>(json)
+            && !cached_ids.contains(&persona.identity.id)
+        {
+            personas.push(persona_to_info(&persona));
         }
     }
 
@@ -224,13 +223,12 @@ async fn activate_persona(
     State(state): State<Arc<ApiState>>,
     Path(persona_id): Path<String>,
 ) -> Result<Json<PersonaInfo>, StatusCode> {
-    let persona = load_full_persona(&state.persona_cache_dir, &persona_id)
-        .or_else(|| {
-            Config::load_embedded_persona(&persona_id).ok().map(|p| {
-                let system_prompt = p.system_prompt().map(String::from);
-                (persona_to_info(&p), system_prompt)
-            })
-        });
+    let persona = load_full_persona(&state.persona_cache_dir, &persona_id).or_else(|| {
+        Config::load_embedded_persona(&persona_id).ok().map(|p| {
+            let system_prompt = p.system_prompt().map(String::from);
+            (persona_to_info(&p), system_prompt)
+        })
+    });
 
     match persona {
         None => {
@@ -241,7 +239,7 @@ async fn activate_persona(
             // Update the active persona
             {
                 let mut active = state.active_persona.write().await;
-                active.id = persona_id.clone();
+                active.id.clone_from(&persona_id);
                 active.system_prompt = system_prompt;
             }
             tracing::info!(persona_id = %persona_id, "persona activated");
@@ -282,12 +280,11 @@ fn load_all_personas(personas_dir: &std::path::Path) -> Vec<PersonaInfo> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "json") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(persona) = serde_json::from_str::<Persona>(&content) {
-                    personas.push(persona_to_info(&persona));
-                }
-            }
+        if path.extension().is_some_and(|ext| ext == "json")
+            && let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(persona) = serde_json::from_str::<Persona>(&content)
+        {
+            personas.push(persona_to_info(&persona));
         }
     }
 
@@ -323,10 +320,9 @@ pub(crate) fn persona_to_info(persona: &Persona) -> PersonaInfo {
 /// Helper to capitalize first letter
 fn capitalize_first(s: &str) -> String {
     let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-    }
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// Gateway discovery info for pairing
@@ -357,7 +353,10 @@ pub fn ready_router(state: Arc<ApiState>) -> Router {
         .route("/api/status", get(status))
         .route("/api/persona", get(get_persona))
         .route("/api/personas", get(list_personas))
-        .route("/api/personas/{persona_id}/activate", post(activate_persona))
+        .route(
+            "/api/personas/{persona_id}/activate",
+            post(activate_persona),
+        )
         .route("/api/pair/gateway", get(get_gateway_info))
         .with_state(state)
 }

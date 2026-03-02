@@ -218,12 +218,7 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn remove_reaction(
-        &self,
-        channel_id: &str,
-        message_id: &str,
-        emoji: &str,
-    ) -> Result<()> {
+    async fn remove_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> Result<()> {
         let http = self
             .http
             .as_ref()
@@ -299,10 +294,7 @@ impl EventHandler for DiscordHandler {
         }
 
         // Extract reply-to if this is a reply
-        let reply_to = msg
-            .referenced_message
-            .as_ref()
-            .map(|r| r.id.to_string());
+        let reply_to = msg.referenced_message.as_ref().map(|r| r.id.to_string());
 
         // Extract attachments from Discord message
         let attachments = msg
@@ -330,10 +322,10 @@ impl EventHandler for DiscordHandler {
             callback_data: None,
         };
 
-        if let Some(tx) = self.message_tx.lock().await.as_ref() {
-            if let Err(e) = tx.send(incoming).await {
-                tracing::warn!(error = %e, "Failed to forward Discord message");
-            }
+        if let Some(tx) = self.message_tx.lock().await.as_ref()
+            && let Err(e) = tx.send(incoming).await
+        {
+            tracing::warn!(error = %e, "Failed to forward Discord message");
         }
 
         tracing::debug!(

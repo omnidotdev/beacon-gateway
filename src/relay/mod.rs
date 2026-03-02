@@ -256,9 +256,7 @@ impl RelayManager {
                         &format!("https+insecure://localhost:{local_port}"),
                     ])
                     .spawn()
-                    .map_err(|e| {
-                        Error::Config(format!("failed to spawn tailscale serve: {e}"))
-                    })?;
+                    .map_err(|e| Error::Config(format!("failed to spawn tailscale serve: {e}")))?;
 
                 self.child = Some(child);
 
@@ -287,9 +285,7 @@ impl RelayManager {
                         &format!("https+insecure://localhost:{local_port}"),
                     ])
                     .spawn()
-                    .map_err(|e| {
-                        Error::Config(format!("failed to spawn tailscale funnel: {e}"))
-                    })?;
+                    .map_err(|e| Error::Config(format!("failed to spawn tailscale funnel: {e}")))?;
 
                 self.child = Some(child);
 
@@ -321,10 +317,7 @@ impl RelayManager {
 
                 let mut cmd = Command::new(&ssh);
 
-                cmd.args([
-                    "-R",
-                    &format!("{port}:localhost:{local_port}"),
-                ]);
+                cmd.args(["-R", &format!("{port}:localhost:{local_port}")]);
 
                 if let Some(ref key) = key_path {
                     cmd.args(["-i", &key.display().to_string()]);
@@ -333,15 +326,19 @@ impl RelayManager {
                 cmd.args([
                     &format!("{ssh_user}@{host}"),
                     "-N",
-                    "-o", "ServerAliveInterval=30",
-                    "-o", "ServerAliveCountMax=3",
-                    "-o", "ExitOnForwardFailure=yes",
-                    "-o", "StrictHostKeyChecking=accept-new",
+                    "-o",
+                    "ServerAliveInterval=30",
+                    "-o",
+                    "ServerAliveCountMax=3",
+                    "-o",
+                    "ExitOnForwardFailure=yes",
+                    "-o",
+                    "StrictHostKeyChecking=accept-new",
                 ]);
 
-                let child = cmd.spawn().map_err(|e| {
-                    Error::Config(format!("failed to spawn SSH tunnel: {e}"))
-                })?;
+                let child = cmd
+                    .spawn()
+                    .map_err(|e| Error::Config(format!("failed to spawn SSH tunnel: {e}")))?;
 
                 self.child = Some(child);
                 self.status.url = Some(format!("https://{host}:{port}"));
@@ -370,10 +367,10 @@ impl RelayManager {
         tracing::info!(mode = %self.status.mode, "stopping relay");
 
         // Kill child process if running
-        if let Some(ref mut child) = self.child {
-            if let Err(e) = child.kill().await {
-                tracing::warn!(error = %e, "failed to kill relay child process");
-            }
+        if let Some(ref mut child) = self.child
+            && let Err(e) = child.kill().await
+        {
+            tracing::warn!(error = %e, "failed to kill relay child process");
         }
         self.child = None;
 

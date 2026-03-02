@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chromiumoxide::Page;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::page::ScreenshotParams;
-use chromiumoxide::Page;
 use futures::StreamExt;
 use tokio::sync::Mutex;
 
@@ -85,6 +85,7 @@ pub struct ElementInfo {
     pub attributes: Vec<(String, String)>,
 }
 
+#[allow(clippy::significant_drop_tightening)]
 impl BrowserController {
     /// Create a new browser controller
     #[must_use]
@@ -130,9 +131,7 @@ impl BrowserController {
             .map_err(|e| Error::Browser(format!("Launch failed: {e}")))?;
 
         // Spawn handler in background
-        tokio::spawn(async move {
-            while handler.next().await.is_some() {}
-        });
+        tokio::spawn(async move { while handler.next().await.is_some() {} });
 
         let mut guard = self.browser.lock().await;
         *guard = Some(browser);

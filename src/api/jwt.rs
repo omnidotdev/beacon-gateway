@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
@@ -35,6 +35,7 @@ struct OidcDiscovery {
 }
 
 impl JwksCache {
+    #[must_use]
     pub fn new(auth_base_url: String) -> Self {
         Self {
             auth_base_url,
@@ -45,6 +46,10 @@ impl JwksCache {
     }
 
     /// Validate a JWT and return the claims
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if the token is invalid or no matching key is found
     pub async fn validate(&self, token: &str) -> Result<GatekeeperClaims, String> {
         let jwks = self.get_jwks().await?;
 
@@ -92,7 +97,6 @@ impl JwksCache {
                         "JWK did not validate token"
                     );
                     last_error = Some(e);
-                    continue;
                 }
             }
         }
@@ -117,36 +121,29 @@ impl JwksCache {
         }
 
         // Try OIDC discovery first
-        let discovery_url = format!(
-            "{}/.well-known/openid-configuration",
-            self.auth_base_url
-        );
+        let discovery_url = format!("{}/.well-known/openid-configuration", self.auth_base_url);
 
         let jwks_url = match self.client.get(&discovery_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<OidcDiscovery>().await {
-                    Ok(doc) if doc.jwks_uri.is_some() => {
-                        let uri = doc.jwks_uri.unwrap();
-                        tracing::info!(
-                            jwks_uri = %uri,
-                            "resolved JWKS URI from OIDC discovery"
-                        );
-                        uri
-                    }
-                    _ => {
-                        let fallback =
-                            format!("{}/.well-known/jwks.json", self.auth_base_url);
-                        tracing::debug!(
-                            fallback = %fallback,
-                            "OIDC discovery missing jwks_uri, using fallback"
-                        );
-                        fallback
-                    }
+            Ok(resp) if resp.status().is_success() => match resp.json::<OidcDiscovery>().await {
+                Ok(doc) if doc.jwks_uri.is_some() => {
+                    let uri = doc.jwks_uri.unwrap();
+                    tracing::info!(
+                        jwks_uri = %uri,
+                        "resolved JWKS URI from OIDC discovery"
+                    );
+                    uri
                 }
-            }
+                _ => {
+                    let fallback = format!("{}/.well-known/jwks.json", self.auth_base_url);
+                    tracing::debug!(
+                        fallback = %fallback,
+                        "OIDC discovery missing jwks_uri, using fallback"
+                    );
+                    fallback
+                }
+            },
             _ => {
-                let fallback =
-                    format!("{}/.well-known/jwks.json", self.auth_base_url);
+                let fallback = format!("{}/.well-known/jwks.json", self.auth_base_url);
                 tracing::debug!(
                     fallback = %fallback,
                     "OIDC discovery unavailable, using fallback"
@@ -155,8 +152,7 @@ impl JwksCache {
             }
         };
 
-        let mut cached = self.jwks_uri.write().await;
-        *cached = Some(jwks_url.clone());
+        *self.jwks_uri.write().await = Some(jwks_url.clone());
 
         Ok(jwks_url)
     }
@@ -166,10 +162,10 @@ impl JwksCache {
         // Check cache
         {
             let cache = self.keys.read().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.keys.clone());
-                }
+            if let Some(cached) = cache.as_ref()
+                && cached.expires_at > Instant::now()
+            {
+                return Ok(cached.keys.clone());
             }
         }
 
@@ -203,8 +199,7 @@ impl JwksCache {
 
         // Cache for 1 hour
         let keys = jwk_set.keys;
-        let mut cache = self.keys.write().await;
-        *cache = Some(CachedJwks {
+        *self.keys.write().await = Some(CachedJwks {
             keys: keys.clone(),
             expires_at: Instant::now() + Duration::from_secs(3600),
         });

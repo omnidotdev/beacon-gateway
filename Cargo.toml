@@ -123,7 +123,7 @@ secrecy = "0.10"
 mini-moka = "0.10"
 
 # Agent core (shared LLM provider abstraction)
-agent-core = { git = "https://github.com/omnidotdev/agent-core" }
+agent-core = { path = "../../../agent-core" }
 
 # HTML parsing and readability extraction
 readability = "0.3"
@@ -136,6 +136,9 @@ tempfile = "3"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[patch."https://github.com/omnidotdev/agent-core.git"]
+agent-core = { path = "../../../agent-core" }
 
 [profile.release]
 lto = "thin"

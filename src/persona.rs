@@ -3,11 +3,15 @@
 //! Implements the persona.json specification for portable digital entity identity.
 //! See: <https://persona.omni.dev>
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::tools::{ToolPolicy, ToolPolicyConfig};
+
+// Re-export shared knowledge types from agent-core
+pub use agent_core::knowledge::{
+    KnowledgeChunk, KnowledgeConfig, KnowledgePack, KnowledgePackRef, KnowledgePriority,
+    PackEmbeddings,
+};
 
 /// A persona defines the identity of a digital entity
 ///
@@ -311,115 +315,6 @@ impl Default for ContextConfig {
     }
 }
 
-/// Knowledge configuration for a persona
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeConfig {
-    /// Inline knowledge chunks owned by this persona
-    #[serde(default)]
-    pub inline: Vec<KnowledgeChunk>,
-
-    /// References to external knowledge packs on Manifold
-    #[serde(default)]
-    pub packs: Vec<KnowledgePackRef>,
-}
-
-/// A single knowledge chunk
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeChunk {
-    /// Human-readable topic label
-    pub topic: String,
-
-    /// Machine-readable tags for selection
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    /// Freeform knowledge content (markdown)
-    pub content: String,
-
-    /// Behavioral rules injected alongside this chunk
-    #[serde(default)]
-    pub rules: Vec<String>,
-
-    /// Injection priority
-    #[serde(default)]
-    pub priority: KnowledgePriority,
-
-    /// Pre-computed embedding vector for semantic selection
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding: Option<Vec<f32>>,
-}
-
-/// When to inject a knowledge chunk
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum KnowledgePriority {
-    /// Inject every turn (core identity facts)
-    Always,
-    /// Inject when tags match user message
-    #[default]
-    Relevant,
-}
-
-/// Reference to an external knowledge pack on Manifold
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgePackRef {
-    /// Manifold artifact path: @{namespace}/knowledge/{artifact}
-    #[serde(rename = "ref")]
-    pub pack_ref: String,
-
-    /// Semver version constraint
-    pub version: Option<String>,
-
-    /// Override priority for all chunks in this pack
-    pub priority: Option<KnowledgePriority>,
-}
-
-/// Pre-computed embedding vectors for knowledge pack chunks
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PackEmbeddings {
-    /// Embedding model used to generate vectors
-    pub model: String,
-
-    /// Dimensionality of each vector
-    pub dimensions: usize,
-
-    /// Map from chunk index (as string) to embedding vector
-    pub vectors: HashMap<String, Vec<f32>>,
-}
-
-/// A knowledge pack published to Manifold
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgePack {
-    /// Schema URL
-    #[serde(rename = "$schema")]
-    pub schema: Option<String>,
-
-    /// Semver version
-    pub version: String,
-
-    /// Display name
-    pub name: String,
-
-    /// Description
-    pub description: Option<String>,
-
-    /// Pack-level tags (for marketplace search)
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    /// Knowledge chunks
-    pub chunks: Vec<KnowledgeChunk>,
-
-    /// Pre-computed embeddings for chunks
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embeddings: Option<PackEmbeddings>,
-}
-
 // Default value functions
 
 const fn default_max_context_tokens() -> usize {
@@ -556,7 +451,9 @@ impl Persona {
     /// Check if this persona is voice-enabled
     #[must_use]
     pub fn is_voice_enabled(&self) -> bool {
-        self.voice.as_ref().is_some_and(|v| !v.wake_words.is_empty())
+        self.voice
+            .as_ref()
+            .is_some_and(|v| !v.wake_words.is_empty())
     }
 
     /// Get inline knowledge chunks
@@ -573,7 +470,7 @@ impl Persona {
 
     /// Check if this persona has any knowledge configured
     #[must_use]
-    pub fn has_knowledge(&self) -> bool {
+    pub const fn has_knowledge(&self) -> bool {
         !self.knowledge.inline.is_empty() || !self.knowledge.packs.is_empty()
     }
 }

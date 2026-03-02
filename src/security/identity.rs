@@ -50,11 +50,7 @@ impl DeviceIdentity {
         let public_key_bytes = verifying_key.as_bytes();
         let device_id = compute_device_id(public_key_bytes);
 
-        let platform = format!(
-            "{}-{}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        );
+        let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
 
         Self {
             device_id,

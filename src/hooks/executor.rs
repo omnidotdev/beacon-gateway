@@ -24,8 +24,8 @@ pub async fn execute_hook(
     let timeout_duration = hook_timeout.unwrap_or(DEFAULT_TIMEOUT);
 
     // Serialize event to JSON
-    let event_json = serde_json::to_string(event)
-        .map_err(|e| format!("failed to serialize event: {e}"))?;
+    let event_json =
+        serde_json::to_string(event).map_err(|e| format!("failed to serialize event: {e}"))?;
 
     // Determine how to run the handler
     let (program, args) = determine_executor(handler_path)?;
@@ -33,7 +33,7 @@ pub async fn execute_hook(
     // Spawn process
     let mut child = Command::new(&program)
         .args(&args)
-        .current_dir(handler_path.parent().unwrap_or(Path::new(".")))
+        .current_dir(handler_path.parent().unwrap_or_else(|| Path::new(".")))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -73,8 +73,7 @@ pub async fn execute_hook(
         return Ok(HookResult::default());
     }
 
-    serde_json::from_str(&stdout)
-        .map_err(|e| format!("failed to parse hook output: {e}"))
+    serde_json::from_str(&stdout).map_err(|e| format!("failed to parse hook output: {e}"))
 }
 
 /// Determine how to execute the handler based on extension

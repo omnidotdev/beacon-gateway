@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 use crate::api::ApiState;
@@ -33,10 +33,7 @@ pub async fn handle_event(
 
     // Handle ADDED_TO_SPACE event
     if event.event_type == "ADDED_TO_SPACE" {
-        let space_name = event
-            .space
-            .as_ref()
-            .map_or("unknown", |s| &s.name);
+        let space_name = event.space.as_ref().map_or("unknown", |s| &s.name);
         tracing::info!(space = %space_name, "Bot added to Google Chat space");
         return (
             StatusCode::OK,
@@ -65,10 +62,10 @@ pub async fn handle_event(
     };
 
     // Skip bot messages
-    if let Some(sender) = &message.sender {
-        if sender.user_type.as_deref() == Some("BOT") {
-            return (StatusCode::OK, Json(WebhookResponse { text: None }));
-        }
+    if let Some(sender) = &message.sender
+        && sender.user_type.as_deref() == Some("BOT")
+    {
+        return (StatusCode::OK, Json(WebhookResponse { text: None }));
     }
 
     // Check if we have Synapse configured

@@ -15,7 +15,11 @@ pub struct BuiltinMemoryTools {
 impl BuiltinMemoryTools {
     /// Create a new set of built-in memory tools
     #[must_use]
-    pub const fn new(memory_repo: MemoryRepo, embedder: Option<Arc<Embedder>>, user_id: String) -> Self {
+    pub const fn new(
+        memory_repo: MemoryRepo,
+        embedder: Option<Arc<Embedder>>,
+        user_id: String,
+    ) -> Self {
         Self {
             memory_repo,
             embedder,

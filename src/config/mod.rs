@@ -122,7 +122,7 @@ pub struct VoiceConfig {
     /// STT model for Synapse (e.g. "whisper-1", "deepgram/nova-2")
     pub stt_model: String,
 
-    /// TTS model for Synapse (e.g. "tts-1", "elevenlabs/eleven_monolingual_v1")
+    /// TTS model for Synapse (e.g. "tts-1", "`elevenlabs/eleven_monolingual_v1`")
     pub tts_model: String,
 
     /// TTS voice identifier
@@ -279,6 +279,7 @@ fn default_personal_dir() -> PathBuf {
 
 /// Telegram channel configuration
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct TelegramConfig {
     /// Bot token (default account)
     pub bot_token: String,
@@ -324,7 +325,7 @@ impl TelegramConfig {
             require_mention_in_groups: false,
             reaction_level: ReactionLevel::Ack,
             ack_reaction: "\u{1F440}".to_string(), // 👀
-            done_reaction: "\u{2705}".to_string(),  // ✅
+            done_reaction: "\u{2705}".to_string(), // ✅
             webhook_secret: None,
             streaming_mode: StreamingMode::Edit,
             text_chunk_limit: 4000,
@@ -344,11 +345,22 @@ impl TelegramConfig {
         if let Some(acct) = self.accounts.get(account_id) {
             ResolvedTelegramAccountConfig {
                 bot_token: acct.bot_token.clone(),
-                bot_username: acct.bot_username.clone().or_else(|| self.bot_username.clone()),
-                require_mention_in_groups: acct.require_mention_in_groups.unwrap_or(self.require_mention_in_groups),
+                bot_username: acct
+                    .bot_username
+                    .clone()
+                    .or_else(|| self.bot_username.clone()),
+                require_mention_in_groups: acct
+                    .require_mention_in_groups
+                    .unwrap_or(self.require_mention_in_groups),
                 reaction_level: acct.reaction_level.unwrap_or(self.reaction_level),
-                ack_reaction: acct.ack_reaction.clone().unwrap_or_else(|| self.ack_reaction.clone()),
-                done_reaction: acct.done_reaction.clone().unwrap_or_else(|| self.done_reaction.clone()),
+                ack_reaction: acct
+                    .ack_reaction
+                    .clone()
+                    .unwrap_or_else(|| self.ack_reaction.clone()),
+                done_reaction: acct
+                    .done_reaction
+                    .clone()
+                    .unwrap_or_else(|| self.done_reaction.clone()),
                 streaming_mode: acct.streaming_mode.unwrap_or(self.streaming_mode),
                 text_chunk_limit: acct.text_chunk_limit.unwrap_or(self.text_chunk_limit),
             }
@@ -417,6 +429,7 @@ pub enum StreamingMode {
 impl StreamingMode {
     /// Parse from a string value
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "block" | "chunked" => Self::Block,
@@ -440,6 +453,7 @@ pub enum ReactionLevel {
 impl ReactionLevel {
     /// Parse from a string value (env var or config)
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "off" | "none" | "false" | "0" => Self::Off,
@@ -512,6 +526,7 @@ impl Config {
     /// # Errors
     ///
     /// Returns error if persona file cannot be loaded
+    #[allow(clippy::too_many_lines)]
     pub fn load_with_options(persona_id: Option<&str>, disable_voice: bool) -> Result<Self> {
         // Load optional TOML config file (env > toml > default)
         let fc = file::load_config_file();
@@ -519,11 +534,7 @@ impl Config {
         // Resolve effective persona ID: CLI arg > TOML config > None
         let effective_id = persona_id
             .filter(|s| !s.is_empty())
-            .or_else(|| {
-                fc.persona
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-            });
+            .or_else(|| fc.persona.as_deref().filter(|s| !s.is_empty()));
 
         // Load persona (or use default for no-persona mode)
         let persona = match effective_id {
@@ -610,8 +621,10 @@ impl Config {
         }
 
         // Determine data directory (~/.local/share/omni/beacon on Linux)
-        let data_dir = directories::BaseDirs::new()
-            .map_or_else(|| PathBuf::from("."), |d| d.data_dir().join("omni").join("beacon"));
+        let data_dir = directories::BaseDirs::new().map_or_else(
+            || PathBuf::from("."),
+            |d| d.data_dir().join("omni").join("beacon"),
+        );
 
         // Ensure data dir exists
         std::fs::create_dir_all(&data_dir).ok();
@@ -700,14 +713,15 @@ impl Config {
             .unwrap_or(false);
 
         // Knowledge pack cache directory
-        let knowledge_cache_dir = std::env::var("BEACON_KNOWLEDGE_CACHE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
+        let knowledge_cache_dir = std::env::var("BEACON_KNOWLEDGE_CACHE_DIR").map_or_else(
+            |_| {
                 directories::BaseDirs::new().map_or_else(
                     || PathBuf::from(".cache/omni/beacon/knowledge"),
                     |d| d.cache_dir().join("omni").join("beacon").join("knowledge"),
                 )
-            });
+            },
+            PathBuf::from,
+        );
 
         // Memory sync configuration (opt-in via env vars)
         let sync = std::env::var("BEACON_SYNC_API_URL").ok().map(|api_url| {
@@ -733,16 +747,21 @@ impl Config {
                 .ok()
                 .map(|s| s.split(',').map(|p| PathBuf::from(p.trim())).collect())
                 .or_else(|| {
-                    toml_skills.extra_dirs.as_ref().map(|dirs| {
-                        dirs.iter().map(|p| PathBuf::from(p)).collect()
-                    })
+                    toml_skills
+                        .extra_dirs
+                        .as_ref()
+                        .map(|dirs| dirs.iter().map(PathBuf::from).collect())
                 })
                 .unwrap_or(default.extra_dirs);
 
             let personal_dir = std::env::var("BEACON_SKILLS_PERSONAL_DIR")
                 .map(PathBuf::from)
                 .or_else(|_| {
-                    toml_skills.personal_dir.as_ref().map(PathBuf::from).ok_or(())
+                    toml_skills
+                        .personal_dir
+                        .as_ref()
+                        .map(PathBuf::from)
+                        .ok_or(())
                 })
                 .unwrap_or(default.personal_dir);
 
@@ -789,20 +808,36 @@ impl Config {
 
             let skill_include = std::env::var("BEACON_SKILLS_INCLUDE")
                 .ok()
-                .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+                .map(|s| {
+                    s.split(',')
+                        .map(|p| p.trim().to_string())
+                        .filter(|p| !p.is_empty())
+                        .collect()
+                })
                 .or_else(|| toml_skills.skill_include.clone())
                 .unwrap_or_default();
 
             let skill_exclude = std::env::var("BEACON_SKILLS_EXCLUDE")
                 .ok()
-                .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+                .map(|s| {
+                    s.split(',')
+                        .map(|p| p.trim().to_string())
+                        .filter(|p| !p.is_empty())
+                        .collect()
+                })
                 .or_else(|| toml_skills.skill_exclude.clone())
                 .unwrap_or_default();
 
             SkillsConfig {
                 managed_dir: std::env::var("BEACON_SKILLS_DIR")
                     .map(PathBuf::from)
-                    .or_else(|_| toml_skills.managed_dir.as_ref().map(PathBuf::from).ok_or(()))
+                    .or_else(|_| {
+                        toml_skills
+                            .managed_dir
+                            .as_ref()
+                            .map(PathBuf::from)
+                            .ok_or(())
+                    })
                     .unwrap_or(default.managed_dir),
                 max_skills_in_prompt: std::env::var("BEACON_MAX_SKILLS_PROMPT")
                     .ok()
@@ -839,8 +874,7 @@ impl Config {
             tg.bot_username = std::env::var("TELEGRAM_BOT_USERNAME").ok();
             tg.require_mention_in_groups = std::env::var("TELEGRAM_REQUIRE_MENTION")
                 .ok()
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             tg.reaction_level = std::env::var("TELEGRAM_REACTION_LEVEL")
                 .map(|s| ReactionLevel::from_str(&s))
                 .unwrap_or_default();
@@ -860,8 +894,7 @@ impl Config {
                 .unwrap_or(4000);
             tg.show_reasoning = std::env::var("TELEGRAM_SHOW_REASONING")
                 .ok()
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             tg.api_timeout_secs = std::env::var("TELEGRAM_API_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -873,12 +906,10 @@ impl Config {
             tg.proxy = std::env::var("TELEGRAM_PROXY").ok();
             tg.debug_updates = std::env::var("TELEGRAM_DEBUG_UPDATES")
                 .ok()
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             tg.debug_responses = std::env::var("TELEGRAM_DEBUG_RESPONSES")
                 .ok()
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
             // Load additional accounts from TELEGRAM_ACCOUNTS (comma-separated IDs)
             // Each account reads TELEGRAM_{ID}_BOT_TOKEN, TELEGRAM_{ID}_BOT_USERNAME, etc.
@@ -979,8 +1010,7 @@ impl Config {
     fn load_hooks_config(data_dir: &std::path::Path) -> HooksConfig {
         // Check for hooks.toml in ~/.beacon or data_dir
         let config_paths = [
-            directories::BaseDirs::new()
-                .map(|d| d.home_dir().join(".beacon/hooks.toml")),
+            directories::BaseDirs::new().map(|d| d.home_dir().join(".beacon/hooks.toml")),
             Some(data_dir.join("hooks.toml")),
         ];
 
@@ -1061,8 +1091,8 @@ impl Config {
         // 2. Manifold fetch (cache on success)
         let manifold_url = std::env::var("MANIFOLD_URL")
             .unwrap_or_else(|_| "https://api.manifold.omni.dev".to_string());
-        let manifold_namespace = std::env::var("MANIFOLD_NAMESPACE")
-            .unwrap_or_else(|_| "community".to_string());
+        let manifold_namespace =
+            std::env::var("MANIFOLD_NAMESPACE").unwrap_or_else(|_| "community".to_string());
 
         match Self::fetch_persona_from_manifold(&manifold_url, &manifold_namespace, persona_id) {
             Ok(persona) => {
@@ -1221,17 +1251,18 @@ impl Config {
             if !response.status().is_success() {
                 return Err(Error::Config(format!(
                     "persona '{}' not found in namespace '{}' ({})",
-                    persona_id_owned, namespace_owned, response.status()
+                    persona_id_owned,
+                    namespace_owned,
+                    response.status()
                 )));
             }
 
-            let content = response.text().map_err(|e| {
-                Error::Config(format!("failed to read Manifold response: {e}"))
-            })?;
+            let content = response
+                .text()
+                .map_err(|e| Error::Config(format!("failed to read Manifold response: {e}")))?;
 
-            let persona: Persona = serde_json::from_str(&content).map_err(|e| {
-                Error::Config(format!("failed to parse persona JSON: {e}"))
-            })?;
+            let persona: Persona = serde_json::from_str(&content)
+                .map_err(|e| Error::Config(format!("failed to parse persona JSON: {e}")))?;
 
             tracing::info!(
                 persona_id = persona_id_owned,

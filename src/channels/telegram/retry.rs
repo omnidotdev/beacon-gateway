@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 /// Controls how many times a failed request is retried and how
 /// long to wait between attempts using exponential backoff.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RetryPolicy {
     /// Maximum number of retry attempts
     pub max_retries: u32,
@@ -31,6 +32,7 @@ impl Default for RetryPolicy {
 /// Recoverable errors are worth retrying: rate limits (429), server errors (5xx),
 /// and certain transient network-level failures surfaced in the body text.
 #[must_use]
+#[allow(dead_code)]
 pub fn is_recoverable(status: u16, body: &str) -> bool {
     if status == 429 {
         return true;
@@ -41,9 +43,7 @@ pub fn is_recoverable(status: u16, body: &str) -> bool {
     }
 
     let lower = body.to_lowercase();
-    lower.contains("connection reset")
-        || lower.contains("timed out")
-        || lower.contains("dns error")
+    lower.contains("connection reset") || lower.contains("timed out") || lower.contains("dns error")
 }
 
 /// Extract a `retry_after` duration from a Telegram Bot API error body.
@@ -60,6 +60,7 @@ pub fn is_recoverable(status: u16, body: &str) -> bool {
 /// assert_eq!(dur, Some(std::time::Duration::from_secs(30)));
 /// ```
 #[must_use]
+#[allow(dead_code)]
 pub fn parse_retry_after(body: &str) -> Option<Duration> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     let secs = v.get("parameters")?.get("retry_after")?.as_u64()?;
@@ -76,6 +77,7 @@ pub fn parse_retry_after(body: &str) -> Option<Duration> {
 /// Jitter is 0-25% of the computed delay, derived from `SystemTime` to avoid
 /// pulling in a full random number generator.
 #[must_use]
+#[allow(dead_code)]
 pub fn delay_for_attempt(
     policy: &RetryPolicy,
     attempt: u32,
@@ -97,7 +99,7 @@ pub fn delay_for_attempt(
         .subsec_nanos();
 
     // Scale to 0-25% of the base delay
-    let jitter_fraction = (jitter_nanos % 250) as f64 / 1000.0;
+    let jitter_fraction = f64::from(jitter_nanos % 250) / 1000.0;
     let jitter = base.mul_f64(jitter_fraction);
 
     (base + jitter).min(policy.max_delay)

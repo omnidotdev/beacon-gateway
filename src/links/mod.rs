@@ -50,6 +50,10 @@ pub struct LinkProcessor {
 
 impl LinkProcessor {
     /// Create a new link processor
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be built
     #[must_use]
     pub fn new(config: LinkConfig) -> Self {
         let cache_size = NonZeroUsize::new(100).expect("100 is non-zero");
@@ -130,10 +134,7 @@ impl LinkProcessor {
             .map_err(|e| Error::Link(format!("Failed to fetch URL: {e}")))?;
 
         if !response.status().is_success() {
-            return Err(Error::Link(format!(
-                "HTTP error: {}",
-                response.status()
-            )));
+            return Err(Error::Link(format!("HTTP error: {}", response.status())));
         }
 
         let html = response
@@ -145,6 +146,7 @@ impl LinkProcessor {
     }
 
     /// Parse HTML for Open Graph and Twitter Card metadata
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn parse_html(&self, url: &str, html: &str) -> Result<LinkPreview> {
         use scraper::{Html, Selector};
 
@@ -187,8 +189,7 @@ impl LinkProcessor {
 
         // Get favicon
         let favicon_url = {
-            let selector =
-                Selector::parse(r#"link[rel="icon"], link[rel="shortcut icon"]"#).ok();
+            let selector = Selector::parse(r#"link[rel="icon"], link[rel="shortcut icon"]"#).ok();
             selector.and_then(|s| {
                 document
                     .select(&s)

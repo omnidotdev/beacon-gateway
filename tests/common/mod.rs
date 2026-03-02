@@ -11,7 +11,8 @@ pub fn setup_test_db() -> DbPool {
 /// Create a test user in the database
 pub fn create_test_user(db: &DbPool, external_id: &str) -> beacon_gateway::db::User {
     let repo = beacon_gateway::db::UserRepo::new(db.clone());
-    repo.find_or_create(external_id).expect("failed to create test user")
+    repo.find_or_create(external_id)
+        .expect("failed to create test user")
 }
 
 /// Create a test session in the database

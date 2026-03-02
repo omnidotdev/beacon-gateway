@@ -5,10 +5,12 @@
 //! (paragraphs, sentences) and keeping fenced code blocks intact.
 
 /// Default chunk size limit (leaves margin from Telegram's 4096 hard cap)
+#[allow(dead_code)]
 const DEFAULT_LIMIT: usize = 4000;
 
 /// Strategy for splitting text that exceeds the chunk limit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ChunkStrategy {
     /// Split on paragraph boundaries (double newlines), fall back to sentence,
     /// then hard split
@@ -34,6 +36,7 @@ pub enum ChunkStrategy {
 /// assert_eq!(chunks, vec!["short"]);
 /// ```
 #[must_use]
+#[allow(dead_code)]
 pub fn chunk_text(text: &str, limit: usize, strategy: ChunkStrategy) -> Vec<String> {
     let limit = if limit == 0 { DEFAULT_LIMIT } else { limit };
 
@@ -59,6 +62,7 @@ pub fn chunk_text(text: &str, limit: usize, strategy: ChunkStrategy) -> Vec<Stri
 /// 3. Accumulate segments into chunks up to the limit.
 /// 4. If a single segment still exceeds the limit, fall back to sentence
 ///    splitting, then hard splitting.
+#[allow(dead_code)]
 fn chunk_paragraph(text: &str, limit: usize) -> Vec<String> {
     let segments = split_preserving_code_blocks(text, "\n\n");
     assemble_chunks(&segments, limit, ChunkStrategy::Sentence)
@@ -68,6 +72,7 @@ fn chunk_paragraph(text: &str, limit: usize) -> Vec<String> {
 ///
 /// Splits on `. `, `! `, `? ` boundaries. If a single segment still exceeds
 /// the limit, falls back to hard splitting.
+#[allow(dead_code)]
 fn chunk_sentence(text: &str, limit: usize) -> Vec<String> {
     let segments = split_on_sentences(text);
     assemble_chunks(&segments, limit, ChunkStrategy::HardSplit)
@@ -77,6 +82,7 @@ fn chunk_sentence(text: &str, limit: usize) -> Vec<String> {
 ///
 /// Splits at exact `limit`-sized boundaries. Tries to break on the last
 /// newline before the limit; if none exists, breaks at `limit` directly.
+#[allow(dead_code)]
 fn chunk_hard(text: &str, limit: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = text;
@@ -104,11 +110,12 @@ fn chunk_hard(text: &str, limit: usize) -> Vec<String> {
     chunks
 }
 
-/// Split text on a delimiter while keeping fenced code blocks (```) intact.
+/// Split text on a delimiter while keeping fenced code blocks intact.
 ///
 /// Code blocks are never broken across segments; the delimiter is ignored
 /// inside fenced regions.
 #[must_use]
+#[allow(dead_code)]
 fn split_preserving_code_blocks<'a>(text: &'a str, delimiter: &str) -> Vec<&'a str> {
     let mut segments = Vec::new();
     let mut pos = 0;
@@ -203,6 +210,7 @@ fn split_preserving_code_blocks<'a>(text: &'a str, delimiter: &str) -> Vec<&'a s
 ///
 /// The punctuation stays attached to the preceding segment.
 #[must_use]
+#[allow(dead_code)]
 fn split_on_sentences(text: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
@@ -241,6 +249,7 @@ fn split_on_sentences(text: &str) -> Vec<&str> {
 ///
 /// When a single segment exceeds the limit, it is recursively split using the
 /// `fallback` strategy.
+#[allow(dead_code)]
 fn assemble_chunks(segments: &[&str], limit: usize, fallback: ChunkStrategy) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -259,12 +268,10 @@ fn assemble_chunks(segments: &[&str], limit: usize, fallback: ChunkStrategy) -> 
         };
 
         if needed <= limit {
-            if current.is_empty() {
-                current.push_str(trimmed);
-            } else {
+            if !current.is_empty() {
                 current.push_str("\n\n");
-                current.push_str(trimmed);
             }
+            current.push_str(trimmed);
         } else if current.is_empty() {
             // Single segment exceeds limit — split with fallback strategy
             let sub = chunk_text(trimmed, limit, fallback);
@@ -292,14 +299,15 @@ fn assemble_chunks(segments: &[&str], limit: usize, fallback: ChunkStrategy) -> 
 ///
 /// Prefers the last newline before the limit; falls back to `limit` itself.
 #[must_use]
+#[allow(dead_code)]
 fn find_split_point(text: &str, limit: usize) -> usize {
     let search_range = &text[..limit];
 
     // Prefer splitting at the last newline
-    if let Some(pos) = search_range.rfind('\n') {
-        if pos > 0 {
-            return pos + 1; // Include the newline in the current chunk
-        }
+    if let Some(pos) = search_range.rfind('\n')
+        && pos > 0
+    {
+        return pos + 1; // Include the newline in the current chunk
     }
 
     // No newline found — split at the limit, but ensure we are on a char boundary
@@ -418,7 +426,9 @@ mod tests {
         let text = format!("Intro text.\n\n{code}\n\nOutro text.");
         let result = chunk_text(&text, 200, ChunkStrategy::Paragraph);
         // Code block should not be split across chunks
-        let has_complete_block = result.iter().any(|c| c.contains("```rust") && c.contains("```"));
+        let has_complete_block = result
+            .iter()
+            .any(|c| c.contains("```rust") && c.contains("```"));
         assert!(has_complete_block, "code block was split: {result:?}");
     }
 
@@ -427,9 +437,9 @@ mod tests {
         let text = "Before.\n\n```\ncode line 1\ncode line 2\n```\n\nAfter.";
         let result = chunk_text(text, 80, ChunkStrategy::Paragraph);
         // The code block should appear intact in some chunk
-        let has_intact = result.iter().any(|c| {
-            c.contains("```") && c.contains("code line 1") && c.contains("code line 2")
-        });
+        let has_intact = result
+            .iter()
+            .any(|c| c.contains("```") && c.contains("code line 1") && c.contains("code line 2"));
         assert!(has_intact, "code block was split: {result:?}");
     }
 

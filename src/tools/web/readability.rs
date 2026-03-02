@@ -46,8 +46,7 @@ pub struct Article {
 /// println!("{}", article.content);
 /// ```
 pub fn extract_article(html: &str, source_url: &str) -> Result<Article> {
-    let url = Url::parse(source_url)
-        .map_err(|e| Error::Browser(format!("invalid URL: {e}")))?;
+    let url = Url::parse(source_url).map_err(|e| Error::Browser(format!("invalid URL: {e}")))?;
 
     let mut cursor = Cursor::new(html.as_bytes());
 

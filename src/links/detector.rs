@@ -4,9 +4,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Regex for detecting URLs
-static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://[^\s<>\[\](){}]+").expect("valid regex")
-});
+static URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://[^\s<>\[\](){}]+").expect("valid regex"));
 
 /// Detect all URLs in a string
 #[must_use]
@@ -16,7 +15,7 @@ pub fn detect_urls(text: &str) -> Vec<String> {
         .map(|m| {
             let url = m.as_str();
             // Clean trailing punctuation
-            url.trim_end_matches(|c| matches!(c, '.' | ',' | '!' | '?' | ')' | ']' | '}'))
+            url.trim_end_matches(['.', ',', '!', '?', ')', ']', '}'])
                 .to_string()
         })
         .collect()

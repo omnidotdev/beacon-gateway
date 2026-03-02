@@ -360,11 +360,9 @@ impl DeviceManager {
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let exists: bool = conn
-            .query_row(
-                "SELECT 1 FROM devices WHERE id = ?1",
-                [device_id],
-                |_| Ok(true),
-            )
+            .query_row("SELECT 1 FROM devices WHERE id = ?1", [device_id], |_| {
+                Ok(true)
+            })
             .unwrap_or(false);
 
         Ok(exists)
@@ -390,7 +388,13 @@ mod tests {
         let manager = setup();
 
         let device = manager
-            .register("device123", "public_key_base64", "My Laptop", Some("linux-x86_64"), TrustLevel::Paired)
+            .register(
+                "device123",
+                "public_key_base64",
+                "My Laptop",
+                Some("linux-x86_64"),
+                TrustLevel::Paired,
+            )
             .unwrap();
 
         assert_eq!(device.id, "device123");
@@ -423,11 +427,23 @@ mod tests {
             .unwrap();
 
         // Same ID should fail
-        let result = manager.register("device789", "pk_different", "Device 2", None, TrustLevel::Paired);
+        let result = manager.register(
+            "device789",
+            "pk_different",
+            "Device 2",
+            None,
+            TrustLevel::Paired,
+        );
         assert!(result.is_err());
 
         // Same public key should fail
-        let result = manager.register("different_id", "pk789", "Device 3", None, TrustLevel::Paired);
+        let result = manager.register(
+            "different_id",
+            "pk789",
+            "Device 3",
+            None,
+            TrustLevel::Paired,
+        );
         assert!(result.is_err());
     }
 
@@ -439,7 +455,9 @@ mod tests {
             .register("deviceA", "pkA", "Test", None, TrustLevel::Paired)
             .unwrap();
 
-        manager.update_trust_level("deviceA", TrustLevel::Admin).unwrap();
+        manager
+            .update_trust_level("deviceA", TrustLevel::Admin)
+            .unwrap();
 
         let device = manager.get("deviceA").unwrap().unwrap();
         assert_eq!(device.trust_level, TrustLevel::Admin);

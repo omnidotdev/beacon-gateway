@@ -3,15 +3,15 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     middleware,
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{auth::require_api_key, ApiState};
+use super::{ApiState, auth::require_api_key};
 use crate::db::{SessionRepo, TelegramGroupConfig, UserRepo};
 
 // --- Request/Response types ---
@@ -82,15 +82,23 @@ async fn create_user(
 ) -> Result<(StatusCode, Json<UserResponse>), (StatusCode, Json<ErrorResponse>)> {
     let user_repo = UserRepo::new(state.db.clone());
 
-    let user = user_repo
-        .find_or_create(&req.id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let user = user_repo.find_or_create(&req.id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     // Set life.json path if provided
     if let Some(path) = &req.life_json_path {
         user_repo
             .set_life_json_path(&user.id, Some(path))
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    error_response("db_error", &e.to_string()),
+                )
+            })?;
     }
 
     Ok((
@@ -109,9 +117,12 @@ async fn list_users(
 ) -> Result<Json<Vec<UserResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let user_repo = UserRepo::new(state.db.clone());
 
-    let users = user_repo
-        .list_all()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let users = user_repo.list_all().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok(Json(
         users
@@ -134,8 +145,18 @@ async fn get_user(
 
     let user = user_repo
         .find(&user_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "User not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "User not found"),
+            )
+        })?;
 
     Ok(Json(UserResponse {
         id: user.id,
@@ -155,12 +176,27 @@ async fn set_life_json(
     // Verify user exists
     user_repo
         .find(&user_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, error_response("not_found", "User not found")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                error_response("not_found", "User not found"),
+            )
+        })?;
 
     user_repo
         .set_life_json_path(&user_id, req.path.as_deref())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error_response("db_error", &e.to_string()),
+            )
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -172,9 +208,12 @@ async fn delete_user(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let user_repo = UserRepo::new(state.db.clone());
 
-    user_repo
-        .delete(&user_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    user_repo.delete(&user_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -185,9 +224,12 @@ async fn list_sessions(
 ) -> Result<Json<Vec<SessionResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let session_repo = SessionRepo::new(state.db.clone());
 
-    let sessions = session_repo
-        .list_all()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let sessions = session_repo.list_all().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok(Json(
         sessions
@@ -211,9 +253,12 @@ async fn get_session_messages(
 ) -> Result<Json<Vec<MessageResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let session_repo = SessionRepo::new(state.db.clone());
 
-    let messages = session_repo
-        .get_messages(&session_id, 100)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let messages = session_repo.get_messages(&session_id, 100).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok(Json(
         messages
@@ -234,10 +279,12 @@ async fn get_session_messages(
 async fn list_telegram_groups(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<Vec<TelegramGroupConfig>>, (StatusCode, Json<ErrorResponse>)> {
-    let configs = state
-        .telegram_group_repo
-        .list()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let configs = state.telegram_group_repo.list().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok(Json(configs))
 }
@@ -251,10 +298,12 @@ async fn upsert_telegram_group(
     // Ensure path param matches body
     config.chat_id = chat_id;
 
-    state
-        .telegram_group_repo
-        .upsert(&config)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    state.telegram_group_repo.upsert(&config).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     Ok(StatusCode::OK)
 }
@@ -264,15 +313,20 @@ async fn delete_telegram_group(
     State(state): State<Arc<ApiState>>,
     Path(chat_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let deleted = state
-        .telegram_group_repo
-        .delete(&chat_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_response("db_error", &e.to_string())))?;
+    let deleted = state.telegram_group_repo.delete(&chat_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_response("db_error", &e.to_string()),
+        )
+    })?;
 
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, error_response("not_found", "Group config not found")))
+        Err((
+            StatusCode::NOT_FOUND,
+            error_response("not_found", "Group config not found"),
+        ))
     }
 }
 
@@ -289,6 +343,9 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/telegram/groups", get(list_telegram_groups))
         .route("/telegram/groups/{chat_id}", put(upsert_telegram_group))
         .route("/telegram/groups/{chat_id}", delete(delete_telegram_group))
-        .layer(middleware::from_fn_with_state(state.clone(), require_api_key))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ))
         .with_state(state)
 }

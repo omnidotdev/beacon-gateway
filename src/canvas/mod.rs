@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 use crate::Result;
 
@@ -175,7 +175,7 @@ pub struct CanvasTools {
 impl CanvasTools {
     /// Create new canvas tools wrapping a shared canvas
     #[must_use]
-    pub fn new(canvas: Arc<Mutex<Canvas>>) -> Self {
+    pub const fn new(canvas: Arc<Mutex<Canvas>>) -> Self {
         Self { canvas }
     }
 

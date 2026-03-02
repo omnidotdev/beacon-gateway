@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 use crate::api::ApiState;
@@ -91,18 +91,17 @@ pub async fn handle_activity(
     };
 
     let channel_id = conversation.id.clone();
-    let session = match state.session_repo.find_or_create(
-        &user.id,
-        "teams",
-        &channel_id,
-        &state.persona_id,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to find/create session");
-            return (StatusCode::OK, Json(WebhookResponse { ok: true }));
-        }
-    };
+    let session =
+        match state
+            .session_repo
+            .find_or_create(&user.id, "teams", &channel_id, &state.persona_id)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to find/create session");
+                return (StatusCode::OK, Json(WebhookResponse { ok: true }));
+            }
+        };
 
     // Store user message
     if let Err(e) = state

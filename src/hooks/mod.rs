@@ -30,7 +30,7 @@ pub struct HooksConfig {
     pub auto_reply: Vec<AutoReplyRule>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -118,9 +118,8 @@ impl HookManager {
         }
 
         // Run external hooks
-        let action = match HookAction::from_str(&event.action) {
-            Some(a) => a,
-            None => return result,
+        let Some(action) = HookAction::from_str(&event.action) else {
+            return result;
         };
 
         if let Some(hooks) = self.external_hooks.get(&action) {

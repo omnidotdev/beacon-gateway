@@ -69,7 +69,10 @@ pub async fn billing_middleware(
     match check_entitlement(&billing, entity_type, entity_id).await {
         Ok(true) => {}
         Ok(false) => {
-            return (StatusCode::FORBIDDEN, "API access not granted for this account")
+            return (
+                StatusCode::FORBIDDEN,
+                "API access not granted for this account",
+            )
                 .into_response();
         }
         Err(e) => {
@@ -98,7 +101,10 @@ async fn check_entitlement(
     entity_id: &str,
 ) -> Result<bool, synapse_billing::BillingError> {
     // Check cache first
-    if let Some(cached) = state.cache.get_entitlement(entity_type, entity_id, FEATURE_KEY_API_ACCESS)
+    if let Some(cached) =
+        state
+            .cache
+            .get_entitlement(entity_type, entity_id, FEATURE_KEY_API_ACCESS)
     {
         return Ok(cached.has_access);
     }
@@ -128,7 +134,10 @@ async fn check_usage(
     entity_id: &str,
 ) -> Result<bool, synapse_billing::BillingError> {
     // Check cache first
-    if let Some(cached) = state.cache.get_usage(entity_type, entity_id, METER_KEY_REQUESTS) {
+    if let Some(cached) = state
+        .cache
+        .get_usage(entity_type, entity_id, METER_KEY_REQUESTS)
+    {
         return Ok(cached.allowed);
     }
 
@@ -170,7 +179,11 @@ async fn handle_aether_error(
                 error = %error,
                 "Aether unreachable, rejecting request (fail-closed mode)"
             );
-            (StatusCode::SERVICE_UNAVAILABLE, "billing service unavailable").into_response()
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "billing service unavailable",
+            )
+                .into_response()
         }
     }
 }

@@ -94,8 +94,8 @@ impl Indexer {
                 _ => MemoryCategory::General,
             };
 
-            let mut memory = Memory::new(user_id.to_string(), category, fact.content)
-                .with_embedding(embedding);
+            let mut memory =
+                Memory::new(user_id.to_string(), category, fact.content).with_embedding(embedding);
 
             // Add tags
             for tag in fact.tags {

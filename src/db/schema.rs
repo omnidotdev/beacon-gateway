@@ -338,13 +338,11 @@ fn migrate_v9(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Backfill content_hash for existing memories that lack one
+/// Backfill `content_hash` for existing memories that lack one
 fn backfill_content_hashes(conn: &Connection) -> Result<()> {
     use sha2::{Digest, Sha256};
 
-    let mut stmt = conn.prepare(
-        "SELECT id, content FROM memories WHERE content_hash IS NULL",
-    )?;
+    let mut stmt = conn.prepare("SELECT id, content FROM memories WHERE content_hash IS NULL")?;
 
     let rows: Vec<(String, String)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?

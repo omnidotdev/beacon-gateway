@@ -68,7 +68,9 @@ impl NodeRegistry {
     /// Find a node that has the given capability
     #[must_use]
     pub fn find_by_cap(&self, cap: &str) -> Option<&NodeSession> {
-        self.nodes.values().find(|n| n.caps.iter().any(|c| c == cap))
+        self.nodes
+            .values()
+            .find(|n| n.caps.iter().any(|c| c == cap))
     }
 
     /// Find a node that supports the given command
@@ -79,7 +81,7 @@ impl NodeRegistry {
             .find(|n| n.commands.iter().any(|c| c == command))
     }
 
-    /// Prepare an invocation, returning (correlation_id, receiver)
+    /// Prepare an invocation, returning (`correlation_id`, receiver)
     ///
     /// The caller should send the request to the node and await the receiver
     ///
@@ -105,11 +107,9 @@ impl NodeRegistry {
     ///
     /// Returns true if the correlation ID was found and resolved
     pub fn handle_response(&mut self, correlation_id: &str, result: InvokeResult) -> bool {
-        if let Some(tx) = self.pending.remove(correlation_id) {
-            tx.send(result).is_ok()
-        } else {
-            false
-        }
+        self.pending
+            .remove(correlation_id)
+            .is_some_and(|tx| tx.send(result).is_ok())
     }
 
     /// Number of connected nodes

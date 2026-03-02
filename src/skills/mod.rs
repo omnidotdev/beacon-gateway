@@ -6,9 +6,9 @@ mod types;
 
 pub use manifold::ManifoldClient;
 pub use types::{
-    InstalledSkill, InstallKind, NodeManager, Skill, SkillFilter, SkillInstallPreferences,
-    SkillInstallResult, SkillInstallSpec, SkillMetadata, SkillPriority, SkillSnapshot,
-    SkillSource, SnapshotEntry, deduplicate_command_name, has_binary, merge_nested_metadata,
+    InstallKind, InstalledSkill, NodeManager, Skill, SkillFilter, SkillInstallPreferences,
+    SkillInstallResult, SkillInstallSpec, SkillMetadata, SkillPriority, SkillSnapshot, SkillSource,
+    SnapshotEntry, deduplicate_command_name, has_binary, merge_nested_metadata,
     sanitize_command_name,
 };
 
@@ -18,9 +18,10 @@ use std::path::{Path, PathBuf};
 use crate::{Error, Result};
 
 /// Skills compiled into the binary (lowest precedence)
-const BUNDLED_SKILLS: &[(&str, &str)] = &[
-    ("concise", "---\nname: concise\ndescription: Keep responses brief and direct\nalways: true\nuser_invocable: false\ntags:\n  - behavior\n---\n\nPrefer short, direct answers. Avoid filler phrases and unnecessary preamble.\n"),
-];
+const BUNDLED_SKILLS: &[(&str, &str)] = &[(
+    "concise",
+    "---\nname: concise\ndescription: Keep responses brief and direct\nalways: true\nuser_invocable: false\ntags:\n  - behavior\n---\n\nPrefer short, direct answers. Avoid filler phrases and unnecessary preamble.\n",
+)];
 
 /// Limits applied during directory scanning
 #[derive(Debug, Clone)]
@@ -43,7 +44,7 @@ impl Default for ScanLimits {
 impl ScanLimits {
     /// Build from a `SkillsConfig`
     #[must_use]
-    pub fn from_config(config: &crate::config::SkillsConfig) -> Self {
+    pub const fn from_config(config: &crate::config::SkillsConfig) -> Self {
         Self {
             max_skill_file_bytes: config.max_skill_file_bytes,
             max_candidates_per_root: config.max_candidates_per_root,
@@ -136,14 +137,18 @@ impl SkillRegistry {
     /// # Errors
     ///
     /// Returns an error if a directory cannot be read
-    pub fn scan_plugin_dirs(&mut self, dirs: &[PathBuf], config: &crate::config::SkillsConfig) -> Result<usize> {
+    pub fn scan_plugin_dirs(
+        &mut self,
+        dirs: &[PathBuf],
+        config: &crate::config::SkillsConfig,
+    ) -> Result<usize> {
         let limits = ScanLimits::from_config(config);
         let mut count = 0;
         for dir in dirs {
             if !dir.is_dir() {
                 continue;
             }
-            count += self.scan_directory_with_source(dir, &limits, SkillSource::Plugin)?;
+            count += self.scan_directory_with_source(dir, &limits, &SkillSource::Plugin)?;
         }
         Ok(count)
     }
@@ -199,12 +204,17 @@ impl SkillRegistry {
 
     /// Scan a directory for SKILL.md files with explicit safety limits
     fn scan_directory_with_limits(&mut self, dir: &Path, limits: &ScanLimits) -> Result<usize> {
-        self.scan_directory_with_source(dir, limits, SkillSource::Local)
+        self.scan_directory_with_source(dir, limits, &SkillSource::Local)
     }
 
     /// Scan a directory with explicit limits and source tag
-    fn scan_directory_with_source(&mut self, dir: &Path, limits: &ScanLimits, source: SkillSource) -> Result<usize> {
-        let count = self.scan_directory_inner(dir, limits, &source)?;
+    fn scan_directory_with_source(
+        &mut self,
+        dir: &Path,
+        limits: &ScanLimits,
+        source: &SkillSource,
+    ) -> Result<usize> {
+        let count = self.scan_directory_inner(dir, limits, source)?;
 
         // Nested root detection: if zero skills found, check for `dir/skills/`
         if count == 0 {
@@ -215,7 +225,7 @@ impl SkillRegistry {
                     nested = %nested.display(),
                     "no skills found in root, trying nested skills/ dir"
                 );
-                return self.scan_directory_inner(&nested, limits, &source);
+                return self.scan_directory_inner(&nested, limits, source);
             }
         }
 
@@ -223,7 +233,12 @@ impl SkillRegistry {
     }
 
     /// Inner scan with limits enforcement
-    fn scan_directory_inner(&mut self, dir: &Path, limits: &ScanLimits, source: &SkillSource) -> Result<usize> {
+    fn scan_directory_inner(
+        &mut self,
+        dir: &Path,
+        limits: &ScanLimits,
+        source: &SkillSource,
+    ) -> Result<usize> {
         let mut count = 0;
         let mut candidates_scanned = 0;
         let entries = std::fs::read_dir(dir).map_err(|e| Error::Skill(e.to_string()))?;
@@ -251,16 +266,18 @@ impl SkillRegistry {
             }
 
             // File size check
-            if let Ok(meta) = std::fs::metadata(&skill_file) {
-                if meta.len() as usize > limits.max_skill_file_bytes {
-                    tracing::warn!(
-                        path = %skill_file.display(),
-                        size = meta.len(),
-                        limit = limits.max_skill_file_bytes,
-                        "skill file exceeds size limit, skipping"
-                    );
-                    continue;
-                }
+            #[allow(clippy::cast_possible_truncation)]
+            // file size fits in usize on supported platforms
+            if let Ok(meta) = std::fs::metadata(&skill_file)
+                && meta.len() as usize > limits.max_skill_file_bytes
+            {
+                tracing::warn!(
+                    path = %skill_file.display(),
+                    size = meta.len(),
+                    limit = limits.max_skill_file_bytes,
+                    "skill file exceeds size limit, skipping"
+                );
+                continue;
             }
 
             if count >= limits.max_skills_per_source {

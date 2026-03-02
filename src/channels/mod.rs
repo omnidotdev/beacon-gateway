@@ -233,14 +233,14 @@ pub struct OutgoingMessage {
 impl OutgoingMessage {
     /// Create a simple `text` message
     #[must_use]
-    pub fn text(channel_id: String, content: String) -> Self {
+    pub const fn text(channel_id: String, content: String) -> Self {
         Self {
             channel_id,
             content,
             reply_to: None,
             thread_id: None,
             keyboard: None,
-            media: vec![],
+            media: Vec::new(),
             edit_target: None,
             voice_note: false,
         }
@@ -248,14 +248,14 @@ impl OutgoingMessage {
 
     /// Create a `reply` message
     #[must_use]
-    pub fn reply(channel_id: String, content: String, reply_to: String) -> Self {
+    pub const fn reply(channel_id: String, content: String, reply_to: String) -> Self {
         Self {
             channel_id,
             content,
             reply_to: Some(reply_to),
             thread_id: None,
             keyboard: None,
-            media: vec![],
+            media: Vec::new(),
             edit_target: None,
             voice_note: false,
         }

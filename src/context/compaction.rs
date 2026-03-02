@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use synapse_client::SynapseClient;
 
-use crate::db::{Indexer, MemoryRepo, SessionRepo};
 use crate::Result;
+use crate::db::{Indexer, MemoryRepo, SessionRepo};
 
 /// Configuration for session compaction
 #[derive(Debug, Clone)]
@@ -42,10 +42,10 @@ impl CompactionConfig {
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
-        if let Ok(val) = std::env::var("BEACON_COMPACT_THRESHOLD") {
-            if let Ok(n) = val.parse() {
-                config.max_messages_before_compact = n;
-            }
+        if let Ok(val) = std::env::var("BEACON_COMPACT_THRESHOLD")
+            && let Ok(n) = val.parse()
+        {
+            config.max_messages_before_compact = n;
         }
 
         if let Ok(val) = std::env::var("BEACON_COMPACT_FLUSH_MEMORY") {
@@ -117,8 +117,12 @@ impl SessionCompactor {
         }
 
         // Select oldest fraction for summarization
-        let compact_count =
-            (messages.len() as f64 * self.config.compact_fraction).ceil() as usize;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let compact_count = (messages.len() as f64 * self.config.compact_fraction).ceil() as usize;
         let compact_count = compact_count.max(1).min(messages.len() - 1);
 
         let to_summarize = &messages[..compact_count];
@@ -167,29 +171,29 @@ impl SessionCompactor {
 
         // Optionally extract facts to memory
         let mut facts_extracted = 0;
-        if self.config.flush_to_memory {
-            if let Some(indexer) = indexer {
-                match indexer
-                    .index_conversation(user_id, &conversation_text, Some(session_id), None)
-                    .await
-                {
-                    Ok(memories) => {
-                        facts_extracted = memories.len();
-                        if facts_extracted > 0 {
-                            tracing::info!(
-                                session = session_id,
-                                facts = facts_extracted,
-                                "compaction flushed facts to memory"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
+        if self.config.flush_to_memory
+            && let Some(indexer) = indexer
+        {
+            match indexer
+                .index_conversation(user_id, &conversation_text, Some(session_id), None)
+                .await
+            {
+                Ok(memories) => {
+                    facts_extracted = memories.len();
+                    if facts_extracted > 0 {
+                        tracing::info!(
                             session = session_id,
-                            error = %e,
-                            "compaction memory flush failed"
+                            facts = facts_extracted,
+                            "compaction flushed facts to memory"
                         );
                     }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        session = session_id,
+                        error = %e,
+                        "compaction memory flush failed"
+                    );
                 }
             }
         }
@@ -252,7 +256,8 @@ mod tests {
 
         // Create user and session
         let conn = pool.get().unwrap();
-        conn.execute("INSERT INTO users (id) VALUES ('compact-user')", []).unwrap();
+        conn.execute("INSERT INTO users (id) VALUES ('compact-user')", [])
+            .unwrap();
         drop(conn);
 
         let session = session_repo
@@ -276,7 +281,9 @@ mod tests {
         assert_eq!(count, 3);
 
         // Delete messages before the third message
-        let deleted = session_repo.delete_messages_before(&session.id, &_m3.id).unwrap();
+        let deleted = session_repo
+            .delete_messages_before(&session.id, &_m3.id)
+            .unwrap();
         // m1 and m2 should be deleted (created_at < m3.created_at)
         assert!(deleted >= 1, "expected at least 1 deleted, got {deleted}");
 
@@ -295,7 +302,8 @@ mod tests {
         let session_repo = SessionRepo::new(pool.clone());
 
         let conn = pool.get().unwrap();
-        conn.execute("INSERT INTO users (id) VALUES ('summary-user')", []).unwrap();
+        conn.execute("INSERT INTO users (id) VALUES ('summary-user')", [])
+            .unwrap();
         drop(conn);
 
         let session = session_repo

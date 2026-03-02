@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{Attachment, AttachmentKind, Channel, ChannelCapability, IncomingMessage, OutgoingMessage};
+use super::{
+    Attachment, AttachmentKind, Channel, ChannelCapability, IncomingMessage, OutgoingMessage,
+};
 use crate::{Error, Result};
 
 /// Matrix channel adapter
@@ -83,6 +85,7 @@ struct EventContent {
 struct MediaInfo {
     #[serde(rename = "mimetype")]
     mime_type: Option<String>,
+    #[allow(dead_code)]
     size: Option<u64>,
 }
 
@@ -281,9 +284,7 @@ impl MatrixChannel {
 
             loop {
                 // Build sync URL with long-polling timeout
-                let mut url = format!(
-                    "{homeserver_url}/_matrix/client/v3/sync?timeout=30000"
-                );
+                let mut url = format!("{homeserver_url}/_matrix/client/v3/sync?timeout=30000");
                 if let Some(token) = &current_token {
                     use std::fmt::Write;
                     let _ = write!(url, "&since={token}");
@@ -322,93 +323,98 @@ impl MatrixChannel {
                 current_token = Some(sync.next_batch);
 
                 // Process room events
-                if let Some(rooms) = sync.rooms {
-                    if let Some(joined) = rooms.join {
-                        for (room_id, room) in joined {
-                            if let Some(timeline) = room.timeline {
-                                for event in timeline.events {
-                                    // Skip non-message events
-                                    if event.event_type != "m.room.message" {
-                                        continue;
+                if let Some(rooms) = sync.rooms
+                    && let Some(joined) = rooms.join
+                {
+                    for (room_id, room) in joined {
+                        if let Some(timeline) = room.timeline {
+                            for event in timeline.events {
+                                // Skip non-message events
+                                if event.event_type != "m.room.message" {
+                                    continue;
+                                }
+
+                                // Skip our own messages
+                                if event.sender == user_id {
+                                    continue;
+                                }
+
+                                // Skip messages we sent (transaction_id present)
+                                if event.unsigned.transaction_id.is_some() {
+                                    continue;
+                                }
+
+                                let msgtype = event.content.msgtype.as_deref();
+
+                                // Handle text and media messages
+                                let (content, attachments) = match msgtype {
+                                    Some("m.text") => {
+                                        (event.content.body.unwrap_or_default(), Vec::new())
                                     }
+                                    Some("m.image" | "m.audio" | "m.video" | "m.file") => {
+                                        let body = event.content.body.clone().unwrap_or_default();
+                                        let mut atts = Vec::new();
 
-                                    // Skip our own messages
-                                    if event.sender == user_id {
-                                        continue;
-                                    }
-
-                                    // Skip messages we sent (transaction_id present)
-                                    if event.unsigned.transaction_id.is_some() {
-                                        continue;
-                                    }
-
-                                    let msgtype = event.content.msgtype.as_deref();
-
-                                    // Handle text and media messages
-                                    let (content, attachments) = match msgtype {
-                                        Some("m.text") => {
-                                            (event.content.body.unwrap_or_default(), Vec::new())
-                                        }
-                                        Some("m.image" | "m.audio" | "m.video" | "m.file") => {
-                                            let body = event.content.body.clone().unwrap_or_default();
-                                            let mut atts = Vec::new();
-
-                                            if let Some(mxc_url) = &event.content.url {
-                                                // Get MIME type from info or content
-                                                let mime = event.content.info
-                                                    .as_ref()
-                                                    .and_then(|i| i.mime_type.clone())
-                                                    .or_else(|| event.content.mime_type.clone())
-                                                    .unwrap_or_else(|| "application/octet-stream".to_string());
-
-                                                // Convert mxc:// to https:// download URL
-                                                let download_url = convert_mxc_to_https(mxc_url, &homeserver_url);
-
-                                                let kind = match msgtype {
-                                                    Some("m.image") => AttachmentKind::Image,
-                                                    Some("m.audio") => AttachmentKind::Audio,
-                                                    Some("m.video") => AttachmentKind::Video,
-                                                    _ => AttachmentKind::File,
-                                                };
-
-                                                atts.push(Attachment {
-                                                    kind,
-                                                    url: download_url,
-                                                    data: None,
-                                                    mime_type: mime,
-                                                    filename: Some(body.clone()),
+                                        if let Some(mxc_url) = &event.content.url {
+                                            // Get MIME type from info or content
+                                            let mime = event
+                                                .content
+                                                .info
+                                                .as_ref()
+                                                .and_then(|i| i.mime_type.clone())
+                                                .or_else(|| event.content.mime_type.clone())
+                                                .unwrap_or_else(|| {
+                                                    "application/octet-stream".to_string()
                                                 });
-                                            }
 
-                                            (body, atts)
+                                            // Convert mxc:// to https:// download URL
+                                            let download_url =
+                                                convert_mxc_to_https(mxc_url, &homeserver_url);
+
+                                            let kind = match msgtype {
+                                                Some("m.image") => AttachmentKind::Image,
+                                                Some("m.audio") => AttachmentKind::Audio,
+                                                Some("m.video") => AttachmentKind::Video,
+                                                _ => AttachmentKind::File,
+                                            };
+
+                                            atts.push(Attachment {
+                                                kind,
+                                                url: download_url,
+                                                data: None,
+                                                mime_type: mime,
+                                                filename: Some(body.clone()),
+                                            });
                                         }
-                                        _ => continue, // Skip other event types
-                                    };
 
-                                    let reply_to = event
-                                        .content
-                                        .relates_to
-                                        .and_then(|r| r.in_reply_to)
-                                        .map(|r| r.event_id);
-
-                                    let incoming = IncomingMessage {
-                                        id: event.event_id.unwrap_or_default(),
-                                        channel_id: room_id.clone(),
-                                        sender_id: event.sender.clone(),
-                                        sender_name: event.sender.clone(),
-                                        content,
-                                        is_dm: false,
-                                        reply_to,
-                                        attachments,
-                                        thread_id: None,
-                                        callback_data: None,
-                                    };
-
-                                    if let Some(tx) = &message_tx {
-                                        if let Err(e) = tx.send(incoming).await {
-                                            tracing::warn!(error = %e, "Failed to forward Matrix message");
-                                        }
+                                        (body, atts)
                                     }
+                                    _ => continue, // Skip other event types
+                                };
+
+                                let reply_to = event
+                                    .content
+                                    .relates_to
+                                    .and_then(|r| r.in_reply_to)
+                                    .map(|r| r.event_id);
+
+                                let incoming = IncomingMessage {
+                                    id: event.event_id.unwrap_or_default(),
+                                    channel_id: room_id.clone(),
+                                    sender_id: event.sender.clone(),
+                                    sender_name: event.sender.clone(),
+                                    content,
+                                    is_dm: false,
+                                    reply_to,
+                                    attachments,
+                                    thread_id: None,
+                                    callback_data: None,
+                                };
+
+                                if let Some(tx) = &message_tx
+                                    && let Err(e) = tx.send(incoming).await
+                                {
+                                    tracing::warn!(error = %e, "Failed to forward Matrix message");
                                 }
                             }
                         }
@@ -496,7 +502,10 @@ impl Channel for MatrixChannel {
 
         // Build request with optional HTML formatting for code blocks
         let (format, formatted_body) = if message.has_code_blocks() {
-            (Some("org.matrix.custom.html"), Some(convert_to_html(&message.content)))
+            (
+                Some("org.matrix.custom.html"),
+                Some(convert_to_html(&message.content)),
+            )
         } else {
             (None, None)
         };
@@ -603,12 +612,7 @@ impl Channel for MatrixChannel {
         Ok(())
     }
 
-    async fn remove_reaction(
-        &self,
-        channel_id: &str,
-        message_id: &str,
-        emoji: &str,
-    ) -> Result<()> {
+    async fn remove_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> Result<()> {
         // Matrix doesn't have a direct "remove reaction" API
         // Reactions are removed by redacting the reaction event
         // This would require tracking reaction event IDs

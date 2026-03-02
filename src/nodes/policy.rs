@@ -51,6 +51,7 @@ pub fn platform_defaults(platform: &str) -> HashSet<String> {
 
 /// Check if a command is allowed for a given platform + node declaration
 #[must_use]
+#[allow(clippy::implicit_hasher)]
 pub fn is_command_allowed(
     platform: &str,
     declared_commands: &[String],
@@ -89,8 +90,14 @@ mod tests {
     fn common_commands_on_all_platforms() {
         for platform in ["darwin", "linux", "windows", "ios", "android"] {
             let cmds = platform_defaults(platform);
-            assert!(cmds.contains("device.info"), "missing device.info on {platform}");
-            assert!(cmds.contains("canvas.present"), "missing canvas.present on {platform}");
+            assert!(
+                cmds.contains("device.info"),
+                "missing device.info on {platform}"
+            );
+            assert!(
+                cmds.contains("canvas.present"),
+                "missing canvas.present on {platform}"
+            );
         }
     }
 
@@ -99,10 +106,20 @@ mod tests {
         let deny = HashSet::new();
         let declared = vec!["device.info".to_string(), "system.run".to_string()];
 
-        assert!(is_command_allowed("darwin", &declared, &deny, "device.info"));
+        assert!(is_command_allowed(
+            "darwin",
+            &declared,
+            &deny,
+            "device.info"
+        ));
         assert!(is_command_allowed("darwin", &declared, &deny, "system.run"));
         // Not declared
-        assert!(!is_command_allowed("darwin", &declared, &deny, "browser.proxy"));
+        assert!(!is_command_allowed(
+            "darwin",
+            &declared,
+            &deny,
+            "browser.proxy"
+        ));
     }
 
     #[test]
@@ -111,6 +128,11 @@ mod tests {
         deny.insert("system.run".to_string());
         let declared = vec!["system.run".to_string()];
 
-        assert!(!is_command_allowed("darwin", &declared, &deny, "system.run"));
+        assert!(!is_command_allowed(
+            "darwin",
+            &declared,
+            &deny,
+            "system.run"
+        ));
     }
 }

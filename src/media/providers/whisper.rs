@@ -1,8 +1,8 @@
 //! Whisper provider for audio transcription
 
 use async_trait::async_trait;
-use reqwest::multipart::{Form, Part};
 use reqwest::Client;
+use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
 
 use crate::media::{MediaAnalysis, MediaConfig, MediaProvider};
@@ -46,12 +46,12 @@ impl WhisperProvider {
     /// Get file extension for MIME type
     fn extension_for_mime(mime_type: &str) -> &'static str {
         match mime_type {
-            "audio/mpeg" | "audio/mp3" => "mp3",
             "audio/mp4" | "audio/m4a" => "m4a",
             "audio/wav" => "wav",
             "audio/webm" => "webm",
             "audio/ogg" => "ogg",
             "audio/flac" => "flac",
+            // audio/mpeg, audio/mp3, and everything else default to mp3
             _ => "mp3",
         }
     }
@@ -92,7 +92,9 @@ impl MediaProvider for WhisperProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Media(format!("Whisper API error: {status} - {body}")));
+            return Err(Error::Media(format!(
+                "Whisper API error: {status} - {body}"
+            )));
         }
 
         let result: TranscriptionResponse = response

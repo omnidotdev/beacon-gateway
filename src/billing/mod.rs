@@ -51,8 +51,9 @@ impl BillingState {
 
         let app_id = std::env::var("AETHER_APP_ID").unwrap_or_else(|_| "synapse".to_string());
 
-        let api_key_str = std::env::var("AETHER_SERVICE_API_KEY")
-            .map_err(|_| anyhow::anyhow!("AETHER_SERVICE_API_KEY is required when AETHER_URL is set"))?;
+        let api_key_str = std::env::var("AETHER_SERVICE_API_KEY").map_err(|_| {
+            anyhow::anyhow!("AETHER_SERVICE_API_KEY is required when AETHER_URL is set")
+        })?;
         let service_api_key = SecretString::new(api_key_str.into());
 
         let fail_mode = match std::env::var("AETHER_FAIL_MODE").as_deref() {

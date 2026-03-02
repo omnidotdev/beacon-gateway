@@ -7,5 +7,5 @@ pub mod pairing;
 
 pub use auth::{AuthChallenge, AuthConfig, AuthMode, PairingRequest};
 pub use device::{DeviceManager, PairedDevice, TrustLevel};
-pub use identity::{verify_signature, DeviceIdentity};
+pub use identity::{DeviceIdentity, verify_signature};
 pub use pairing::{DmPolicy, PairedUser, PairingManager};

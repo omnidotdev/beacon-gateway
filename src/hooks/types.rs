@@ -17,6 +17,7 @@ pub enum HookAction {
 impl HookAction {
     /// Parse from string like "message:received"
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "message:received" | "message" => Some(Self::MessageReceived),
@@ -54,13 +55,13 @@ pub struct HookEvent {
     pub sender_name: String,
     /// Message content
     pub content: String,
-    /// Thread ID if in a thread
+    /// Thread ID if in a thread (`thread_id`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     /// Session ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// Agent response (only for after_agent)
+    /// Agent response (only for `after_agent`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
     /// Additional context
@@ -94,7 +95,7 @@ impl HookEvent {
         self
     }
 
-    /// Set agent response (for after_agent events)
+    /// Set agent response (for `after_agent` events)
     #[must_use]
     pub fn with_response(mut self, response: &str) -> Self {
         self.response = Some(response.to_string());
@@ -121,7 +122,7 @@ pub struct HookResult {
     /// Direct reply to send (bypasses or replaces agent)
     #[serde(default)]
     pub reply: Option<String>,
-    /// Modified response (for after_agent hooks)
+    /// Modified response (for `after_agent` hooks)
     #[serde(default)]
     pub modified_response: Option<String>,
     /// Messages to log/display
@@ -158,6 +159,7 @@ pub struct HookManifest {
     pub name: String,
     /// Description
     #[serde(default)]
+    #[allow(dead_code)]
     pub description: String,
     /// Events this hook subscribes to
     #[serde(default)]
@@ -170,7 +172,7 @@ pub struct HookManifest {
     pub requires: HookRequirements,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

@@ -168,7 +168,10 @@ impl LifeJsonReader {
 
     /// Get assistant-specific config from life.json
     #[must_use]
-    pub fn get_assistant_config<'a>(life_json: &'a LifeJson, assistant_id: &str) -> Option<&'a AssistantConfig> {
+    pub fn get_assistant_config<'a>(
+        life_json: &'a LifeJson,
+        assistant_id: &str,
+    ) -> Option<&'a AssistantConfig> {
         life_json.assistants.as_ref()?.get(assistant_id)
     }
 }
@@ -210,10 +213,10 @@ impl LifeJson {
 
         // Preferences context
         if let Some(prefs) = &self.preferences {
-            if let Some(comm) = &prefs.communication {
-                if let Some(style) = &comm.style {
-                    parts.push(format!("Communication style preference: {style}"));
-                }
+            if let Some(comm) = &prefs.communication
+                && let Some(style) = &comm.style
+            {
+                parts.push(format!("Communication style preference: {style}"));
             }
             if let Some(units) = &prefs.units {
                 if let Some(temp) = &units.temperature {
@@ -226,50 +229,41 @@ impl LifeJson {
         }
 
         // Assistant-specific context
-        if let Some(assistants) = &self.assistants {
-            if let Some(config) = assistants.get(assistant_id) {
-                // Learned facts
-                if let Some(facts) = &config.learned_facts {
-                    for fact in facts.iter().take(10) {
-                        parts.push(format!("Known fact: {}", fact.fact));
-                    }
+        if let Some(assistants) = &self.assistants
+            && let Some(config) = assistants.get(assistant_id)
+        {
+            // Learned facts
+            if let Some(facts) = &config.learned_facts {
+                for fact in facts.iter().take(10) {
+                    parts.push(format!("Known fact: {}", fact.fact));
                 }
+            }
 
-                // Expertise areas
-                if let Some(prefs) = &config.preferences {
-                    if let Some(expertise) = &prefs.expertise {
-                        if !expertise.is_empty() {
-                            parts.push(format!(
-                                "User has expertise in: {}",
-                                expertise.join(", ")
-                            ));
-                        }
-                    }
-                    if let Some(avoid) = &prefs.avoid_topics {
-                        if !avoid.is_empty() {
-                            parts.push(format!(
-                                "Topics to avoid: {}",
-                                avoid.join(", ")
-                            ));
-                        }
-                    }
+            // Expertise areas
+            if let Some(prefs) = &config.preferences {
+                if let Some(expertise) = &prefs.expertise
+                    && !expertise.is_empty()
+                {
+                    parts.push(format!("User has expertise in: {}", expertise.join(", ")));
                 }
+                if let Some(avoid) = &prefs.avoid_topics
+                    && !avoid.is_empty()
+                {
+                    parts.push(format!("Topics to avoid: {}", avoid.join(", ")));
+                }
+            }
 
-                // Current context
-                if let Some(ctx) = &config.context {
-                    if let Some(projects) = &ctx.current_projects {
-                        if !projects.is_empty() {
-                            parts.push(format!(
-                                "Current projects: {}",
-                                projects.join(", ")
-                            ));
-                        }
-                    }
-                    if let Some(goals) = &ctx.goals {
-                        if !goals.is_empty() {
-                            parts.push(format!("Current goals: {}", goals.join(", ")));
-                        }
-                    }
+            // Current context
+            if let Some(ctx) = &config.context {
+                if let Some(projects) = &ctx.current_projects
+                    && !projects.is_empty()
+                {
+                    parts.push(format!("Current projects: {}", projects.join(", ")));
+                }
+                if let Some(goals) = &ctx.goals
+                    && !goals.is_empty()
+                {
+                    parts.push(format!("Current goals: {}", goals.join(", ")));
                 }
             }
         }
@@ -303,7 +297,10 @@ mod tests {
             }
         }"#;
         let life_json: LifeJson = serde_json::from_str(json).unwrap();
-        assert_eq!(life_json.identity.as_ref().unwrap().name, Some("Brian".to_string()));
+        assert_eq!(
+            life_json.identity.as_ref().unwrap().name,
+            Some("Brian".to_string())
+        );
     }
 
     #[test]

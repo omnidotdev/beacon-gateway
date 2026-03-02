@@ -48,7 +48,10 @@ impl TelegramGroupConfigRepo {
     ///
     /// Returns error if database operation fails
     pub fn get(&self, chat_id: &str) -> Result<Option<TelegramGroupConfig>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let result = conn.query_row(
             "SELECT chat_id, chat_title, require_mention, reaction_level, ack_reaction, done_reaction, enabled
@@ -80,7 +83,10 @@ impl TelegramGroupConfigRepo {
     ///
     /// Returns error if database operation fails
     pub fn upsert(&self, config: &TelegramGroupConfig) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         conn.execute(
             r"INSERT INTO telegram_group_config (chat_id, chat_title, require_mention, reaction_level, ack_reaction, done_reaction, enabled, updated_at)
@@ -96,7 +102,7 @@ impl TelegramGroupConfigRepo {
             rusqlite::params![
                 config.chat_id,
                 config.chat_title,
-                config.require_mention.map(|b| i32::from(b)),
+                config.require_mention.map(i32::from),
                 config.reaction_level,
                 config.ack_reaction,
                 config.done_reaction,
@@ -113,7 +119,10 @@ impl TelegramGroupConfigRepo {
     ///
     /// Returns error if database operation fails
     pub fn delete(&self, chat_id: &str) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let deleted = conn.execute(
             "DELETE FROM telegram_group_config WHERE chat_id = ?1",
@@ -129,7 +138,10 @@ impl TelegramGroupConfigRepo {
     ///
     /// Returns error if database operation fails
     pub fn list(&self) -> Result<Vec<TelegramGroupConfig>> {
-        let conn = self.pool.get().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn.prepare(
             "SELECT chat_id, chat_title, require_mention, reaction_level, ack_reaction, done_reaction, enabled

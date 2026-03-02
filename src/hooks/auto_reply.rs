@@ -23,7 +23,7 @@ pub struct AutoReplyRule {
     pub case_insensitive: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -59,9 +59,7 @@ impl CompiledRule {
     /// Check if rule matches the event
     fn matches(&self, event: &HookEvent) -> bool {
         // Check channel filter
-        if !self.channels.is_empty()
-            && !self.channels.iter().any(|c| c == &event.channel)
-        {
+        if !self.channels.is_empty() && !self.channels.iter().any(|c| c == &event.channel) {
             return false;
         }
 
@@ -105,17 +103,15 @@ impl AutoReplyHandler {
     pub fn new(rules: &[AutoReplyRule]) -> Self {
         let compiled: Vec<_> = rules
             .iter()
-            .filter_map(|r| {
-                match CompiledRule::compile(r) {
-                    Ok(compiled) => Some(compiled),
-                    Err(e) => {
-                        tracing::warn!(
-                            pattern = %r.pattern,
-                            error = %e,
-                            "invalid auto-reply pattern, skipping"
-                        );
-                        None
-                    }
+            .filter_map(|r| match CompiledRule::compile(r) {
+                Ok(compiled) => Some(compiled),
+                Err(e) => {
+                    tracing::warn!(
+                        pattern = %r.pattern,
+                        error = %e,
+                        "invalid auto-reply pattern, skipping"
+                    );
+                    None
                 }
             })
             .collect();
@@ -127,7 +123,8 @@ impl AutoReplyHandler {
 
     /// Check if handler has any rules
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    #[allow(dead_code)]
+    pub const fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
 
@@ -137,7 +134,10 @@ impl AutoReplyHandler {
     pub fn handle(&self, event: &HookEvent) -> Option<HookResult> {
         // Only handle early message events
         let action = HookAction::from_str(&event.action)?;
-        if !matches!(action, HookAction::MessageReceived | HookAction::BeforeAgent) {
+        if !matches!(
+            action,
+            HookAction::MessageReceived | HookAction::BeforeAgent
+        ) {
             return None;
         }
 

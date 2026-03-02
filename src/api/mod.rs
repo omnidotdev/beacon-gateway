@@ -33,16 +33,19 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::Result;
 use crate::attachments::AttachmentProcessor;
 use crate::canvas::Canvas;
 use crate::channels::{TeamsChannel, TelegramAccountRegistry, TelegramChannel};
 use crate::context::ContextConfig;
-use crate::db::{DbPool, Embedder, Indexer, MemoryRepo, SessionRepo, SkillRepo, TelegramGroupConfigRepo, UserRepo};
+use crate::db::{
+    DbPool, Embedder, Indexer, MemoryRepo, SessionRepo, SkillRepo, TelegramGroupConfigRepo,
+    UserRepo,
+};
 use crate::hooks::HookManager;
 use crate::nodes::NodeRegistry;
 use crate::security::PairingManager;
 use crate::tools::ToolPolicy;
-use crate::Result;
 
 /// Information about the current LLM model
 #[derive(Debug, Clone, serde::Serialize)]
@@ -297,7 +300,7 @@ impl ApiServerBuilder {
 
     /// Set the max tokens for LLM responses
     #[must_use]
-    pub fn llm_max_tokens(mut self, tokens: u32) -> Self {
+    pub const fn llm_max_tokens(mut self, tokens: u32) -> Self {
         self.llm_max_tokens = tokens;
         self
     }
@@ -392,7 +395,7 @@ impl ApiServerBuilder {
 
     /// Set maximum context tokens from persona config
     #[must_use]
-    pub fn max_context_tokens(mut self, tokens: usize) -> Self {
+    pub const fn max_context_tokens(mut self, tokens: usize) -> Self {
         self.max_context_tokens = tokens;
         self
     }
@@ -406,7 +409,7 @@ impl ApiServerBuilder {
 
     /// Enable cloud mode (requires JWT, enables rate limiting)
     #[must_use]
-    pub fn cloud_mode(mut self, enabled: bool) -> Self {
+    pub const fn cloud_mode(mut self, enabled: bool) -> Self {
         self.cloud_mode = enabled;
         self
     }
@@ -483,6 +486,7 @@ impl ApiServerBuilder {
 
     /// Build the API server
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn build(self) -> ApiServer {
         let session_repo = SessionRepo::new(self.db.clone());
         let user_repo = UserRepo::new(self.db.clone());
@@ -501,7 +505,13 @@ impl ApiServerBuilder {
         let indexer = embedder
             .as_ref()
             .zip(openai_key.as_deref())
-            .map(|(emb, key)| Arc::new(Indexer::new((**emb).clone(), memory_repo.clone(), key.to_string())));
+            .map(|(emb, key)| {
+                Arc::new(Indexer::new(
+                    (**emb).clone(),
+                    memory_repo.clone(),
+                    key.to_string(),
+                ))
+            });
         let manifold_url = self
             .manifold_url
             .unwrap_or_else(|| "https://api.manifold.omni.dev".to_string());
@@ -588,9 +598,9 @@ impl ApiServerBuilder {
             jwt_cache: self.jwt_cache,
             persona_knowledge: self.persona_knowledge,
             max_context_tokens: self.max_context_tokens,
-            knowledge_cache_dir: self.knowledge_cache_dir.unwrap_or_else(|| {
-                PathBuf::from(".cache/omni/knowledge")
-            }),
+            knowledge_cache_dir: self
+                .knowledge_cache_dir
+                .unwrap_or_else(|| PathBuf::from(".cache/omni/knowledge")),
             cloud_mode: self.cloud_mode,
             rate_limiter,
             ws_senders: Some(Arc::new(RwLock::new(HashMap::new()))),
@@ -630,7 +640,10 @@ pub struct ApiServer {
 impl ApiServer {
     /// Build context configuration
     #[must_use]
-    pub fn context_config(persona_id: &str, persona_system_prompt: Option<String>) -> ContextConfig {
+    pub fn context_config(
+        persona_id: &str,
+        persona_system_prompt: Option<String>,
+    ) -> ContextConfig {
         ContextConfig {
             max_messages: 20,
             max_tokens: 4000,
@@ -644,17 +657,29 @@ impl ApiServer {
     fn router(&self) -> Router {
         let mut router = Router::new()
             .nest("/api/admin", admin::router(self.state.clone()))
-            .nest("/api/canvas", canvas::api::router(self.state.canvas.clone()))
+            .nest(
+                "/api/canvas",
+                canvas::api::router(self.state.canvas.clone()),
+            )
             .nest("/api/providers", providers::router(self.state.clone()))
             .nest("/api/knowledge", knowledge::router(self.state.clone()))
             .nest("/api/memories", life_json::router(self.state.clone()))
             .nest("/api/skills", skills::router(self.state.clone()))
-            .nest("/api/personas/marketplace", personas::router(self.state.clone()))
+            .nest(
+                "/api/personas/marketplace",
+                personas::router(self.state.clone()),
+            )
             .nest("/api/voice", voice::router(self.state.clone()))
             .nest("/api/webhooks", webhooks::router(self.state.clone()))
             .nest("/api/browser", browser::router(self.state.browser.clone()))
-            .nest("/api/nodes", nodes::router(self.state.node_registry.clone()))
-            .nest("/api/plugins", plugins::router(self.state.plugin_manager.clone()))
+            .nest(
+                "/api/nodes",
+                nodes::router(self.state.node_registry.clone()),
+            )
+            .nest(
+                "/api/plugins",
+                plugins::router(self.state.plugin_manager.clone()),
+            )
             .nest("/ws", websocket::router(self.state.clone()))
             .nest("/ws", nodes::ws_router(self.state.node_registry.clone()))
             .nest("/ws/canvas", canvas::router(self.state.canvas.clone()))
@@ -664,17 +689,18 @@ impl ApiServer {
         // Serve static files if configured
         if let Some(static_dir) = &self.static_dir {
             let index_file = static_dir.join("index.html");
-            let serve_dir = ServeDir::new(static_dir)
-                .not_found_service(ServeFile::new(&index_file));
+            let serve_dir =
+                ServeDir::new(static_dir).not_found_service(ServeFile::new(&index_file));
 
             router = router.fallback_service(serve_dir);
             tracing::info!(path = %static_dir.display(), "serving static files");
         }
 
         // Billing: entitlement + usage-limit enforcement (cloud mode only, when Aether is configured)
-        let router = if let (Some(billing_state), Some(jwt_cache)) =
-            (self.state.billing_state.clone(), self.state.jwt_cache.clone())
-        {
+        let router = if let (Some(billing_state), Some(jwt_cache)) = (
+            self.state.billing_state.clone(),
+            self.state.jwt_cache.clone(),
+        ) {
             router.layer(axum::middleware::from_fn(move |req, next| {
                 let billing = billing_state.clone();
                 let jc = jwt_cache.clone();
@@ -710,7 +736,9 @@ impl ApiServer {
         if self.state.cloud_mode {
             tracing::info!("cloud mode enabled: JWT required, rate limiting active");
             if self.state.synapse.is_none() {
-                tracing::error!("cloud mode enabled but no Synapse configured - users without BYOK keys will get errors");
+                tracing::error!(
+                    "cloud mode enabled but no Synapse configured - users without BYOK keys will get errors"
+                );
             }
         }
 

@@ -272,8 +272,7 @@ async fn test_tts(persona: Option<&str>, text: &str) -> anyhow::Result<()> {
 
     #[cfg(feature = "embedded-synapse")]
     let synapse = if !config.cloud_mode {
-        let synapse_cfg =
-            beacon_gateway::config::synapse_bridge::build_synapse_config(&config);
+        let synapse_cfg = beacon_gateway::config::synapse_bridge::build_synapse_config(&config);
         synapse_client::SynapseClient::embedded(synapse_cfg)
             .await
             .map_err(|e| anyhow::anyhow!("embedded synapse init failed: {e}"))?
@@ -402,17 +401,12 @@ fn cmd_logs(lines: usize, follow: bool) -> anyhow::Result<()> {
         anyhow::bail!("log file not found: {}", log_path.display());
     }
 
-    let mut args = vec![
-        format!("-n{lines}"),
-        log_path.display().to_string(),
-    ];
+    let mut args = vec![format!("-n{lines}"), log_path.display().to_string()];
     if follow {
         args.insert(0, "-f".to_string());
     }
 
-    let status = std::process::Command::new("tail")
-        .args(&args)
-        .status()?;
+    let status = std::process::Command::new("tail").args(&args).status()?;
 
     if !status.success() {
         anyhow::bail!("tail exited with {status}");

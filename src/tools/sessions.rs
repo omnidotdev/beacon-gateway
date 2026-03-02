@@ -6,8 +6,8 @@ use std::fmt;
 
 use serde::Serialize;
 
-use crate::db::{MessageRole, SessionRepo};
 use crate::Result;
+use crate::db::{MessageRole, SessionRepo};
 
 /// Tools for inter-session communication
 #[derive(Clone)]
@@ -52,7 +52,7 @@ pub struct MessageInfo {
 impl SessionTools {
     /// Create a new `SessionTools` instance
     #[must_use]
-    pub fn new(session_repo: SessionRepo) -> Self {
+    pub const fn new(session_repo: SessionRepo) -> Self {
         Self { session_repo }
     }
 

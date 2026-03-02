@@ -1,4 +1,4 @@
-//! Translate beacon Config into synapse_config::Config for embedded mode
+//! Translate beacon `Config` into `synapse_config::Config` for embedded mode
 //!
 //! Auto-configures LLM, STT, and TTS providers from available API keys
 
@@ -10,11 +10,12 @@ use synapse_config::tts::{TtsProviderConfig, TtsProviderType};
 /// Build a `synapse_config::Config` from beacon's config
 ///
 /// Maps API keys to LLM/STT/TTS providers:
-/// - Anthropic key → LLM anthropic provider
-/// - OpenAI key → LLM openai + STT whisper + TTS openai
-/// - OpenRouter key → LLM openrouter (via openai-compatible)
-/// - ElevenLabs key → TTS elevenlabs
-/// - Deepgram key → STT deepgram
+/// - Anthropic key -> LLM `anthropic` provider
+/// - `OpenAI` key -> LLM `openai` + STT `whisper` + TTS `openai`
+/// - `OpenRouter` key -> LLM `openrouter` (via openai-compatible)
+/// - `ElevenLabs` key -> TTS `elevenlabs`
+/// - Deepgram key -> STT `deepgram`
+#[must_use]
 pub fn build_synapse_config(config: &super::Config) -> synapse_config::Config {
     let mut sc = synapse_config::Config::default();
 

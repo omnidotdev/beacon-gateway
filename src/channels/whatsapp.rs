@@ -71,74 +71,7 @@ impl WhatsAppChannel {
             for change in &entry.changes {
                 if let Some(ref messages) = change.value.messages {
                     for msg in messages {
-                        // Get text content (direct or from caption)
-                        let mut content = msg
-                            .text
-                            .as_ref()
-                            .map(|t| t.body.clone())
-                            .unwrap_or_default();
-
-                        // Build attachments from media
-                        let mut attachments = Vec::new();
-
-                        if let Some(image) = &msg.image {
-                            let mime = image.mime_type.clone().unwrap_or_else(|| "image/jpeg".to_string());
-                            if let Some(caption) = &image.caption {
-                                if content.is_empty() {
-                                    content = caption.clone();
-                                }
-                            }
-                            attachments.push(Attachment {
-                                kind: AttachmentKind::Image,
-                                url: Some(format!("whatsapp://media/{}", image.id)),
-                                data: None,
-                                mime_type: mime,
-                                filename: None,
-                            });
-                        }
-
-                        if let Some(doc) = &msg.document {
-                            let mime = doc.mime_type.clone().unwrap_or_else(|| "application/octet-stream".to_string());
-                            if let Some(caption) = &doc.caption {
-                                if content.is_empty() {
-                                    content = caption.clone();
-                                }
-                            }
-                            attachments.push(Attachment {
-                                kind: AttachmentKind::from_mime(&mime),
-                                url: Some(format!("whatsapp://media/{}", doc.id)),
-                                data: None,
-                                mime_type: mime,
-                                filename: doc.filename.clone(),
-                            });
-                        }
-
-                        if let Some(audio) = &msg.audio {
-                            let mime = audio.mime_type.clone().unwrap_or_else(|| "audio/ogg".to_string());
-                            attachments.push(Attachment {
-                                kind: AttachmentKind::Audio,
-                                url: Some(format!("whatsapp://media/{}", audio.id)),
-                                data: None,
-                                mime_type: mime,
-                                filename: None,
-                            });
-                        }
-
-                        if let Some(video) = &msg.video {
-                            let mime = video.mime_type.clone().unwrap_or_else(|| "video/mp4".to_string());
-                            if let Some(caption) = &video.caption {
-                                if content.is_empty() {
-                                    content = caption.clone();
-                                }
-                            }
-                            attachments.push(Attachment {
-                                kind: AttachmentKind::Video,
-                                url: Some(format!("whatsapp://media/{}", video.id)),
-                                data: None,
-                                mime_type: mime,
-                                filename: None,
-                            });
-                        }
+                        let (content, attachments) = extract_message_content(msg);
 
                         // Skip if no content and no attachments
                         if content.is_empty() && attachments.is_empty() {
@@ -224,6 +157,89 @@ impl WhatsAppChannel {
     }
 }
 
+/// Extract text content and attachments from a `WhatsApp` message
+fn extract_message_content(msg: &WhatsAppMessage) -> (String, Vec<Attachment>) {
+    let mut content = msg
+        .text
+        .as_ref()
+        .map(|t| t.body.clone())
+        .unwrap_or_default();
+    let mut attachments = Vec::new();
+
+    if let Some(image) = &msg.image {
+        let mime = image
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "image/jpeg".to_string());
+        if let Some(caption) = &image.caption
+            && content.is_empty()
+        {
+            content.clone_from(caption);
+        }
+        attachments.push(Attachment {
+            kind: AttachmentKind::Image,
+            url: Some(format!("whatsapp://media/{}", image.id)),
+            data: None,
+            mime_type: mime,
+            filename: None,
+        });
+    }
+
+    if let Some(doc) = &msg.document {
+        let mime = doc
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        if let Some(caption) = &doc.caption
+            && content.is_empty()
+        {
+            content.clone_from(caption);
+        }
+        attachments.push(Attachment {
+            kind: AttachmentKind::from_mime(&mime),
+            url: Some(format!("whatsapp://media/{}", doc.id)),
+            data: None,
+            mime_type: mime,
+            filename: doc.filename.clone(),
+        });
+    }
+
+    if let Some(audio) = &msg.audio {
+        let mime = audio
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "audio/ogg".to_string());
+        attachments.push(Attachment {
+            kind: AttachmentKind::Audio,
+            url: Some(format!("whatsapp://media/{}", audio.id)),
+            data: None,
+            mime_type: mime,
+            filename: None,
+        });
+    }
+
+    if let Some(video) = &msg.video {
+        let mime = video
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "video/mp4".to_string());
+        if let Some(caption) = &video.caption
+            && content.is_empty()
+        {
+            content.clone_from(caption);
+        }
+        attachments.push(Attachment {
+            kind: AttachmentKind::Video,
+            url: Some(format!("whatsapp://media/{}", video.id)),
+            data: None,
+            mime_type: mime,
+            filename: None,
+        });
+    }
+
+    (content, attachments)
+}
+
 #[async_trait]
 impl Channel for WhatsAppChannel {
     fn name(&self) -> &'static str {
@@ -233,9 +249,7 @@ impl Channel for WhatsAppChannel {
     async fn connect(&mut self) -> Result<()> {
         // WhatsApp uses webhooks; "connect" validates the configuration
         if self.access_token.is_empty() {
-            return Err(Error::Channel(
-                "WhatsApp access token required".to_string(),
-            ));
+            return Err(Error::Channel("WhatsApp access token required".to_string()));
         }
         if self.phone_number_id.is_empty() {
             return Err(Error::Channel(
@@ -255,7 +269,12 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn send(&self, message: OutgoingMessage) -> Result<()> {
-        self.send_text(&message.channel_id, &message.content, message.reply_to.as_deref()).await
+        self.send_text(
+            &message.channel_id,
+            &message.content,
+            message.reply_to.as_deref(),
+        )
+        .await
     }
 
     fn is_connected(&self) -> bool {

@@ -31,16 +31,12 @@ impl ToolKind {
     pub fn classify(name: &str) -> Self {
         match name {
             // Read-only tools
-            "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch"
-            | "ListDir" | "NotebookRead" | "TaskList" | "TaskGet"
-            | "memory_search" | "cron_list" | "cron_get" => Self::Read,
+            "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch" | "ListDir" | "NotebookRead"
+            | "TaskList" | "TaskGet" | "memory_search" | "cron_list" | "cron_get" => Self::Read,
             // Interactive tools
             "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
-            // Mutating memory tools
-            "memory_store" | "memory_forget" => Self::Mutate,
-            // Mutating cron tools
-            "cron_schedule" | "cron_cancel" => Self::Mutate,
-            // Everything else defaults to Mutate (safe)
+            // Everything else defaults to Mutate (safe), including:
+            // memory_store, memory_forget, cron_schedule, cron_cancel
             _ => Self::Mutate,
         }
     }
@@ -56,7 +52,7 @@ pub struct ToolExecutor {
 
 impl ToolExecutor {
     /// Create a new tool executor
-    pub fn new(synapse: Arc<SynapseClient>, plugin_manager: SharedPluginManager) -> Self {
+    pub const fn new(synapse: Arc<SynapseClient>, plugin_manager: SharedPluginManager) -> Self {
         Self {
             synapse,
             plugin_manager,
@@ -80,6 +76,10 @@ impl ToolExecutor {
     }
 
     /// Fetch available tools from both Synapse MCP and loaded plugins
+    ///
+    /// # Errors
+    ///
+    /// Returns error if Synapse tool listing fails
     pub async fn list_tools(&self) -> Result<Vec<synapse_client::ToolDefinition>> {
         // Fetch Synapse MCP tools
         let mut definitions: Vec<synapse_client::ToolDefinition> = self
@@ -92,16 +92,18 @@ impl ToolExecutor {
             .collect();
 
         // Merge plugin tools
-        let pm = self.plugin_manager.lock().await;
-        for (scoped_name, tool_def) in pm.tools() {
-            definitions.push(synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: scoped_name,
-                    description: Some(tool_def.description),
-                    parameters: Some(tool_def.input_schema),
-                },
-            });
+        {
+            let pm_guard = self.plugin_manager.lock().await;
+            for (scoped_name, tool_def) in pm_guard.tools() {
+                definitions.push(synapse_client::ToolDefinition {
+                    tool_type: "function".to_owned(),
+                    function: synapse_client::FunctionDefinition {
+                        name: scoped_name,
+                        description: Some(tool_def.description),
+                        parameters: Some(tool_def.input_schema),
+                    },
+                });
+            }
         }
 
         // Include built-in memory tools if attached
@@ -118,14 +120,22 @@ impl ToolExecutor {
     }
 
     /// Execute a tool call, routing to plugin subprocess or Synapse MCP
+    ///
+    /// # Errors
+    ///
+    /// Returns error if tool execution fails
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
         // Route built-in memory tools
-        if name.starts_with("memory_") && let Some(ref mt) = self.memory_tools {
+        if name.starts_with("memory_")
+            && let Some(ref mt) = self.memory_tools
+        {
             return mt.execute(name, arguments).await;
         }
 
         // Route built-in cron tools
-        if name.starts_with("cron_") && let Some(ref ct) = self.cron_tools {
+        if name.starts_with("cron_")
+            && let Some(ref ct) = self.cron_tools
+        {
             return ct.execute(name, arguments).await;
         }
 
@@ -136,7 +146,7 @@ impl ToolExecutor {
 
         // Route to Synapse MCP
         let args: serde_json::Value = serde_json::from_str(arguments)
-            .unwrap_or(serde_json::Value::Object(Default::default()));
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::default()));
 
         let result = self
             .synapse
@@ -164,9 +174,11 @@ impl ToolExecutor {
             return Err(Error::Tool(format!("plugin disabled: {plugin_id}")));
         }
 
-        let entry = plugin.manifest.entry.as_deref().ok_or_else(|| {
-            Error::Tool(format!("plugin {plugin_id} has no entry point"))
-        })?;
+        let entry = plugin
+            .manifest
+            .entry
+            .as_deref()
+            .ok_or_else(|| Error::Tool(format!("plugin {plugin_id} has no entry point")))?;
 
         let entry_path = plugin.path.join(entry);
         // Release the lock before spawning
@@ -264,7 +276,10 @@ mod tests {
         assert_eq!(ToolKind::classify("ask_user"), ToolKind::Interactive);
         assert_eq!(ToolKind::classify("permission"), ToolKind::Interactive);
         assert_eq!(ToolKind::classify("AskUserQuestion"), ToolKind::Interactive);
-        assert_eq!(ToolKind::classify("location_request"), ToolKind::Interactive);
+        assert_eq!(
+            ToolKind::classify("location_request"),
+            ToolKind::Interactive
+        );
         // Memory tools
         assert_eq!(ToolKind::classify("memory_search"), ToolKind::Read);
         assert_eq!(ToolKind::classify("memory_store"), ToolKind::Mutate);
