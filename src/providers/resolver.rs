@@ -97,17 +97,14 @@ impl KeyResolver {
         identity_provider_id: &str,
         provider: &str,
     ) -> crate::Result<Option<ResolvedKey>> {
-        // Check cache
+        // Check cache — only return if this specific provider is cached
         {
             let cache = self.cache.read().await;
             if let Some(cached) = cache.get(identity_provider_id)
                 && cached.expires_at > Instant::now()
+                && let Some(key) = cached.keys.get(provider)
             {
-                return Ok(cached
-                    .keys
-                    .get(provider)
-                    .cloned()
-                    .or_else(|| self.env_fallback(provider)));
+                return Ok(Some(key.clone()));
             }
         }
 
@@ -115,18 +112,17 @@ impl KeyResolver {
         if self.has_vault() {
             match self.resolve_from_vault(identity_provider_id, provider).await {
                 Ok(Some(key)) => {
-                    // Cache the single resolved key
-                    let mut keys_map = HashMap::new();
-                    keys_map.insert(provider.to_string(), key.clone());
+                    // Merge into existing cache entry or create a new one
                     let mut cache = self.cache.write().await;
-                    cache.insert(
-                        identity_provider_id.to_string(),
-                        CachedUserKeys {
-                            keys: keys_map,
+                    let entry = cache
+                        .entry(identity_provider_id.to_string())
+                        .or_insert_with(|| CachedUserKeys {
+                            keys: HashMap::new(),
                             default_provider: None,
                             expires_at: Instant::now() + self.ttl,
-                        },
-                    );
+                        });
+                    entry.keys.insert(provider.to_string(), key.clone());
+                    entry.expires_at = Instant::now() + self.ttl;
                     return Ok(Some(key));
                 }
                 Ok(None) => {
