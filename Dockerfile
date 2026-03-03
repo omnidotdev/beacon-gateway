@@ -10,7 +10,16 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libasound2-dev \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Clone agent-core (path dep resolves to /agent-core from WORKDIR /app)
+ARG GITHUB_TOKEN
+RUN if [ -n "$GITHUB_TOKEN" ]; then \
+      git clone --depth 1 https://x-access-token:${GITHUB_TOKEN}@github.com/omnidotdev/agent-core.git /agent-core; \
+    else \
+      git clone --depth 1 https://github.com/omnidotdev/agent-core.git /agent-core; \
+    fi
 
 # Copy manifests first for layer caching
 COPY Cargo.toml Cargo.lock ./
