@@ -223,22 +223,40 @@ impl Daemon {
         );
         let model_id = self.config.llm_model.clone();
 
-        // Initialize BYOK key resolver if Synapse API is configured
-        let (key_resolver, jwt_cache) = if let (Some(api_url), Some(secret)) = (
-            &self.config.synapse_api_url,
-            &self.config.synapse_gateway_secret,
-        ) {
-            tracing::info!(url = %api_url, "BYOK enabled via Synapse");
+        // Initialize BYOK key resolver if Gatekeeper or Synapse API is configured
+        let has_gatekeeper = self.config.gatekeeper_url.is_some();
+        let has_synapse = self.config.synapse_api_url.is_some()
+            && self.config.synapse_gateway_secret.is_some();
+
+        let (key_resolver, jwt_cache) = if has_gatekeeper || has_synapse {
+            if has_gatekeeper {
+                tracing::info!(
+                    url = %self.config.gatekeeper_url.as_deref().unwrap_or_default(),
+                    "BYOK enabled via Gatekeeper vault"
+                );
+            }
+            if has_synapse {
+                tracing::info!(
+                    url = %self.config.synapse_api_url.as_deref().unwrap_or_default(),
+                    "BYOK enabled via Synapse"
+                );
+            }
+
             let resolver = Arc::new(crate::providers::KeyResolver::new(
-                api_url.clone(),
-                secret.clone(),
+                self.config.synapse_api_url.clone().unwrap_or_default(),
+                self.config.synapse_gateway_secret.clone().unwrap_or_default(),
                 self.config.api_keys.clone(),
+                self.config.gatekeeper_url.clone(),
+                self.config.gatekeeper_service_key.clone(),
             ));
+
             let auth_url = self
                 .config
                 .auth_base_url
                 .clone()
-                .unwrap_or_else(|| api_url.clone());
+                .or_else(|| self.config.gatekeeper_url.clone())
+                .or_else(|| self.config.synapse_api_url.clone())
+                .unwrap_or_default();
             let jwks = Arc::new(crate::api::jwt::JwksCache::new(auth_url));
             (Some(resolver), Some(jwks))
         } else {

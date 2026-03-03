@@ -88,6 +88,12 @@ pub struct Config {
 
     /// Telegram-specific configuration (populated when token is present)
     pub telegram: Option<TelegramConfig>,
+
+    /// Gatekeeper vault URL for direct BYOK key resolution
+    pub gatekeeper_url: Option<String>,
+
+    /// Service key for authenticating with Gatekeeper vault
+    pub gatekeeper_service_key: Option<String>,
 }
 
 /// HTTP API server configuration
@@ -696,6 +702,10 @@ impl Config {
         let synapse_api_url = std::env::var("SYNAPSE_API_URL").ok();
         let synapse_gateway_secret = std::env::var("SYNAPSE_GATEWAY_SECRET").ok();
 
+        // Gatekeeper vault (direct BYOK key resolution, bypasses Synapse)
+        let gatekeeper_url = std::env::var("GATEKEEPER_URL").ok();
+        let gatekeeper_service_key = std::env::var("GATEKEEPER_SERVICE_KEY").ok();
+
         // Synapse AI router (env > toml > default)
         let synapse_url = std::env::var("SYNAPSE_URL")
             .ok()
@@ -974,6 +984,8 @@ impl Config {
             sync,
             skills,
             telegram,
+            gatekeeper_url,
+            gatekeeper_service_key,
         })
     }
 

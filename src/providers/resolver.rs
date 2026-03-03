@@ -1,4 +1,4 @@
-//! Resolve per-user provider keys from Synapse
+//! Resolve per-user provider keys from Gatekeeper vault or Synapse
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -54,12 +54,22 @@ pub struct KeyResolver {
     cache: Arc<RwLock<HashMap<String, CachedUserKeys>>>,
     ttl: Duration,
     env_keys: ApiKeys,
+    /// Gatekeeper vault URL for direct BYOK resolution (skips Synapse)
+    gatekeeper_url: Option<String>,
+    /// Service key for authenticating with Gatekeeper vault
+    gatekeeper_service_key: Option<String>,
 }
 
 impl KeyResolver {
     /// Create a new key resolver
     #[must_use]
-    pub fn new(synapse_api_url: String, gateway_secret: String, env_keys: ApiKeys) -> Self {
+    pub fn new(
+        synapse_api_url: String,
+        gateway_secret: String,
+        env_keys: ApiKeys,
+        gatekeeper_url: Option<String>,
+        gatekeeper_service_key: Option<String>,
+    ) -> Self {
         Self {
             synapse_api_url,
             gateway_secret,
@@ -67,18 +77,21 @@ impl KeyResolver {
             cache: Arc::new(RwLock::new(HashMap::new())),
             ttl: Duration::from_secs(300), // 5 min
             env_keys,
+            gatekeeper_url,
+            gatekeeper_service_key,
         }
     }
 
     /// Resolve API key for a user + provider
     ///
-    /// Fetches all keys for the user from Synapse in one call, caches the full set,
-    /// returns the one for the requested provider. Falls back to env vars if Synapse
-    /// is unreachable.
+    /// Resolution order:
+    /// 1. If Gatekeeper vault is configured, resolve directly from vault
+    /// 2. Otherwise fetch all keys from Synapse, cache the full set
+    /// 3. Fall back to env vars if neither is reachable
     ///
     /// # Errors
     ///
-    /// Returns an error if Synapse is unreachable and the env fallback also fails.
+    /// Returns an error if all resolution sources fail.
     pub async fn resolve(
         &self,
         identity_provider_id: &str,
@@ -95,6 +108,33 @@ impl KeyResolver {
                     .get(provider)
                     .cloned()
                     .or_else(|| self.env_fallback(provider)));
+            }
+        }
+
+        // Try Gatekeeper vault first when configured
+        if self.has_vault() {
+            match self.resolve_from_vault(identity_provider_id, provider).await {
+                Ok(Some(key)) => {
+                    // Cache the single resolved key
+                    let mut keys_map = HashMap::new();
+                    keys_map.insert(provider.to_string(), key.clone());
+                    let mut cache = self.cache.write().await;
+                    cache.insert(
+                        identity_provider_id.to_string(),
+                        CachedUserKeys {
+                            keys: keys_map,
+                            default_provider: None,
+                            expires_at: Instant::now() + self.ttl,
+                        },
+                    );
+                    return Ok(Some(key));
+                }
+                Ok(None) => {
+                    tracing::debug!(provider, "no vault key found, falling through");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "gatekeeper vault unreachable, falling through");
+                }
             }
         }
 
@@ -164,6 +204,64 @@ impl KeyResolver {
             .await
             .map_err(|e| crate::Error::Vault(format!("invalid synapse response: {e}")))?;
         Ok(body)
+    }
+
+    /// Resolve a single provider key directly from Gatekeeper vault
+    async fn resolve_from_vault(
+        &self,
+        user_id: &str,
+        provider: &str,
+    ) -> crate::Result<Option<ResolvedKey>> {
+        let gatekeeper_url = self
+            .gatekeeper_url
+            .as_ref()
+            .ok_or_else(|| crate::Error::Vault("Gatekeeper URL not configured".to_string()))?;
+        let service_key = self
+            .gatekeeper_service_key
+            .as_ref()
+            .ok_or_else(|| {
+                crate::Error::Vault("Gatekeeper service key not configured".to_string())
+            })?;
+
+        let resp = self
+            .client
+            .post(format!(
+                "{}/api/vault/resolve",
+                gatekeeper_url.trim_end_matches('/')
+            ))
+            .header("Authorization", format!("Bearer {service_key}"))
+            .header("X-User-Id", user_id)
+            .json(&serde_json::json!({ "provider": provider }))
+            .send()
+            .await
+            .map_err(|e| crate::Error::Vault(format!("gatekeeper request failed: {e}")))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        if !resp.status().is_success() {
+            return Err(crate::Error::Vault(format!(
+                "gatekeeper vault returned {}",
+                resp.status()
+            )));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| crate::Error::Vault(format!("invalid gatekeeper response: {e}")))?;
+
+        Ok(Some(ResolvedKey {
+            api_key: body["key"].as_str().unwrap_or_default().to_string(),
+            model_override: body["model_override"].as_str().map(String::from),
+            is_user_key: true,
+        }))
+    }
+
+    /// Whether Gatekeeper vault resolution is configured
+    fn has_vault(&self) -> bool {
+        self.gatekeeper_url.is_some() && self.gatekeeper_service_key.is_some()
     }
 
     /// Fall back to env var key when Synapse is unreachable or user has no configured keys
@@ -347,6 +445,8 @@ mod tests {
             cache: Arc::new(RwLock::new(HashMap::new())),
             ttl: Duration::from_secs(300),
             env_keys: ApiKeys::default(),
+            gatekeeper_url: None,
+            gatekeeper_service_key: None,
         }
     }
 
