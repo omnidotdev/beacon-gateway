@@ -124,3 +124,9 @@ pub enum Error {
     #[error("install error: {0}")]
     Install(String),
 }
+
+impl From<agent_core::knowledge::EmbedderError> for Error {
+    fn from(e: agent_core::knowledge::EmbedderError) -> Self {
+        Self::Embedding(e.to_string())
+    }
+}
