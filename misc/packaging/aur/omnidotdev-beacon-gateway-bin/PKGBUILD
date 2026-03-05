@@ -1,0 +1,20 @@
+# Maintainer: Omni <team@omni.dev>
+pkgname=omnidotdev-beacon-gateway-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Voice and messaging gateway for AI assistants (pre-built)"
+arch=('x86_64')
+url="https://beacon.omni.dev"
+license=('MIT')
+depends=()
+provides=('omnidotdev-beacon-gateway')
+conflicts=('omnidotdev-beacon-gateway')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/omnidotdev/beacon-gateway/releases/download/v$pkgver/beacon-x86_64-unknown-linux-gnu.tar.gz"
+        "$pkgname-$pkgver-LICENSE::https://raw.githubusercontent.com/omnidotdev/beacon-gateway/v$pkgver/LICENSE.md")
+sha256sums=('SKIP'
+            'SKIP')
+
+package() {
+  install -Dm755 "beacon" "$pkgdir/usr/bin/beacon"
+  install -Dm644 "$pkgname-$pkgver-LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

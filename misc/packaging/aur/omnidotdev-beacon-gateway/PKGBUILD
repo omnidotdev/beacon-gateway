@@ -1,0 +1,32 @@
+# Maintainer: Omni <team@omni.dev>
+pkgname=omnidotdev-beacon-gateway
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Voice and messaging gateway for AI assistants"
+arch=('x86_64')
+url="https://beacon.omni.dev"
+license=('MIT')
+depends=()
+makedepends=('cargo')
+source=("https://github.com/omnidotdev/beacon-gateway/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "beacon-gateway-$pkgver"
+  # Replace local path dependency with git dependency for standalone builds
+  sed -i 's|agent-core = { path = "../../../agent-core" }|agent-core = { git = "https://github.com/omnidotdev/agent-core" }|' Cargo.toml
+  # Remove [patch] section that references the local path
+  sed -i '/^\[patch\."https:\/\/github\.com\/omnidotdev\/agent-core\.git"\]/,/^$/d' Cargo.toml
+  cargo fetch --locked
+}
+
+build() {
+  cd "beacon-gateway-$pkgver"
+  cargo build --release
+}
+
+package() {
+  cd "beacon-gateway-$pkgver"
+  install -Dm755 "target/release/beacon" "$pkgdir/usr/bin/beacon"
+  install -Dm644 "LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
