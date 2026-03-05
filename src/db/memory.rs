@@ -115,7 +115,7 @@ fn mmr_rerank(candidates: Vec<MmrCandidate>, limit: usize, lambda: f64) -> Vec<M
                 })
             };
 
-            let mmr_score = lambda * relevance - (1.0 - lambda) * max_sim;
+            let mmr_score = lambda.mul_add(relevance, -((1.0 - lambda) * max_sim));
             if mmr_score > best_mmr {
                 best_mmr = mmr_score;
                 best_idx = i;
@@ -564,7 +564,7 @@ impl MemoryRepo {
                 let decay = temporal_decay_factor(&memory.accessed_at, &now);
                 // Lower distance = better. Apply temporal decay as a bonus for recent memories.
                 // Combined score: lower is better (subtract decay bonus)
-                let combined = distance * (1.0 - DECAY_WEIGHT * decay);
+                let combined = distance * DECAY_WEIGHT.mul_add(-decay, 1.0);
                 // Invert so higher = better for MMR (MMR selects highest scores)
                 let score = 1.0 / (1.0 + combined);
                 MmrCandidate { memory, score }

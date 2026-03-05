@@ -348,8 +348,18 @@ impl TelegramConfig {
     /// Resolve a config value for a given account, falling back to global defaults
     #[must_use]
     pub fn resolve_for_account(&self, account_id: &str) -> ResolvedTelegramAccountConfig {
-        if let Some(acct) = self.accounts.get(account_id) {
-            ResolvedTelegramAccountConfig {
+        self.accounts.get(account_id).map_or_else(
+            || ResolvedTelegramAccountConfig {
+                bot_token: self.bot_token.clone(),
+                bot_username: self.bot_username.clone(),
+                require_mention_in_groups: self.require_mention_in_groups,
+                reaction_level: self.reaction_level,
+                ack_reaction: self.ack_reaction.clone(),
+                done_reaction: self.done_reaction.clone(),
+                streaming_mode: self.streaming_mode,
+                text_chunk_limit: self.text_chunk_limit,
+            },
+            |acct| ResolvedTelegramAccountConfig {
                 bot_token: acct.bot_token.clone(),
                 bot_username: acct
                     .bot_username
@@ -369,19 +379,8 @@ impl TelegramConfig {
                     .unwrap_or_else(|| self.done_reaction.clone()),
                 streaming_mode: acct.streaming_mode.unwrap_or(self.streaming_mode),
                 text_chunk_limit: acct.text_chunk_limit.unwrap_or(self.text_chunk_limit),
-            }
-        } else {
-            ResolvedTelegramAccountConfig {
-                bot_token: self.bot_token.clone(),
-                bot_username: self.bot_username.clone(),
-                require_mention_in_groups: self.require_mention_in_groups,
-                reaction_level: self.reaction_level,
-                ack_reaction: self.ack_reaction.clone(),
-                done_reaction: self.done_reaction.clone(),
-                streaming_mode: self.streaming_mode,
-                text_chunk_limit: self.text_chunk_limit,
-            }
-        }
+            },
+        )
     }
 }
 

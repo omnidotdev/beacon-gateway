@@ -102,7 +102,7 @@ async fn main() -> ExitCode {
         .with_env_filter(EnvFilter::new(filter))
         .init();
 
-    match run(cli).await {
+    match Box::pin(run(cli)).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!("fatal: {e}");
@@ -120,7 +120,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         return match cmd {
             Command::TestMic { duration } => test_mic(duration).await,
             Command::TestSpeaker => test_speaker().await,
-            Command::TestTts { text } => test_tts(persona_ref, &text).await,
+            Command::TestTts { text } => Box::pin(test_tts(persona_ref, &text)).await,
             Command::SetLifeJson { user, path } => set_life_json(persona_ref, &user, &path),
             Command::GetLifeJson { user } => get_life_json(persona_ref, &user),
             Command::Install => cmd_install(persona_ref, cli.port),
@@ -271,14 +271,14 @@ async fn test_tts(persona: Option<&str>, text: &str) -> anyhow::Result<()> {
     let config = Config::load(persona)?;
 
     #[cfg(feature = "embedded-synapse")]
-    let synapse = if !config.cloud_mode {
-        let synapse_cfg = beacon_gateway::config::synapse_bridge::build_synapse_config(&config);
-        synapse_client::SynapseClient::embedded(synapse_cfg)
-            .await
-            .map_err(|e| anyhow::anyhow!("embedded synapse init failed: {e}"))?
-    } else {
+    let synapse = if config.cloud_mode {
         synapse_client::SynapseClient::new(&config.synapse_url)
             .map_err(|e| anyhow::anyhow!("failed to create Synapse client: {e}"))?
+    } else {
+        let synapse_cfg = beacon_gateway::config::synapse_bridge::build_synapse_config(&config);
+        Box::pin(synapse_client::SynapseClient::embedded(synapse_cfg))
+            .await
+            .map_err(|e| anyhow::anyhow!("embedded synapse init failed: {e}"))?
     };
 
     #[cfg(not(feature = "embedded-synapse"))]

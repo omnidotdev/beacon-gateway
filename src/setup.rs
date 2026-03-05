@@ -89,11 +89,10 @@ pub fn run_setup() -> anyhow::Result<()> {
         }
     });
 
-    let prompt = if let Some(ref m) = masked {
-        format!("{provider_name} API key (current: {m}, leave blank to keep)")
-    } else {
-        format!("{provider_name} API key ({env_hint})")
-    };
+    let prompt = masked.as_ref().map_or_else(
+        || format!("{provider_name} API key ({env_hint})"),
+        |m| format!("{provider_name} API key (current: {m}, leave blank to keep)"),
+    );
 
     let api_key_input: String = Input::new()
         .with_prompt(&prompt)

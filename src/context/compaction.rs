@@ -77,7 +77,7 @@ pub struct SessionCompactor {
 impl SessionCompactor {
     /// Create a new compactor
     #[must_use]
-    pub fn new(config: CompactionConfig, synapse: Arc<SynapseClient>, model: String) -> Self {
+    pub const fn new(config: CompactionConfig, synapse: Arc<SynapseClient>, model: String) -> Self {
         Self {
             config,
             synapse,
@@ -87,7 +87,7 @@ impl SessionCompactor {
 
     /// Check if compaction is needed based on message count
     #[must_use]
-    pub fn needs_compaction(&self, message_count: usize) -> bool {
+    pub const fn needs_compaction(&self, message_count: usize) -> bool {
         message_count > self.config.max_messages_before_compact
     }
 

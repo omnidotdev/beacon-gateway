@@ -296,7 +296,9 @@ async fn invoke_node(
                 &format!("node '{node_id}' not found"),
             )
         })?;
-        (node.platform.clone(), node.commands.clone())
+        let result = (node.platform.clone(), node.commands.clone());
+        drop(reg);
+        result
     };
 
     let deny_list = HashSet::new();

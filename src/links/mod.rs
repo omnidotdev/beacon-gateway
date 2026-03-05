@@ -200,16 +200,17 @@ impl LinkProcessor {
                             href.to_string()
                         } else if href.starts_with('/') {
                             // Make absolute URL
-                            if let Ok(base) = url::Url::parse(url) {
-                                format!(
-                                    "{}://{}{}",
-                                    base.scheme(),
-                                    base.host_str().unwrap_or(""),
-                                    href
-                                )
-                            } else {
-                                href.to_string()
-                            }
+                            url::Url::parse(url).map_or_else(
+                                |_| href.to_string(),
+                                |base| {
+                                    format!(
+                                        "{}://{}{}",
+                                        base.scheme(),
+                                        base.host_str().unwrap_or(""),
+                                        href
+                                    )
+                                },
+                            )
                         } else {
                             href.to_string()
                         }

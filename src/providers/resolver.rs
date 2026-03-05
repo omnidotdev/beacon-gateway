@@ -126,6 +126,7 @@ impl KeyResolver {
                         });
                     entry.keys.insert(provider.to_string(), key.clone());
                     entry.expires_at = Instant::now() + self.ttl;
+                    drop(cache);
                     return Ok(Some(key));
                 }
                 Ok(None) => {
@@ -256,7 +257,7 @@ impl KeyResolver {
     }
 
     /// Whether Gatekeeper vault resolution is configured
-    fn has_vault(&self) -> bool {
+    const fn has_vault(&self) -> bool {
         self.gatekeeper_url.is_some() && self.gatekeeper_service_key.is_some()
     }
 

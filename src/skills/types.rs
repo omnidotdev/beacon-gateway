@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// Serde helper for fields that default to `true`
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

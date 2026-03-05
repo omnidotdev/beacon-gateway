@@ -486,7 +486,7 @@ impl Daemon {
                             tracing::error!(account = %acct_id, error = %e, "Telegram account connect failed");
                             continue;
                         }
-                        tg.start_polling(std::time::Duration::from_secs(1));
+                        drop(tg.start_polling(std::time::Duration::from_secs(1)));
                         tracing::info!(account = %acct_id, "Telegram account using polling mode");
                         accounts.insert(
                             acct_id.clone(),
@@ -889,7 +889,7 @@ impl Daemon {
                 tracing::error!(error = %e, "Signal connect failed");
             } else {
                 // Spawn polling loop to fetch incoming messages
-                signal.start_polling(std::time::Duration::from_secs(5));
+                drop(signal.start_polling(std::time::Duration::from_secs(5)));
 
                 let synapse = Arc::clone(&synapse);
                 let model_id = model_id.clone();
@@ -1156,7 +1156,7 @@ impl Daemon {
 
         // Telegram (polling mode — only when no public URL for webhooks)
         if let (Some(tg), Some(rx)) = (telegram, telegram_polling_rx) {
-            tg.start_polling(std::time::Duration::from_secs(1));
+            drop(tg.start_polling(std::time::Duration::from_secs(1)));
 
             let synapse = Arc::clone(&synapse);
             let model_id = model_id.clone();

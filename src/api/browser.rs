@@ -131,6 +131,7 @@ async fn navigate(
             }),
         )
     })?;
+    drop(guard);
 
     Ok(Json(NavigateResponse {
         url: content.url,
@@ -155,6 +156,7 @@ async fn screenshot(
             }),
         )
     })?;
+    drop(guard);
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&shot.data);
 
@@ -180,6 +182,7 @@ async fn click(
             }),
         )
     })?;
+    drop(guard);
 
     Ok(StatusCode::OK)
 }
@@ -203,6 +206,7 @@ async fn type_text(
                 }),
             )
         })?;
+    drop(guard);
 
     Ok(StatusCode::OK)
 }
@@ -223,6 +227,7 @@ async fn execute(
             }),
         )
     })?;
+    drop(guard);
 
     Ok(Json(ExecuteResponse { result }))
 }
