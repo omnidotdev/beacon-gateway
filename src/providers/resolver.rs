@@ -110,7 +110,10 @@ impl KeyResolver {
 
         // Try Gatekeeper vault first when configured
         if self.has_vault() {
-            match self.resolve_from_vault(identity_provider_id, provider).await {
+            match self
+                .resolve_from_vault(identity_provider_id, provider)
+                .await
+            {
                 Ok(Some(key)) => {
                     // Merge into existing cache entry or create a new one
                     let mut cache = self.cache.write().await;
@@ -212,12 +215,9 @@ impl KeyResolver {
             .gatekeeper_url
             .as_ref()
             .ok_or_else(|| crate::Error::Vault("Gatekeeper URL not configured".to_string()))?;
-        let service_key = self
-            .gatekeeper_service_key
-            .as_ref()
-            .ok_or_else(|| {
-                crate::Error::Vault("Gatekeeper service key not configured".to_string())
-            })?;
+        let service_key = self.gatekeeper_service_key.as_ref().ok_or_else(|| {
+            crate::Error::Vault("Gatekeeper service key not configured".to_string())
+        })?;
 
         let resp = self
             .client

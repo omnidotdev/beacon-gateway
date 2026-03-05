@@ -225,8 +225,8 @@ impl Daemon {
 
         // Initialize BYOK key resolver if Gatekeeper or Synapse API is configured
         let has_gatekeeper = self.config.gatekeeper_url.is_some();
-        let has_synapse = self.config.synapse_api_url.is_some()
-            && self.config.synapse_gateway_secret.is_some();
+        let has_synapse =
+            self.config.synapse_api_url.is_some() && self.config.synapse_gateway_secret.is_some();
 
         let (key_resolver, jwt_cache) = if has_gatekeeper || has_synapse {
             if has_gatekeeper {
@@ -244,7 +244,10 @@ impl Daemon {
 
             let resolver = Arc::new(crate::providers::KeyResolver::new(
                 self.config.synapse_api_url.clone().unwrap_or_default(),
-                self.config.synapse_gateway_secret.clone().unwrap_or_default(),
+                self.config
+                    .synapse_gateway_secret
+                    .clone()
+                    .unwrap_or_default(),
                 self.config.api_keys.clone(),
                 self.config.gatekeeper_url.clone(),
                 self.config.gatekeeper_service_key.clone(),
