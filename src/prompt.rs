@@ -117,18 +117,18 @@ pub fn build_system_prompt_with_budget(
         .collect();
 
     // Track budget
-    let mut total_chars: usize = must_include.iter().map(|s| s.skill.content.len()).sum();
+    let mut total_chars: usize = must_include.iter().map(|s| compact_entry_len(s)).sum();
     let mut total_count = must_include.len();
 
     // Fill standard skills within budget
     let mut included_standard = Vec::new();
     for s in &standard {
         if total_count >= budget.max_skills
-            || total_chars + s.skill.content.len() > budget.max_chars
+            || total_chars + compact_entry_len(s) > budget.max_chars
         {
             break;
         }
-        total_chars += s.skill.content.len();
+        total_chars += compact_entry_len(s);
         total_count += 1;
         included_standard.push(*s);
     }
@@ -137,11 +137,11 @@ pub fn build_system_prompt_with_budget(
     let mut included_supplementary = Vec::new();
     for s in &supplementary {
         if total_count >= budget.max_skills
-            || total_chars + s.skill.content.len() > budget.max_chars
+            || total_chars + compact_entry_len(s) > budget.max_chars
         {
             break;
         }
-        total_chars += s.skill.content.len();
+        total_chars += compact_entry_len(s);
         total_count += 1;
         included_supplementary.push(*s);
     }
@@ -218,6 +218,15 @@ pub fn build_system_prompt_with_budget(
         ));
     }
 
+    // Add skill selection instructions if any skills were included
+    let has_any_skills = !overrides.is_empty()
+        || !always_non_override.is_empty()
+        || !included_standard.is_empty()
+        || !included_supplementary.is_empty();
+    if has_any_skills {
+        sections.push(SKILL_SELECTION_INSTRUCTIONS.to_string());
+    }
+
     sections.join("\n\n")
 }
 
@@ -289,24 +298,57 @@ pub fn build_system_prompt(
         ));
     }
 
+    // Add skill selection instructions if any skills were included
+    let has_any_skills =
+        !overrides.is_empty() || !standard.is_empty() || !supplementary.is_empty();
+    if has_any_skills {
+        sections.push(SKILL_SELECTION_INSTRUCTIONS.to_string());
+    }
+
     sections.join("\n\n")
 }
 
+/// Instructions for LLM to select and read skills on demand
+const SKILL_SELECTION_INSTRUCTIONS: &str = "\
+Before responding, scan the <available_skills> entries above.
+- If exactly one skill clearly applies: read its SKILL.md at the listed location using the Bash tool (`cat <location>`), then follow it.
+- If multiple could apply: choose the most specific one, read it, then follow it.
+- If none clearly apply: respond without reading any skill.
+- Never read more than one skill per turn.";
+
+/// Calculate the compact prompt entry size for a skill
+fn compact_entry_len(s: &InstalledSkill) -> usize {
+    // <skill name="..." description="..." location="..." />
+    97 + s.skill.metadata.name.len()
+        + s.skill.metadata.description.len()
+        + s.skill.location.as_ref().map_or(7, |l| l.len())
+}
+
 /// Format a group of skills with a header into a tagged section
+///
+/// Uses compact format: name + description + location only.
+/// The LLM reads the full SKILL.md via tool when it selects a skill.
 fn format_skill_section(header: &str, skills: &[&InstalledSkill]) -> String {
     let skill_blocks: Vec<String> = skills
         .iter()
         .map(|s| {
+            let location = s
+                .skill
+                .location
+                .as_deref()
+                .unwrap_or("unknown");
             format!(
-                "<skill name=\"{}\">\n{}\n</skill>",
-                s.skill.metadata.name, s.skill.content
+                "<skill name=\"{}\" description=\"{}\" location=\"{}\" />",
+                s.skill.metadata.name,
+                s.skill.metadata.description,
+                location,
             )
         })
         .collect();
 
     format!(
-        "<skills>\n{header}\n\n{}\n</skills>",
-        skill_blocks.join("\n\n")
+        "<available_skills>\n{header}\n\n{}\n</available_skills>",
+        skill_blocks.join("\n")
     )
 }
 
@@ -342,6 +384,7 @@ mod tests {
                 },
                 content: content.to_string(),
                 source: SkillSource::Local,
+                location: Some(format!("~/.config/omni/beacon/skills/{name}/SKILL.md")),
             },
             installed_at: chrono::Utc::now(),
             enabled: true,
@@ -359,7 +402,7 @@ mod tests {
         let result = build_system_prompt("Orin", "You are a helpful otter.", &[]);
         assert!(result.contains("You are a helpful otter."));
         assert!(result.contains("Your name is Orin"));
-        assert!(!result.contains("<skills>"));
+        assert!(!result.contains("<available_skills>"));
     }
 
     #[test]
@@ -476,14 +519,15 @@ mod tests {
                 SkillPriority::Supplementary,
             ),
         ];
+        // Compact entries are ~160 chars each; allow only 1 skill
         let budget = PromptBudget {
             max_skills: 1,
-            max_chars: 100,
+            max_chars: 200,
             voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &skills, &budget);
-        assert!(result.contains("standard content"));
-        assert!(!result.contains("supplementary content"));
+        assert!(result.contains("<skill name=\"std1\""));
+        assert!(!result.contains("<skill name=\"sup1\""));
     }
 
     #[test]
@@ -496,7 +540,7 @@ mod tests {
             voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
-        assert!(!result.contains("secret content"));
+        assert!(!result.contains("<skill name=\"hidden\""));
     }
 
     #[test]
@@ -509,7 +553,7 @@ mod tests {
             voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
-        assert!(result.contains("always content"));
+        assert!(result.contains("<skill name=\"always_on\""));
     }
 
     #[test]
@@ -522,7 +566,7 @@ mod tests {
             voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
-        assert!(!result.contains("gated content"));
+        assert!(!result.contains("<skill name=\"env_gated\""));
     }
 
     #[test]
@@ -596,7 +640,7 @@ mod tests {
             voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
-        assert!(!result.contains("os gated content"));
+        assert!(!result.contains("<skill name=\"wrong_os\""));
     }
 
     #[test]
@@ -609,7 +653,7 @@ mod tests {
             voice_enabled: false,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget);
-        assert!(!result.contains("bin gated content"));
+        assert!(!result.contains("<skill name=\"missing_bin\""));
     }
 
     #[test]
@@ -654,7 +698,7 @@ mod tests {
         };
         let result =
             build_system_prompt_with_budget("Orin", "", &[skill.clone()], &budget_no_voice);
-        assert!(!result.contains("voice gated content"));
+        assert!(!result.contains("<skill name=\"voice_skill\""));
 
         // With voice enabled, skill should be included
         let budget_voice = PromptBudget {
@@ -663,6 +707,6 @@ mod tests {
             voice_enabled: true,
         };
         let result = build_system_prompt_with_budget("Orin", "", &[skill], &budget_voice);
-        assert!(result.contains("voice gated content"));
+        assert!(result.contains("<skill name=\"voice_skill\""));
     }
 }

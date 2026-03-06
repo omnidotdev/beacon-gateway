@@ -98,11 +98,11 @@ impl SkillRepo {
                 disable_model_invocation, emoji, requires_env, command_name, user_id,
                 os, requires_bins, requires_any_bins, primary_env,
                 command_dispatch_tool, api_key, skill_env,
-                install_specs, requires_config
+                install_specs, requires_config, location
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
                 ?20, ?21, ?22, ?23, ?24, NULL, '{}',
-                ?25, ?26
+                ?25, ?26, ?27
             )
             ",
             rusqlite::params![
@@ -132,6 +132,7 @@ impl SkillRepo {
                 command_dispatch_tool,
                 install_specs_json,
                 requires_config_json,
+                skill.location,
             ],
         )?;
 
@@ -194,7 +195,7 @@ impl SkillRepo {
         emoji, requires_env, command_name, user_id,
         os, requires_bins, requires_any_bins, primary_env,
         command_dispatch_tool, api_key, skill_env,
-        install_specs, requires_config
+        install_specs, requires_config, location
     ";
 
     /// Get an installed skill by ID
@@ -432,8 +433,9 @@ impl SkillRepo {
                         os = ?8, requires_bins = ?9, requires_any_bins = ?10,
                         primary_env = ?11, command_dispatch_tool = ?12,
                         install_specs = ?13, requires_config = ?14,
+                        location = ?15,
                         updated_at = datetime('now')
-                    WHERE id = ?15
+                    WHERE id = ?16
                     ",
                 rusqlite::params![
                     skill.content,
@@ -450,6 +452,7 @@ impl SkillRepo {
                     command_dispatch_tool,
                     install_specs_json,
                     requires_config_json,
+                    skill.location,
                     existing.skill.id,
                 ],
             )?;
@@ -463,6 +466,7 @@ impl SkillRepo {
                     metadata: skill.metadata.clone(),
                     content: skill.content.clone(),
                     source: SkillSource::Bundled,
+                    location: skill.location.clone(),
                 },
                 installed_at: existing.installed_at,
                 enabled: existing.enabled,
@@ -651,6 +655,8 @@ impl SkillRepo {
         let requires_config_json: String = row
             .get::<_, Option<String>>(29)?
             .unwrap_or_else(|| "[]".to_string());
+        // v18 column
+        let location: Option<String> = row.get(30).unwrap_or(None);
 
         let skill_env: HashMap<String, String> =
             serde_json::from_str(&skill_env_json).unwrap_or_default();
@@ -698,6 +704,7 @@ impl SkillRepo {
                 },
                 content,
                 source,
+                location,
             },
             installed_at,
             enabled,
@@ -742,6 +749,7 @@ mod tests {
             },
             content: "# Test Skill\n\nThis is a test.".to_string(),
             source: SkillSource::Local,
+            location: None,
         }
     }
 

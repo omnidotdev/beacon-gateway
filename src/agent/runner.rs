@@ -102,12 +102,14 @@ pub async fn run_agent_turn(state: &ApiState, config: AgentRunConfig) -> crate::
     ));
 
     // Fetch available tools
+    let exec_tool = Arc::new(crate::tools::BuiltinExecTool::default());
     let tools = {
         let executor = crate::tools::executor::ToolExecutor::new(
             Arc::clone(&synapse),
             state.plugin_manager.clone(),
         )
-        .with_memory_tools(Arc::clone(&memory_tools));
+        .with_memory_tools(Arc::clone(&memory_tools))
+        .with_exec_tool(Arc::clone(&exec_tool));
         executor.list_tools().await.ok()
     };
 
@@ -222,7 +224,8 @@ pub async fn run_agent_turn(state: &ApiState, config: AgentRunConfig) -> crate::
                     Arc::clone(&synapse),
                     state.plugin_manager.clone(),
                 )
-                .with_memory_tools(Arc::clone(&memory_tools)),
+                .with_memory_tools(Arc::clone(&memory_tools))
+                .with_exec_tool(Arc::clone(&exec_tool)),
             );
 
             // Headless: skip interactive tools, run the rest

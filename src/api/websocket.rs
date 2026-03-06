@@ -572,7 +572,8 @@ async fn handle_chat_message(
         let executor = crate::tools::executor::ToolExecutor::new(
             Arc::clone(&synapse),
             state.plugin_manager.clone(),
-        );
+        )
+        .with_exec_tool(Arc::new(crate::tools::BuiltinExecTool::default()));
         let result = executor
             .execute(tool_name, arguments)
             .await

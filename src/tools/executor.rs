@@ -48,6 +48,7 @@ pub struct ToolExecutor {
     plugin_manager: SharedPluginManager,
     memory_tools: Option<Arc<crate::tools::BuiltinMemoryTools>>,
     cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
+    exec_tool: Option<Arc<crate::tools::BuiltinExecTool>>,
 }
 
 impl ToolExecutor {
@@ -58,6 +59,7 @@ impl ToolExecutor {
             plugin_manager,
             memory_tools: None,
             cron_tools: None,
+            exec_tool: None,
         }
     }
 
@@ -75,21 +77,31 @@ impl ToolExecutor {
         self
     }
 
+    /// Attach built-in exec tool to this executor
+    #[must_use]
+    pub fn with_exec_tool(mut self, tool: Arc<crate::tools::BuiltinExecTool>) -> Self {
+        self.exec_tool = Some(tool);
+        self
+    }
+
     /// Fetch available tools from both Synapse MCP and loaded plugins
     ///
     /// # Errors
     ///
     /// Returns error if Synapse tool listing fails
     pub async fn list_tools(&self) -> Result<Vec<synapse_client::ToolDefinition>> {
-        // Fetch Synapse MCP tools
-        let mut definitions: Vec<synapse_client::ToolDefinition> = self
+        // Fetch Synapse MCP tools (gracefully degrade if unavailable, e.g. embedded mode)
+        let mut definitions: Vec<synapse_client::ToolDefinition> = match self
             .synapse
             .list_tools(None)
             .await
-            .map_err(|e| Error::Tool(e.to_string()))?
-            .into_iter()
-            .map(synapse_client::ToolDefinition::from)
-            .collect();
+        {
+            Ok(tools) => tools.into_iter().map(synapse_client::ToolDefinition::from).collect(),
+            Err(e) => {
+                tracing::debug!(error = %e, "Synapse MCP tool listing unavailable, using built-ins only");
+                Vec::new()
+            }
+        };
 
         // Merge plugin tools
         {
@@ -116,6 +128,11 @@ impl ToolExecutor {
             definitions.extend(crate::tools::BuiltinCronTools::tool_definitions());
         }
 
+        // Include built-in exec tool if attached
+        if self.exec_tool.is_some() {
+            definitions.extend(crate::tools::BuiltinExecTool::tool_definitions());
+        }
+
         Ok(definitions)
     }
 
@@ -137,6 +154,13 @@ impl ToolExecutor {
             && let Some(ref ct) = self.cron_tools
         {
             return ct.execute(name, arguments).await;
+        }
+
+        // Route built-in exec tool
+        if name == "Bash"
+            && let Some(ref et) = self.exec_tool
+        {
+            return et.execute(name, arguments).await;
         }
 
         // Plugin tools use `plugin_id::tool_name` format

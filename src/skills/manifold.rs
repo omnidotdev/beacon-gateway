@@ -140,6 +140,7 @@ impl ManifoldClient {
                 namespace: namespace.to_string(),
                 repository: "skills".to_string(),
             },
+            location: None,
         })
     }
 

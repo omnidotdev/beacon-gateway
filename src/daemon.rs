@@ -1213,7 +1213,7 @@ impl Daemon {
         shutdown_rx: &mut mpsc::Receiver<()>,
         plugin_manager: crate::api::plugins::SharedPluginManager,
     ) -> Result<()> {
-        // Available for future tool filtering by channel policy
+        // Voice uses Full profile — tool_policy checked at handler level
         let _ = &tool_policy;
 
         let wake_word =
@@ -1539,8 +1539,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
     plugin_manager: crate::api::plugins::SharedPluginManager,
     telegram_config: Option<crate::config::TelegramConfig>,
 ) {
-    // Available for future tool filtering by channel policy
-    let _ = &tool_policy;
+    let exec_tool = Arc::new(crate::tools::BuiltinExecTool::default());
 
     tracing::info!(channel = channel_name, "channel handler started");
 
@@ -1789,13 +1788,25 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             }
         }
 
-        // Fetch available tools from Synapse MCP and plugins
+        // Fetch available tools from Synapse MCP and plugins, filtered by policy
         let tools = {
             let executor = crate::tools::executor::ToolExecutor::new(
                 Arc::clone(&synapse),
                 plugin_manager.clone(),
-            );
-            executor.list_tools().await.ok()
+            )
+            .with_exec_tool(Arc::clone(&exec_tool));
+            executor.list_tools().await.ok().map(|tools| {
+                let filtered: Vec<_> = tools
+                    .into_iter()
+                    .filter(|t| {
+                        tool_policy
+                            .is_allowed(channel_name, &normalize_tool_name(&t.function.name))
+                    })
+                    .collect();
+                let names: Vec<&str> = filtered.iter().map(|t| t.function.name.as_str()).collect();
+                tracing::info!(channel = channel_name, tools = ?names, "tools available for LLM");
+                filtered
+            })
         };
 
         let use_streaming = channel
@@ -1827,7 +1838,8 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
             let executor = crate::tools::executor::ToolExecutor::new(
                 Arc::clone(&synapse),
                 plugin_manager.clone(),
-            );
+            )
+            .with_exec_tool(Arc::clone(&exec_tool));
             let mut loop_detector = crate::tools::loop_detection::LoopDetector::default();
 
             for _turn in 0..10 {
@@ -1941,6 +1953,11 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
 
                                 let mut should_break = false;
                                 for tc in &tool_calls {
+                                    tracing::info!(
+                                        tool = %tc.function.name,
+                                        args_len = tc.function.arguments.len(),
+                                        "executing tool call"
+                                    );
                                     let result = executor
                                         .execute(&tc.function.name, &tc.function.arguments)
                                         .await
@@ -2220,9 +2237,11 @@ async fn handle_voice_command(
     };
 
     // Fetch available tools from Synapse MCP and plugins
+    let exec_tool = Arc::new(crate::tools::BuiltinExecTool::default());
     let tools = {
         let executor =
-            crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
+            crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone())
+                .with_exec_tool(Arc::clone(&exec_tool));
         executor.list_tools().await.ok()
     };
 
@@ -2232,7 +2251,8 @@ async fn handle_voice_command(
     ];
     let mut final_text = String::new();
     let executor =
-        crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone());
+        crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone())
+            .with_exec_tool(exec_tool);
 
     for _turn in 0..10 {
         let request = synapse_client::ChatRequest {
@@ -2345,6 +2365,17 @@ fn extract_command(transcript: &str, wake_word: &str) -> String {
     )
 }
 
+/// Map LLM tool names to policy category names
+fn normalize_tool_name(name: &str) -> String {
+    match name {
+        "Bash" => "shell".to_string(),
+        "Read" | "Glob" | "Grep" | "WebFetch" | "ListDir" => "read_file".to_string(),
+        "Write" | "Edit" => "write_file".to_string(),
+        "WebSearch" => "web_search".to_string(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2356,5 +2387,21 @@ mod tests {
             "what's the weather?"
         );
         assert_eq!(extract_command("Hey Orin", "hey orin"), "");
+    }
+
+    #[test]
+    fn test_normalize_tool_name() {
+        assert_eq!(normalize_tool_name("Bash"), "shell");
+        assert_eq!(normalize_tool_name("Read"), "read_file");
+        assert_eq!(normalize_tool_name("Write"), "write_file");
+        assert_eq!(normalize_tool_name("Edit"), "write_file");
+        assert_eq!(normalize_tool_name("WebSearch"), "web_search");
+        assert_eq!(normalize_tool_name("WebFetch"), "read_file");
+        assert_eq!(normalize_tool_name("Glob"), "read_file");
+        assert_eq!(normalize_tool_name("Grep"), "read_file");
+        assert_eq!(normalize_tool_name("ListDir"), "read_file");
+        // Unknown tools pass through
+        assert_eq!(normalize_tool_name("memory_store"), "memory_store");
+        assert_eq!(normalize_tool_name("cron_list"), "cron_list");
     }
 }

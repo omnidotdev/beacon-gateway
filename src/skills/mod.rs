@@ -169,6 +169,7 @@ impl SkillRegistry {
                         metadata,
                         content: body,
                         source: SkillSource::Bundled,
+                        location: None,
                     };
                     self.skills.insert(skill.id.clone(), skill);
                     count += 1;
@@ -340,12 +341,17 @@ fn load_skill_file_with_source(path: &Path, source: SkillSource) -> Result<Skill
         .unwrap_or("unknown")
         .to_string();
 
-    Ok(Skill {
+    let mut skill = Skill {
         id,
         metadata,
         content: body,
         source,
-    })
+        location: None,
+    };
+
+    skill.location = Some(crate::prompt::compact_path(&path.to_string_lossy()));
+
+    Ok(skill)
 }
 
 /// Parse YAML frontmatter from markdown

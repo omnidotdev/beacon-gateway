@@ -389,6 +389,7 @@ async fn install_local(
         },
         content: req.content,
         source: SkillSource::Local,
+        location: None,
     };
 
     let priority = req.priority.unwrap_or_default();

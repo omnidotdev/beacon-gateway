@@ -2,6 +2,7 @@
 
 mod browser;
 mod cron;
+pub mod exec;
 pub mod executor;
 pub mod loop_detection;
 pub mod memory;
@@ -13,6 +14,7 @@ pub use browser::{
     BrowserController, BrowserControllerConfig, ElementInfo, PageContent, Screenshot,
 };
 pub use cron::{BuiltinCronTools, CronTools, ScheduleInfo, ScheduleParams};
+pub use exec::BuiltinExecTool;
 pub use memory::BuiltinMemoryTools;
 pub use policy::{ToolPolicy, ToolPolicyConfig, ToolProfile};
 pub use sessions::{MessageInfo, SessionInfo, SessionTools};

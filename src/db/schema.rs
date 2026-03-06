@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 17;
+pub const SCHEMA_VERSION: i32 = 18;
 
 /// Initialize the database schema
 ///
@@ -67,6 +67,9 @@ pub fn init(conn: &Connection) -> Result<()> {
     }
     if version < 17 {
         migrate_v17(conn)?;
+    }
+    if version < 18 {
+        migrate_v18(conn)?;
     }
 
     Ok(())
@@ -587,6 +590,20 @@ fn migrate_v17(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("migrated to schema v17 (per-group Telegram config)");
+    Ok(())
+}
+
+fn migrate_v18(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r"
+        -- Skill file location for compact prompt mode
+        ALTER TABLE installed_skills ADD COLUMN location TEXT;
+
+        PRAGMA user_version = 18;
+        ",
+    )?;
+
+    tracing::info!("migrated to schema v18 (skill location)");
     Ok(())
 }
 

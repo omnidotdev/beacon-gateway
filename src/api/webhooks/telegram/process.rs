@@ -464,11 +464,13 @@ pub async fn process_telegram_message(
 
     let response = {
         // Fetch available tools from Synapse MCP and plugins
+        let exec_tool = Arc::new(crate::tools::BuiltinExecTool::default());
         let tools = {
             let mut executor = crate::tools::executor::ToolExecutor::new(
                 Arc::clone(synapse),
                 state.plugin_manager.clone(),
-            );
+            )
+            .with_exec_tool(Arc::clone(&exec_tool));
             if let Some(ref ct) = state.cron_tools {
                 executor = executor.with_cron_tools(Arc::clone(ct));
             }
@@ -484,7 +486,8 @@ pub async fn process_telegram_message(
         let mut executor = crate::tools::executor::ToolExecutor::new(
             Arc::clone(synapse),
             state.plugin_manager.clone(),
-        );
+        )
+        .with_exec_tool(exec_tool);
         if let Some(ref ct) = state.cron_tools {
             executor = executor.with_cron_tools(Arc::clone(ct));
         }

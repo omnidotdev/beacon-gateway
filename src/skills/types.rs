@@ -216,6 +216,8 @@ pub struct Skill {
     pub metadata: SkillMetadata,
     pub content: String,
     pub source: SkillSource,
+    /// File path to the SKILL.md (for compact prompt mode)
+    pub location: Option<String>,
 }
 
 /// Where the skill was loaded from

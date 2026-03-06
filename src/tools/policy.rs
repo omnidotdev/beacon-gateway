@@ -251,6 +251,25 @@ mod tests {
     }
 
     #[test]
+    fn shell_blocked_on_all_messaging_channels() {
+        let policy = ToolPolicy::default_policy();
+        for channel in &["discord", "telegram", "slack"] {
+            assert!(
+                !policy.is_allowed(channel, "shell"),
+                "shell should be blocked on {channel}"
+            );
+            assert!(
+                policy.is_allowed(channel, "web_search"),
+                "web_search should be allowed on {channel}"
+            );
+            assert!(
+                policy.is_allowed(channel, "read_file"),
+                "read_file should be allowed on {channel}"
+            );
+        }
+    }
+
+    #[test]
     fn test_json_deserialization() {
         let json = r#"{
             "default": "messaging",
