@@ -574,10 +574,63 @@ impl MemoryRepo {
         Ok(mmr_rerank(candidates, limit, 0.7))
     }
 
-    /// Hybrid search combining text substring match with vector similarity
+    /// Search memories using BM25 keyword ranking
     ///
-    /// When an embedding is provided, results from both text search and
-    /// vector search are merged and deduplicated. Text matches are
+    /// Loads all non-deleted memories for the user, scores them with BM25,
+    /// and returns the top matches. Falls back to LIKE search if BM25
+    /// returns no results (handles partial/substring matches).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if database operation fails
+    pub fn search_keyword(
+        &self,
+        user_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Memory>> {
+        let all = self.list(user_id, None)?;
+
+        if all.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build searchable text for each memory: content + tags
+        let documents: Vec<String> = all
+            .iter()
+            .map(|m| {
+                let mut text = m.content.clone();
+                if !m.tags.is_empty() {
+                    text.push(' ');
+                    text.push_str(&m.tags.join(" "));
+                }
+                text
+            })
+            .collect();
+
+        let scorer = super::bm25::Bm25Scorer::new(&documents);
+        let scored = scorer.score(query);
+
+        if scored.is_empty() {
+            // BM25 found nothing; fall back to LIKE for partial matches
+            let mut fallback = self.search(user_id, query)?;
+            fallback.truncate(limit);
+            return Ok(fallback);
+        }
+
+        let results: Vec<Memory> = scored
+            .into_iter()
+            .take(limit)
+            .map(|(idx, _score)| all[idx].clone())
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Hybrid search combining BM25 keyword ranking with vector similarity
+    ///
+    /// When an embedding is provided, results from both BM25 keyword search
+    /// and vector search are merged and deduplicated. Keyword matches are
     /// prioritized (appear first), followed by vector-similar results.
     ///
     /// # Errors
@@ -590,8 +643,8 @@ impl MemoryRepo {
         embedding: Option<&[f32]>,
         limit: usize,
     ) -> Result<Vec<Memory>> {
-        // Start with text search results
-        let mut results = self.search(user_id, query)?;
+        // Start with BM25-ranked keyword results
+        let mut results = self.search_keyword(user_id, query, limit)?;
         let mut seen: std::collections::HashSet<String> =
             results.iter().map(|m| m.id.clone()).collect();
 

@@ -18,10 +18,147 @@ use std::path::{Path, PathBuf};
 use crate::{Error, Result};
 
 /// Skills compiled into the binary (lowest precedence)
-const BUNDLED_SKILLS: &[(&str, &str)] = &[(
-    "concise",
-    "---\nname: concise\ndescription: Keep responses brief and direct\nalways: true\nuser_invocable: false\ntags:\n  - behavior\n---\n\nPrefer short, direct answers. Avoid filler phrases and unnecessary preamble.\n",
-)];
+const BUNDLED_SKILLS: &[(&str, &str)] = &[
+    (
+        "concise",
+        "---\nname: concise\ndescription: Keep responses brief and direct\nalways: true\nuser_invocable: false\ntags:\n  - behavior\n---\n\nPrefer short, direct answers. Avoid filler phrases and unnecessary preamble.\n",
+    ),
+    (
+        "summarize",
+        concat!(
+            "---\nname: summarize\ndescription: Summarize text, articles, or conversations\n",
+            "user_invocable: true\ntags:\n  - productivity\n  - writing\n---\n\n",
+            "Summarize the provided content. Follow these rules:\n\n",
+            "1. Start with a one-sentence TL;DR\n",
+            "2. Follow with 3-7 bullet points covering key information\n",
+            "3. Preserve factual accuracy — never invent details\n",
+            "4. Match the technical level of the source material\n",
+            "5. If the content is a conversation, focus on decisions and action items\n",
+            "6. If the content is an article, focus on the thesis and supporting evidence\n",
+        ),
+    ),
+    (
+        "translate",
+        concat!(
+            "---\nname: translate\ndescription: Translate text between languages\n",
+            "user_invocable: true\ntags:\n  - language\n---\n\n",
+            "Translate the provided text. Rules:\n\n",
+            "1. If the target language isn't specified, detect the source language and translate to English (or from English to the most likely intended language based on context)\n",
+            "2. Preserve tone, formality level, and intent\n",
+            "3. For technical terms, provide the translation with the original in parentheses on first occurrence\n",
+            "4. For idioms, translate the meaning rather than word-for-word\n",
+            "5. If ambiguous, briefly note the alternative interpretation\n",
+        ),
+    ),
+    (
+        "code-review",
+        concat!(
+            "---\nname: code-review\ndescription: Review code for bugs, style, and improvements\n",
+            "user_invocable: true\ntags:\n  - development\n---\n\n",
+            "Review the provided code. Structure your review as:\n\n",
+            "1. **Critical issues** — bugs, security vulnerabilities, data loss risks\n",
+            "2. **Improvements** — performance, readability, maintainability\n",
+            "3. **Nitpicks** — style, naming, minor suggestions (keep brief)\n\n",
+            "Rules:\n",
+            "- Be specific: reference line numbers or code snippets\n",
+            "- Explain *why* something is problematic, not just *what*\n",
+            "- Suggest concrete fixes, not vague advice\n",
+            "- Acknowledge what's done well (briefly)\n",
+            "- Don't suggest changes that are purely stylistic preference\n",
+        ),
+    ),
+    (
+        "explain",
+        concat!(
+            "---\nname: explain\ndescription: Explain a concept, code, or error clearly\n",
+            "user_invocable: true\ntags:\n  - learning\n---\n\n",
+            "Explain the topic clearly. Adapt to the user's apparent level:\n\n",
+            "1. Start with a one-sentence definition or summary\n",
+            "2. Use an analogy if the concept is abstract\n",
+            "3. Show a concrete example\n",
+            "4. Mention common misconceptions or gotchas\n",
+            "5. If explaining code: walk through execution step by step\n",
+            "6. If explaining an error: state the cause, then the fix\n",
+        ),
+    ),
+    (
+        "meeting-notes",
+        concat!(
+            "---\nname: meeting-notes\ndescription: Extract structured notes from meeting transcripts\n",
+            "user_invocable: true\ntags:\n  - productivity\n---\n\n",
+            "Extract structured meeting notes from the provided transcript or conversation.\n\n",
+            "Format:\n",
+            "## Meeting Notes\n\n",
+            "**Date:** [if mentioned]\n",
+            "**Attendees:** [if mentioned]\n\n",
+            "### Summary\n",
+            "[2-3 sentence overview]\n\n",
+            "### Key Decisions\n",
+            "- [decision] — [context/rationale]\n\n",
+            "### Action Items\n",
+            "- [ ] [task] — [owner, if mentioned] — [deadline, if mentioned]\n\n",
+            "### Open Questions\n",
+            "- [unresolved items]\n",
+        ),
+    ),
+    (
+        "proofread",
+        concat!(
+            "---\nname: proofread\ndescription: Fix grammar, spelling, and clarity in text\n",
+            "user_invocable: true\ntags:\n  - writing\n---\n\n",
+            "Proofread and improve the provided text. Rules:\n\n",
+            "1. Fix grammar, spelling, and punctuation errors\n",
+            "2. Improve clarity and readability without changing the author's voice\n",
+            "3. Remove redundancy and filler\n",
+            "4. Preserve technical terms and intentional style choices\n",
+            "5. Output the corrected text, then briefly list the changes made\n",
+            "6. If the text is already clean, say so\n",
+        ),
+    ),
+    (
+        "data-analysis",
+        concat!(
+            "---\nname: data-analysis\ndescription: Analyze data and generate insights\n",
+            "user_invocable: true\ntags:\n  - productivity\n  - analysis\n---\n\n",
+            "Analyze the provided data. Approach:\n\n",
+            "1. Describe what you see: shape, types, notable patterns\n",
+            "2. Identify trends, outliers, and correlations\n",
+            "3. Provide specific numbers — don't just say \"increased\", say \"increased 23%\"\n",
+            "4. If the data supports it, suggest visualizations (describe chart type and axes)\n",
+            "5. State limitations: what the data can and cannot tell us\n",
+            "6. End with 2-3 actionable insights or next questions to investigate\n",
+        ),
+    ),
+    (
+        "email-draft",
+        concat!(
+            "---\nname: email-draft\ndescription: Draft professional emails\n",
+            "user_invocable: true\ntags:\n  - writing\n  - productivity\n---\n\n",
+            "Draft an email based on the user's intent. Rules:\n\n",
+            "1. Match formality to the context (colleague vs. client vs. executive)\n",
+            "2. Lead with the purpose — no \"I hope this email finds you well\" unless appropriate\n",
+            "3. Be specific about asks, deadlines, and next steps\n",
+            "4. Keep it as short as possible while being complete\n",
+            "5. End with a clear call to action\n",
+            "6. Provide a subject line\n",
+        ),
+    ),
+    (
+        "debug",
+        concat!(
+            "---\nname: debug\ndescription: Systematic debugging of errors and unexpected behavior\n",
+            "user_invocable: true\ntags:\n  - development\n---\n\n",
+            "Debug the issue systematically:\n\n",
+            "1. **Reproduce**: Confirm the exact error message, input, and environment\n",
+            "2. **Isolate**: Narrow down where the failure occurs (which function, line, or request)\n",
+            "3. **Hypothesize**: List 2-3 most likely root causes, ranked by probability\n",
+            "4. **Verify**: For each hypothesis, describe what evidence would confirm or rule it out\n",
+            "5. **Fix**: Propose the minimal change that addresses the root cause\n",
+            "6. **Prevent**: Suggest how to catch this class of bug earlier (test, assertion, type)\n\n",
+            "Don't guess. If you need more information, ask specific questions.\n",
+        ),
+    ),
+];
 
 /// Limits applied during directory scanning
 #[derive(Debug, Clone)]
