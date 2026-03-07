@@ -82,8 +82,9 @@ enum Command {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Interactive first-run setup
-    Setup,
+    /// Interactive first-run wizard
+    #[clap(alias = "setup")]
+    Onboard,
 }
 
 #[tokio::main]
@@ -127,7 +128,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Command::Uninstall => cmd_uninstall(),
             Command::Status => cmd_status(),
             Command::Logs { lines, follow } => cmd_logs(lines, follow),
-            Command::Setup => beacon_gateway::setup::run_setup(),
+            Command::Onboard => beacon_gateway::setup::run_setup(),
         };
     }
 
