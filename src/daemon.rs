@@ -171,6 +171,20 @@ impl Daemon {
             Arc::new(tokio::sync::Mutex::new(pm))
         };
 
+        // Initialize direct MCP servers
+        let mcp_manager: Option<Arc<crate::mcp::McpServerManager>> =
+            if self.config.mcp_servers.is_empty() {
+                None
+            } else {
+                let mgr = crate::mcp::McpServerManager::new();
+                mgr.start_all(&self.config.mcp_servers).await;
+                let names = mgr.server_names().await;
+                if !names.is_empty() {
+                    tracing::info!(servers = ?names, "MCP servers running");
+                }
+                Some(Arc::new(mgr))
+            };
+
         // Collect plugin skill directories before taking the lock
         let plugin_skill_dirs = {
             let pm = plugin_manager.lock().await;
@@ -587,6 +601,10 @@ impl Daemon {
         .plugin_manager(plugin_manager.clone())
         .cloud_mode(self.config.cloud_mode)
         .skills_config(self.config.skills.clone());
+
+        if let Some(ref mcp) = mcp_manager {
+            api_builder = api_builder.mcp_manager(Arc::clone(mcp));
+        }
 
         if let Some(provisioner) = key_provisioner {
             api_builder = api_builder.key_provisioner(provisioner);

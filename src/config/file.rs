@@ -37,6 +37,27 @@ pub struct BeaconConfigFile {
     /// Skills system configuration
     #[serde(default)]
     pub skills: SkillsFileConfig,
+
+    /// MCP server configurations
+    #[serde(default)]
+    pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
+
+    /// Ecosystem service URLs
+    #[serde(default)]
+    pub ecosystem: EcosystemFileConfig,
+}
+
+/// Ecosystem service URLs
+#[derive(Debug, Default, Deserialize)]
+pub struct EcosystemFileConfig {
+    /// Trellis knowledge garden URL
+    pub trellis_url: Option<String>,
+    /// Heartbeat service monitoring URL
+    pub heartbeat_url: Option<String>,
+    /// Say Less content moderation URL
+    pub say_less_url: Option<String>,
+    /// Chronicle audit logging URL
+    pub chronicle_url: Option<String>,
 }
 
 /// LLM-related configuration

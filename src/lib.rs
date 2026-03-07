@@ -42,6 +42,7 @@ pub mod extensions;
 pub mod hooks;
 pub mod integrations;
 pub mod knowledge;
+pub mod mcp;
 pub mod lifecycle;
 pub mod links;
 pub mod media;
@@ -70,7 +71,8 @@ pub use discovery::MdnsAdvertiser;
 pub use error::{Error, Result};
 pub use extensions::{Extension, ExtensionInfo, ExtensionRegistry};
 pub use hooks::{HookAction, HookEvent, HookManager, HookResult, HooksConfig};
-pub use integrations::{Schedule, ScheduleRequest, VortexClient};
+pub use integrations::{Schedule, ScheduleRequest, TrellisClient, VortexClient};
+pub use mcp::{McpServerConfig, McpServerManager};
 pub use knowledge::{
     KnowledgePackResolver, ResolverError, cosine_similarity, format_knowledge, hydrate_embeddings,
     select_knowledge, select_knowledge_with_embeddings,

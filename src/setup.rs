@@ -199,6 +199,8 @@ pub fn run_setup() -> anyhow::Result<()> {
             cloud_mode: existing.server.cloud_mode,
         },
         skills: existing.skills,
+        mcp_servers: existing.mcp_servers,
+        ecosystem: existing.ecosystem,
     };
 
     write_config(&config_path, &config_file)?;

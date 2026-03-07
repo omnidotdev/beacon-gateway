@@ -94,6 +94,25 @@ pub struct Config {
 
     /// Service key for authenticating with Gatekeeper vault
     pub gatekeeper_service_key: Option<String>,
+
+    /// MCP server configurations (direct MCP client)
+    pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
+
+    /// Ecosystem service URLs
+    pub ecosystem: EcosystemConfig,
+}
+
+/// URLs for Omni ecosystem services (optional, graceful degradation)
+#[derive(Debug, Clone, Default)]
+pub struct EcosystemConfig {
+    /// Trellis knowledge garden URL
+    pub trellis_url: Option<String>,
+    /// Heartbeat service monitoring URL
+    pub heartbeat_url: Option<String>,
+    /// Say Less content moderation URL
+    pub say_less_url: Option<String>,
+    /// Chronicle audit logging URL
+    pub chronicle_url: Option<String>,
 }
 
 /// HTTP API server configuration
@@ -694,15 +713,24 @@ impl Config {
         // Hooks configuration (from hooks.toml in data dir or defaults)
         let hooks = Self::load_hooks_config(&data_dir);
 
+        // Gatekeeper identity service integration
+        // GATEKEEPER_AUTH_URL serves as a unified alias for JWT validation
+        let gatekeeper_auth_url = std::env::var("GATEKEEPER_AUTH_URL").ok();
+
         // Identity service URL for JWT validation (JWKS endpoint)
-        let auth_base_url = std::env::var("AUTH_BASE_URL").ok();
+        // Falls back to GATEKEEPER_AUTH_URL if AUTH_BASE_URL is not set
+        let auth_base_url = std::env::var("AUTH_BASE_URL")
+            .ok()
+            .or_else(|| gatekeeper_auth_url.clone());
 
         // Synapse API (internal endpoints for key provisioning)
         let synapse_api_url = std::env::var("SYNAPSE_API_URL").ok();
         let synapse_gateway_secret = std::env::var("SYNAPSE_GATEWAY_SECRET").ok();
 
         // Gatekeeper vault (direct BYOK key resolution, bypasses Synapse)
-        let gatekeeper_url = std::env::var("GATEKEEPER_URL").ok();
+        let gatekeeper_url = std::env::var("GATEKEEPER_URL")
+            .ok()
+            .or_else(|| gatekeeper_auth_url.clone());
         let gatekeeper_service_key = std::env::var("GATEKEEPER_SERVICE_KEY").ok();
 
         // Synapse AI router (env > toml > default)
@@ -985,6 +1013,19 @@ impl Config {
             telegram,
             gatekeeper_url,
             gatekeeper_service_key,
+            mcp_servers: fc.mcp_servers,
+            ecosystem: EcosystemConfig {
+                trellis_url: std::env::var("TRELLIS_URL").ok().or(fc.ecosystem.trellis_url),
+                heartbeat_url: std::env::var("HEARTBEAT_URL")
+                    .ok()
+                    .or(fc.ecosystem.heartbeat_url),
+                say_less_url: std::env::var("SAY_LESS_URL")
+                    .ok()
+                    .or(fc.ecosystem.say_less_url),
+                chronicle_url: std::env::var("CHRONICLE_URL")
+                    .ok()
+                    .or(fc.ecosystem.chronicle_url),
+            },
         })
     }
 

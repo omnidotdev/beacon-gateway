@@ -144,6 +144,8 @@ pub struct ApiState {
     pub condenser: Option<Arc<dyn agent_core::knowledge::QueryCondenser>>,
     /// Optional reranker for cross-encoder reranking
     pub reranker: Option<Arc<dyn agent_core::knowledge::Reranker>>,
+    /// Direct MCP server manager
+    pub mcp_manager: Option<Arc<crate::mcp::McpServerManager>>,
 }
 
 impl ApiState {
@@ -225,6 +227,7 @@ pub struct ApiServerBuilder {
     telegram_registry: Option<TelegramAccountRegistry>,
     condenser: Option<Arc<dyn agent_core::knowledge::QueryCondenser>>,
     reranker: Option<Arc<dyn agent_core::knowledge::Reranker>>,
+    mcp_manager: Option<Arc<crate::mcp::McpServerManager>>,
 }
 
 impl ApiServerBuilder {
@@ -282,6 +285,7 @@ impl ApiServerBuilder {
             telegram_registry: None,
             condenser: None,
             reranker: None,
+            mcp_manager: None,
         }
     }
 
@@ -506,6 +510,13 @@ impl ApiServerBuilder {
         self
     }
 
+    /// Set the MCP server manager
+    #[must_use]
+    pub fn mcp_manager(mut self, manager: Arc<crate::mcp::McpServerManager>) -> Self {
+        self.mcp_manager = Some(manager);
+        self
+    }
+
     /// Build the API server
     #[must_use]
     #[allow(clippy::too_many_lines)]
@@ -654,6 +665,7 @@ impl ApiServerBuilder {
             telegram_registry: self.telegram_registry,
             condenser,
             reranker: self.reranker,
+            mcp_manager: self.mcp_manager,
         });
 
         ApiServer {

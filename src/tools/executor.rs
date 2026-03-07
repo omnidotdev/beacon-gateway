@@ -6,6 +6,7 @@ use std::time::Duration;
 use synapse_client::SynapseClient;
 use tokio::sync::Mutex;
 
+use crate::mcp::McpServerManager;
 use crate::plugins::PluginManager;
 use crate::{Error, Result};
 
@@ -35,6 +36,8 @@ impl ToolKind {
             | "TaskList" | "TaskGet" | "memory_search" | "cron_list" | "cron_get" => Self::Read,
             // Interactive tools
             "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
+            // MCP server tools default to Mutate (safe conservative choice)
+            _ if name.starts_with("mcp_") => Self::Mutate,
             // Everything else defaults to Mutate (safe), including:
             // memory_store, memory_forget, cron_schedule, cron_cancel
             _ => Self::Mutate,
@@ -42,13 +45,14 @@ impl ToolKind {
     }
 }
 
-/// Executes tool calls via Synapse MCP or plugin subprocess
+/// Executes tool calls via Synapse MCP, plugin subprocess, or direct MCP servers
 pub struct ToolExecutor {
     synapse: Arc<SynapseClient>,
     plugin_manager: SharedPluginManager,
     memory_tools: Option<Arc<crate::tools::BuiltinMemoryTools>>,
     cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
     exec_tool: Option<Arc<crate::tools::BuiltinExecTool>>,
+    mcp_manager: Option<Arc<McpServerManager>>,
 }
 
 impl ToolExecutor {
@@ -60,6 +64,7 @@ impl ToolExecutor {
             memory_tools: None,
             cron_tools: None,
             exec_tool: None,
+            mcp_manager: None,
         }
     }
 
@@ -81,6 +86,13 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_exec_tool(mut self, tool: Arc<crate::tools::BuiltinExecTool>) -> Self {
         self.exec_tool = Some(tool);
+        self
+    }
+
+    /// Attach MCP server manager to this executor
+    #[must_use]
+    pub fn with_mcp_manager(mut self, manager: Arc<McpServerManager>) -> Self {
+        self.mcp_manager = Some(manager);
         self
     }
 
@@ -133,6 +145,20 @@ impl ToolExecutor {
             definitions.extend(crate::tools::BuiltinExecTool::tool_definitions());
         }
 
+        // Include tools from direct MCP servers
+        if let Some(ref mcp) = self.mcp_manager {
+            for tool in mcp.all_tools().await {
+                definitions.push(synapse_client::ToolDefinition {
+                    tool_type: "function".to_owned(),
+                    function: synapse_client::FunctionDefinition {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: Some(tool.input_schema),
+                    },
+                });
+            }
+        }
+
         Ok(definitions)
     }
 
@@ -161,6 +187,22 @@ impl ToolExecutor {
             && let Some(ref et) = self.exec_tool
         {
             return et.execute(name, arguments).await;
+        }
+
+        // Route MCP server tools (prefixed with `mcp_`)
+        if name.starts_with("mcp_")
+            && let Some(ref mcp) = self.mcp_manager
+        {
+            let args: serde_json::Value = serde_json::from_str(arguments)
+                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::default()));
+            let result = mcp
+                .call_tool(name, args)
+                .await
+                .map_err(|e| Error::Tool(e))?;
+            if result.is_error {
+                return Err(Error::Tool(result.text));
+            }
+            return Ok(result.text);
         }
 
         // Plugin tools use `plugin_id::tool_name` format
