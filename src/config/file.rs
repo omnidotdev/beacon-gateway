@@ -42,6 +42,10 @@ pub struct BeaconConfigFile {
     #[serde(default)]
     pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
 
+    /// Path to user's life.json file
+    #[serde(default)]
+    pub life_json: Option<String>,
+
     /// Ecosystem service URLs
     #[serde(default)]
     pub ecosystem: EcosystemFileConfig,

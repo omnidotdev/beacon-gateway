@@ -193,7 +193,10 @@ pub fn run_setup() -> anyhow::Result<()> {
     // 6. MCP servers
     let mcp_servers = setup_mcp_servers(&existing.mcp_servers)?;
 
-    // 7. Build and write config
+    // 7. life.json
+    let life_json = setup_life_json(existing.life_json.as_deref())?;
+
+    // 8. Build and write config
     let config_file = BeaconConfigFile {
         persona: Some(persona),
         llm: LlmFileConfig {
@@ -210,6 +213,7 @@ pub fn run_setup() -> anyhow::Result<()> {
         },
         skills: existing.skills,
         mcp_servers,
+        life_json,
         ecosystem: existing.ecosystem,
     };
 
@@ -255,6 +259,10 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
 
     if let Some(ref persona) = config.persona {
         let _ = write!(out, "persona = \"{persona}\"\n\n");
+    }
+
+    if let Some(ref path) = config.life_json {
+        let _ = writeln!(out, "life_json = \"{path}\"\n");
     }
 
     // [llm]
@@ -618,4 +626,38 @@ fn prompt_custom_mcp_server() -> anyhow::Result<Option<crate::mcp::McpServerConf
         args,
         env: std::collections::HashMap::new(),
     }))
+}
+
+/// Prompt for life.json path or URL
+fn setup_life_json(existing: Option<&str>) -> anyhow::Result<Option<String>> {
+    println!("\n--- life.json (Optional) ---\n");
+    println!("life.json is a portable identity file that gives your assistant");
+    println!("context about you (name, timezone, preferences, etc.).\n");
+
+    let configure = Confirm::new()
+        .with_prompt("Set up a life.json file?")
+        .default(existing.is_some())
+        .interact()?;
+
+    if !configure {
+        return Ok(existing.map(str::to_string));
+    }
+
+    let default_path = existing
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+            format!("{home}/.life.json")
+        });
+
+    let path: String = Input::new()
+        .with_prompt("Path or URL to life.json")
+        .default(default_path)
+        .interact_text()?;
+
+    if path.is_empty() {
+        Ok(existing.map(str::to_string))
+    } else {
+        Ok(Some(path))
+    }
 }
