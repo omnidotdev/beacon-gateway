@@ -1,28 +1,18 @@
 //! Built-in shell execution tool for the LLM
 //!
-//! Provides a sandboxed `Bash` tool that runs commands via `/bin/sh -c`,
-//! captures stdout/stderr, enforces timeouts, and augments `PATH`
+//! Wraps `agent_core::tools::shell::ShellTool` and adds
+//! Synapse-compatible tool definitions and JSON argument parsing
 
 use std::path::PathBuf;
-use std::time::Duration;
 
-use tokio::process::Command;
+use agent_core::tools::shell::ShellTool;
 
 use crate::{Error, Result};
-
-/// Default command timeout in seconds
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
-
-/// Maximum allowed timeout in seconds
-const MAX_TIMEOUT_SECS: u64 = 600;
 
 /// Built-in shell execution tool for LLM command execution
 #[derive(Debug, Clone)]
 pub struct BuiltinExecTool {
-    /// Working directory for command execution
-    working_dir: PathBuf,
-    /// Additional PATH entries prepended to the environment
-    extra_path: Vec<PathBuf>,
+    inner: ShellTool,
 }
 
 impl BuiltinExecTool {
@@ -30,8 +20,7 @@ impl BuiltinExecTool {
     #[must_use]
     pub fn new(working_dir: PathBuf, extra_path: Vec<PathBuf>) -> Self {
         Self {
-            working_dir,
-            extra_path,
+            inner: ShellTool::new(working_dir, extra_path),
         }
     }
 
@@ -64,28 +53,11 @@ impl BuiltinExecTool {
         }]
     }
 
-    /// Build the augmented PATH value
-    fn augmented_path(&self) -> String {
-        let system_path = std::env::var("PATH").unwrap_or_default();
-        let extra: Vec<String> = self
-            .extra_path
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-
-        if extra.is_empty() {
-            system_path
-        } else {
-            format!("{}:{system_path}", extra.join(":"))
-        }
-    }
-
-    /// Execute the `Bash` tool
+    /// Execute the `Bash` tool from LLM JSON arguments
     ///
     /// # Errors
     ///
-    /// Returns error if arguments are malformed, the command is missing,
-    /// or the process fails to spawn
+    /// Returns error if arguments are malformed or execution fails
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
         if name != "Bash" {
             return Err(Error::Tool(format!("unknown exec tool: {name}")));
@@ -106,80 +78,27 @@ impl BuiltinExecTool {
             .filter(|c| !c.trim().is_empty())
             .ok_or_else(|| Error::Tool("Bash: `command` parameter is required".to_string()))?;
 
-        let timeout_secs = args
-            .timeout
-            .unwrap_or(DEFAULT_TIMEOUT_SECS)
-            .min(MAX_TIMEOUT_SECS);
+        let output = self
+            .inner
+            .execute(&command, args.timeout)
+            .await
+            .map_err(|e| Error::Tool(format!("Bash: {e}")))?;
 
-        tracing::debug!(command = %command, timeout_secs, "Bash: executing command");
+        let response = serde_json::json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+        });
 
-        let child = {
-            let mut cmd = Command::new("/bin/sh");
-            cmd.arg("-c")
-                .arg(&command)
-                .current_dir(&self.working_dir)
-                .env("PATH", self.augmented_path())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-
-            // Create a new process group so the entire tree is killed on timeout
-            #[cfg(unix)]
-            cmd.process_group(0);
-
-            cmd.spawn()
-                .map_err(|e| Error::Tool(format!("Bash: failed to spawn: {e}")))?
-        };
-
-        let result =
-            tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
-                .await;
-
-        match result {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let code = output.status.code().unwrap_or(-1);
-
-                tracing::debug!(
-                    exit_code = code,
-                    stdout_len = stdout.len(),
-                    stderr_len = stderr.len(),
-                    "Bash: command completed"
-                );
-
-                let response = serde_json::json!({
-                    "exit_code": code,
-                    "stdout": stdout.as_ref(),
-                    "stderr": stderr.as_ref(),
-                });
-
-                Ok(response.to_string())
-            }
-            Ok(Err(e)) => Err(Error::Tool(format!("Bash: process error: {e}"))),
-            Err(_) => {
-                tracing::warn!(command = %command, timeout_secs, "Bash: command timed out");
-                Err(Error::Tool(format!(
-                    "Bash: command timed out after {timeout_secs}s"
-                )))
-            }
-        }
+        Ok(response.to_string())
     }
 }
 
 impl Default for BuiltinExecTool {
     fn default() -> Self {
-        let home = std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp"));
-
-        let extra_path = vec![
-            home.join(".bun/bin"),
-            home.join(".local/bin"),
-            home.join(".cargo/bin"),
-        ];
-
-        Self::new(home, extra_path)
+        Self {
+            inner: ShellTool::default(),
+        }
     }
 }
 
@@ -239,14 +158,8 @@ mod tests {
     #[tokio::test]
     async fn missing_command_is_rejected() {
         let tool = make_tool();
-
-        // No command field
-        let result = tool.execute("Bash", r#"{}"#).await;
-        assert!(result.is_err());
-
-        // Empty command
-        let result = tool.execute("Bash", r#"{"command": "  "}"#).await;
-        assert!(result.is_err());
+        assert!(tool.execute("Bash", r#"{}"#).await.is_err());
+        assert!(tool.execute("Bash", r#"{"command": "  "}"#).await.is_err());
     }
 
     #[test]
