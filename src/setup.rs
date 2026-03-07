@@ -190,7 +190,10 @@ pub fn run_setup() -> anyhow::Result<()> {
     // 5. Channels
     let channels = setup_channels(&mut api_keys, &existing)?;
 
-    // 6. Build and write config
+    // 6. MCP servers
+    let mcp_servers = setup_mcp_servers(&existing.mcp_servers)?;
+
+    // 7. Build and write config
     let config_file = BeaconConfigFile {
         persona: Some(persona),
         llm: LlmFileConfig {
@@ -206,7 +209,7 @@ pub fn run_setup() -> anyhow::Result<()> {
             cloud_mode: existing.server.cloud_mode,
         },
         skills: existing.skills,
-        mcp_servers: existing.mcp_servers,
+        mcp_servers,
         ecosystem: existing.ecosystem,
     };
 
@@ -360,6 +363,24 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
         }
     }
 
+    // [[mcp_servers]]
+    for server in &config.mcp_servers {
+        out.push_str("[[mcp_servers]]\n");
+        let _ = writeln!(out, "name = \"{}\"", server.name);
+        let _ = writeln!(out, "command = \"{}\"", server.command);
+        if !server.args.is_empty() {
+            let args_str: Vec<String> = server.args.iter().map(|a| format!("\"{a}\"")).collect();
+            let _ = writeln!(out, "args = [{}]", args_str.join(", "));
+        }
+        if !server.env.is_empty() {
+            out.push_str("[mcp_servers.env]\n");
+            for (k, v) in &server.env {
+                let _ = writeln!(out, "{k} = \"{v}\"");
+            }
+        }
+        out.push('\n');
+    }
+
     out
 }
 
@@ -475,4 +496,126 @@ fn prompt_channel_token(
     } else {
         Ok(Some(input))
     }
+}
+
+/// Scan PATH for well-known MCP servers and offer to enable them
+fn setup_mcp_servers(
+    existing: &[crate::mcp::McpServerConfig],
+) -> anyhow::Result<Vec<crate::mcp::McpServerConfig>> {
+    println!("\n--- MCP Server Discovery ---\n");
+
+    // Well-known MCP servers with their binary names and typical commands
+    let known_servers: &[(&str, &str, &[&str])] = &[
+        ("filesystem", "npx", &["-y", "@modelcontextprotocol/server-filesystem", "."]),
+        ("github", "npx", &["-y", "@modelcontextprotocol/server-github"]),
+        ("postgres", "npx", &["-y", "@modelcontextprotocol/server-postgres"]),
+        ("sqlite", "npx", &["-y", "@modelcontextprotocol/server-sqlite"]),
+        ("brave-search", "npx", &["-y", "@modelcontextprotocol/server-brave-search"]),
+        ("fetch", "npx", &["-y", "@modelcontextprotocol/server-fetch"]),
+        ("memory", "npx", &["-y", "@modelcontextprotocol/server-memory"]),
+    ];
+
+    // Check which are already configured
+    let existing_names: Vec<&str> = existing.iter().map(|s| s.name.as_str()).collect();
+
+    let available: Vec<&(&str, &str, &[&str])> = known_servers
+        .iter()
+        .filter(|(name, _, _)| !existing_names.contains(name))
+        .collect();
+
+    if available.is_empty() && !existing.is_empty() {
+        println!(
+            "{} MCP server(s) already configured. Skipping discovery.",
+            existing.len()
+        );
+        return Ok(existing.to_vec());
+    }
+
+    if available.is_empty() {
+        let add_custom = Confirm::new()
+            .with_prompt("No well-known MCP servers found to add. Add a custom one?")
+            .default(false)
+            .interact()?;
+
+        if !add_custom {
+            return Ok(existing.to_vec());
+        }
+
+        let mut servers = existing.to_vec();
+        if let Some(custom) = prompt_custom_mcp_server()? {
+            servers.push(custom);
+        }
+        return Ok(servers);
+    }
+
+    let labels: Vec<String> = available
+        .iter()
+        .map(|(name, _, _)| name.to_string())
+        .collect();
+
+    let selected = MultiSelect::new()
+        .with_prompt("Enable MCP servers (space to toggle, enter to confirm)")
+        .items(&labels)
+        .interact()?;
+
+    let mut servers = existing.to_vec();
+
+    for idx in selected {
+        let (name, command, args) = available[idx];
+        servers.push(crate::mcp::McpServerConfig {
+            name: name.to_string(),
+            command: command.to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env: std::collections::HashMap::new(),
+        });
+        println!("  + Added {name}");
+    }
+
+    // Offer to add custom server
+    let add_custom = Confirm::new()
+        .with_prompt("Add a custom MCP server?")
+        .default(false)
+        .interact()?;
+
+    if add_custom {
+        if let Some(custom) = prompt_custom_mcp_server()? {
+            println!("  + Added {}", custom.name);
+            servers.push(custom);
+        }
+    }
+
+    Ok(servers)
+}
+
+/// Prompt for a custom MCP server definition
+fn prompt_custom_mcp_server() -> anyhow::Result<Option<crate::mcp::McpServerConfig>> {
+    let name: String = Input::new()
+        .with_prompt("Server name")
+        .interact_text()?;
+
+    if name.is_empty() {
+        return Ok(None);
+    }
+
+    let command: String = Input::new()
+        .with_prompt("Command (e.g. npx, python, node)")
+        .interact_text()?;
+
+    let args_str: String = Input::new()
+        .with_prompt("Arguments (space-separated)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let args: Vec<String> = if args_str.is_empty() {
+        vec![]
+    } else {
+        args_str.split_whitespace().map(str::to_string).collect()
+    };
+
+    Ok(Some(crate::mcp::McpServerConfig {
+        name,
+        command,
+        args,
+        env: std::collections::HashMap::new(),
+    }))
 }
