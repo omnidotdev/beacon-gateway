@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Input, MultiSelect, Select};
 
 use crate::Config;
 use crate::config::file::{
-    ApiKeysFileConfig, BeaconConfigFile, LlmFileConfig, ServerFileConfig, VoiceFileConfig,
+    ApiKeysFileConfig, BeaconConfigFile, ChannelToggle, ChannelsFileConfig, LlmFileConfig,
+    ServerFileConfig, VoiceFileConfig,
 };
 
 /// Run the interactive setup wizard
@@ -160,18 +161,21 @@ pub fn run_setup() -> anyhow::Result<()> {
                 existing
                     .voice
                     .stt_model
+                    .clone()
                     .unwrap_or_else(|| "whisper-1".to_string()),
             ),
             tts_model: Some(
                 existing
                     .voice
                     .tts_model
+                    .clone()
                     .unwrap_or_else(|| "tts-1".to_string()),
             ),
             tts_voice: Some(
                 existing
                     .voice
                     .tts_voice
+                    .clone()
                     .unwrap_or_else(|| "alloy".to_string()),
             ),
             tts_speed: existing.voice.tts_speed.or(Some(1.0)),
@@ -183,7 +187,10 @@ pub fn run_setup() -> anyhow::Result<()> {
         }
     };
 
-    // 5. Build and write config
+    // 5. Channels
+    let channels = setup_channels(&mut api_keys, &existing)?;
+
+    // 6. Build and write config
     let config_file = BeaconConfigFile {
         persona: Some(persona),
         llm: LlmFileConfig {
@@ -192,7 +199,7 @@ pub fn run_setup() -> anyhow::Result<()> {
         },
         voice,
         api_keys,
-        channels: existing.channels,
+        channels,
         server: ServerFileConfig {
             port: existing.server.port,
             synapse_url: existing.server.synapse_url,
@@ -325,5 +332,147 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
         out.push('\n');
     }
 
+    // [channels]
+    let ch = &config.channels;
+    let has_channels = ch.discord.is_some() || ch.telegram.is_some() || ch.slack.is_some();
+    if has_channels {
+        out.push_str("[channels]\n\n");
+        if let Some(ref d) = ch.discord {
+            out.push_str("[channels.discord]\n");
+            if let Some(enabled) = d.enabled {
+                let _ = writeln!(out, "enabled = {enabled}");
+            }
+            out.push('\n');
+        }
+        if let Some(ref t) = ch.telegram {
+            out.push_str("[channels.telegram]\n");
+            if let Some(enabled) = t.enabled {
+                let _ = writeln!(out, "enabled = {enabled}");
+            }
+            out.push('\n');
+        }
+        if let Some(ref s) = ch.slack {
+            out.push_str("[channels.slack]\n");
+            if let Some(enabled) = s.enabled {
+                let _ = writeln!(out, "enabled = {enabled}");
+            }
+            out.push('\n');
+        }
+    }
+
     out
+}
+
+/// Prompt user to configure messaging channels
+fn setup_channels(
+    api_keys: &mut ApiKeysFileConfig,
+    existing: &BeaconConfigFile,
+) -> anyhow::Result<ChannelsFileConfig> {
+    println!("\n--- Channel Setup ---\n");
+
+    let channels = ["Discord", "Telegram", "Slack", "Skip (configure later)"];
+    let defaults: Vec<bool> = channels
+        .iter()
+        .map(|c| match *c {
+            "Discord" => existing
+                .channels
+                .discord
+                .as_ref()
+                .and_then(|d| d.enabled)
+                .unwrap_or(false),
+            "Telegram" => existing
+                .channels
+                .telegram
+                .as_ref()
+                .and_then(|t| t.enabled)
+                .unwrap_or(false),
+            "Slack" => existing
+                .channels
+                .slack
+                .as_ref()
+                .and_then(|s| s.enabled)
+                .unwrap_or(false),
+            _ => false,
+        })
+        .collect();
+
+    let selected = MultiSelect::new()
+        .with_prompt("Which channels do you want to connect? (space to toggle, enter to confirm)")
+        .items(&channels)
+        .defaults(&defaults)
+        .interact()?;
+
+    // If "Skip" selected or nothing selected, preserve existing config
+    if selected.is_empty() || selected.contains(&3) {
+        return Ok(existing.channels.clone());
+    }
+
+    let mut channels_config = existing.channels.clone();
+
+    for &idx in &selected {
+        match channels[idx] {
+            "Discord" => {
+                let token = prompt_channel_token("Discord bot token", api_keys.discord.as_deref())?;
+                if let Some(t) = token {
+                    api_keys.discord = Some(t);
+                }
+                channels_config.discord = Some(ChannelToggle {
+                    enabled: Some(true),
+                });
+            }
+            "Telegram" => {
+                let token =
+                    prompt_channel_token("Telegram bot token (from @BotFather)", api_keys.telegram.as_deref())?;
+                if let Some(t) = token {
+                    api_keys.telegram = Some(t);
+                }
+                channels_config.telegram = Some(ChannelToggle {
+                    enabled: Some(true),
+                });
+            }
+            "Slack" => {
+                let token =
+                    prompt_channel_token("Slack bot token (xoxb-...)", api_keys.slack.as_deref())?;
+                if let Some(t) = token {
+                    api_keys.slack = Some(t);
+                }
+                channels_config.slack = Some(ChannelToggle {
+                    enabled: Some(true),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(channels_config)
+}
+
+/// Prompt for a channel token with masked existing value
+fn prompt_channel_token(
+    label: &str,
+    existing: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let masked = existing.map(|k| {
+        if k.len() > 8 {
+            format!("{}...{}", &k[..4], &k[k.len() - 4..])
+        } else {
+            "****".to_string()
+        }
+    });
+
+    let prompt = masked.as_ref().map_or_else(
+        || label.to_string(),
+        |m| format!("{label} (current: {m}, leave blank to keep)"),
+    );
+
+    let input: String = Input::new()
+        .with_prompt(&prompt)
+        .allow_empty(true)
+        .interact_text()?;
+
+    if input.is_empty() {
+        Ok(existing.map(str::to_string))
+    } else {
+        Ok(Some(input))
+    }
 }

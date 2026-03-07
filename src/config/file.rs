@@ -103,7 +103,7 @@ pub struct ApiKeysFileConfig {
 }
 
 /// Channel-specific configuration
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct ChannelsFileConfig {
     #[serde(default)]
     pub discord: Option<ChannelToggle>,
@@ -119,13 +119,13 @@ pub struct ChannelsFileConfig {
 }
 
 /// Simple channel toggle (token lives in `api_keys`)
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct ChannelToggle {
     pub enabled: Option<bool>,
 }
 
 /// iMessage-specific channel config
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct IMessageFileConfig {
     pub enabled: Option<bool>,
     pub cli_path: Option<String>,
