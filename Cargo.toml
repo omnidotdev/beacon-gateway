@@ -123,7 +123,7 @@ secrecy = "0.10"
 mini-moka = "0.10"
 
 # Agent core (shared LLM provider abstraction)
-agent-core = { path = "../../../agent-core", features = ["mcp", "tools"] }
+agent-core = { git = "https://github.com/omnidotdev/agent-core.git", features = ["mcp", "tools"] }
 
 # HTML parsing and readability extraction
 readability = "0.3"
