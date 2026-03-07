@@ -31,6 +31,40 @@ pub struct PluginManifest {
     /// Relative path to a skills directory within the plugin
     #[serde(default)]
     pub skills_dir: Option<String>,
+    /// Transport mechanism for tool execution
+    #[serde(default)]
+    pub transport: PluginTransport,
+    /// Environment variables to pass to the plugin process
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, EnvValue>,
+}
+
+/// How the plugin exposes its tools
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginTransport {
+    /// Subprocess execution (default, legacy)
+    #[default]
+    Subprocess,
+    /// MCP server over stdio
+    McpStdio,
+}
+
+/// Environment variable value (plain string or required marker)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EnvValue {
+    /// Literal value
+    Value(String),
+    /// Descriptor with metadata
+    Descriptor {
+        /// Whether the env var is required
+        #[serde(default)]
+        required: bool,
+        /// Default value if not required
+        #[serde(default)]
+        default: Option<String>,
+    },
 }
 
 /// Plugin category
@@ -115,6 +149,38 @@ mod tests {
         assert!(manifest.description.is_none());
         assert!(manifest.tools.is_empty());
         assert!(manifest.permissions.is_empty());
+    }
+
+    #[test]
+    fn deserialize_mcp_transport() {
+        let json = r#"{
+            "id": "omni.github",
+            "name": "GitHub",
+            "version": "1.0.0",
+            "kind": "tool",
+            "transport": "mcp-stdio",
+            "entry": "npx -y @modelcontextprotocol/server-github",
+            "env": {
+                "GITHUB_TOKEN": { "required": true }
+            }
+        }"#;
+
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.transport, PluginTransport::McpStdio);
+        assert!(manifest.env.contains_key("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn default_transport_is_subprocess() {
+        let json = r#"{
+            "id": "omni.test",
+            "name": "Test",
+            "version": "1.0.0",
+            "kind": "tool"
+        }"#;
+
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.transport, PluginTransport::Subprocess);
     }
 
     #[test]

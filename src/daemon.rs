@@ -171,19 +171,27 @@ impl Daemon {
             Arc::new(tokio::sync::Mutex::new(pm))
         };
 
-        // Initialize direct MCP servers
-        let mcp_manager: Option<Arc<crate::mcp::McpServerManager>> =
-            if self.config.mcp_servers.is_empty() {
+        // Initialize direct MCP servers (config + plugin-derived)
+        let mcp_manager: Option<Arc<crate::mcp::McpServerManager>> = {
+            let plugin_mcp_configs = {
+                let pm = plugin_manager.lock().await;
+                pm.mcp_configs()
+            };
+            let mut all_configs = self.config.mcp_servers.clone();
+            all_configs.extend(plugin_mcp_configs);
+
+            if all_configs.is_empty() {
                 None
             } else {
                 let mgr = crate::mcp::McpServerManager::new();
-                mgr.start_all(&self.config.mcp_servers).await;
+                mgr.start_all(&all_configs).await;
                 let names = mgr.server_names().await;
                 if !names.is_empty() {
                     tracing::info!(servers = ?names, "MCP servers running");
                 }
                 Some(Arc::new(mgr))
-            };
+            }
+        };
 
         // Collect plugin skill directories before taking the lock
         let plugin_skill_dirs = {
@@ -1558,6 +1566,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
     telegram_config: Option<crate::config::TelegramConfig>,
 ) {
     let exec_tool = Arc::new(crate::tools::BuiltinExecTool::default());
+    let browser_tools = Arc::new(crate::tools::BuiltinBrowserTools::new());
 
     tracing::info!(channel = channel_name, "channel handler started");
 
@@ -1812,7 +1821,8 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 Arc::clone(&synapse),
                 plugin_manager.clone(),
             )
-            .with_exec_tool(Arc::clone(&exec_tool));
+            .with_exec_tool(Arc::clone(&exec_tool))
+            .with_browser_tools(Arc::clone(&browser_tools));
             executor.list_tools().await.ok().map(|tools| {
                 let filtered: Vec<_> = tools
                     .into_iter()
@@ -1857,7 +1867,8 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 Arc::clone(&synapse),
                 plugin_manager.clone(),
             )
-            .with_exec_tool(Arc::clone(&exec_tool));
+            .with_exec_tool(Arc::clone(&exec_tool))
+            .with_browser_tools(Arc::clone(&browser_tools));
             let mut loop_detector = crate::tools::loop_detection::LoopDetector::default();
 
             for _turn in 0..10 {
@@ -2256,10 +2267,12 @@ async fn handle_voice_command(
 
     // Fetch available tools from Synapse MCP and plugins
     let exec_tool = Arc::new(crate::tools::BuiltinExecTool::default());
+    let browser_tools = Arc::new(crate::tools::BuiltinBrowserTools::new());
     let tools = {
         let executor =
             crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone())
-                .with_exec_tool(Arc::clone(&exec_tool));
+                .with_exec_tool(Arc::clone(&exec_tool))
+                .with_browser_tools(Arc::clone(&browser_tools));
         executor.list_tools().await.ok()
     };
 
@@ -2270,7 +2283,8 @@ async fn handle_voice_command(
     let mut final_text = String::new();
     let executor =
         crate::tools::executor::ToolExecutor::new(Arc::clone(synapse), plugin_manager.clone())
-            .with_exec_tool(exec_tool);
+            .with_exec_tool(exec_tool)
+            .with_browser_tools(browser_tools);
 
     for _turn in 0..10 {
         let request = synapse_client::ChatRequest {

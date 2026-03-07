@@ -33,7 +33,8 @@ impl ToolKind {
         match name {
             // Read-only tools
             "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch" | "ListDir" | "NotebookRead"
-            | "TaskList" | "TaskGet" | "memory_search" | "cron_list" | "cron_get" => Self::Read,
+            | "TaskList" | "TaskGet" | "memory_search" | "cron_list" | "cron_get"
+            | "browser_screenshot" | "browser_extract" => Self::Read,
             // Interactive tools
             "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
             // MCP server tools default to Mutate (safe conservative choice)
@@ -52,6 +53,7 @@ pub struct ToolExecutor {
     memory_tools: Option<Arc<crate::tools::BuiltinMemoryTools>>,
     cron_tools: Option<Arc<crate::tools::BuiltinCronTools>>,
     exec_tool: Option<Arc<crate::tools::BuiltinExecTool>>,
+    browser_tools: Option<Arc<crate::tools::BuiltinBrowserTools>>,
     mcp_manager: Option<Arc<McpServerManager>>,
 }
 
@@ -64,6 +66,7 @@ impl ToolExecutor {
             memory_tools: None,
             cron_tools: None,
             exec_tool: None,
+            browser_tools: None,
             mcp_manager: None,
         }
     }
@@ -86,6 +89,13 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_exec_tool(mut self, tool: Arc<crate::tools::BuiltinExecTool>) -> Self {
         self.exec_tool = Some(tool);
+        self
+    }
+
+    /// Attach built-in browser tools to this executor
+    #[must_use]
+    pub fn with_browser_tools(mut self, tools: Arc<crate::tools::BuiltinBrowserTools>) -> Self {
+        self.browser_tools = Some(tools);
         self
     }
 
@@ -145,6 +155,11 @@ impl ToolExecutor {
             definitions.extend(crate::tools::BuiltinExecTool::tool_definitions());
         }
 
+        // Include built-in browser tools if attached
+        if self.browser_tools.is_some() {
+            definitions.extend(crate::tools::BuiltinBrowserTools::tool_definitions());
+        }
+
         // Include tools from direct MCP servers
         if let Some(ref mcp) = self.mcp_manager {
             for tool in mcp.all_tools().await {
@@ -187,6 +202,13 @@ impl ToolExecutor {
             && let Some(ref et) = self.exec_tool
         {
             return et.execute(name, arguments).await;
+        }
+
+        // Route built-in browser tools
+        if name.starts_with("browser_")
+            && let Some(ref bt) = self.browser_tools
+        {
+            return bt.execute(name, arguments).await;
         }
 
         // Route MCP server tools (prefixed with `mcp_`)
@@ -355,6 +377,12 @@ mod tests {
         assert_eq!(ToolKind::classify("cron_get"), ToolKind::Read);
         assert_eq!(ToolKind::classify("cron_schedule"), ToolKind::Mutate);
         assert_eq!(ToolKind::classify("cron_cancel"), ToolKind::Mutate);
+        // Browser tools
+        assert_eq!(ToolKind::classify("browser_screenshot"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("browser_extract"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("browser_navigate"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("browser_click"), ToolKind::Mutate);
+        assert_eq!(ToolKind::classify("browser_type"), ToolKind::Mutate);
         // Unknown tools default to Mutate (safe default)
         assert_eq!(ToolKind::classify("unknown_tool"), ToolKind::Mutate);
     }

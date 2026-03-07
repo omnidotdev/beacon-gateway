@@ -10,4 +10,4 @@ pub mod manifest;
 
 pub use discovery::{default_plugin_dirs, discover_plugins};
 pub use loader::{LoadedPlugin, PluginManager};
-pub use manifest::{PluginKind, PluginManifest, PluginToolDef};
+pub use manifest::{PluginKind, PluginManifest, PluginToolDef, PluginTransport};

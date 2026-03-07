@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::discovery::discover_plugins;
-use super::manifest::{PluginManifest, PluginToolDef};
+use super::manifest::{EnvValue, PluginManifest, PluginToolDef, PluginTransport};
 
 /// A discovered and loaded plugin
 #[derive(Debug, Clone)]
@@ -138,6 +138,55 @@ impl PluginManager {
             .filter(|p| p.enabled)
             .filter_map(|p| p.manifest.skills_dir.as_ref().map(|dir| p.path.join(dir)))
             .filter(|p| p.is_dir())
+            .collect()
+    }
+
+    /// Collect MCP server configs from enabled plugins with `transport: "mcp-stdio"`
+    ///
+    /// The entry point is parsed into command + args. Environment variables are
+    /// resolved from the manifest's `env` map, falling back to process env.
+    #[must_use]
+    pub fn mcp_configs(&self) -> Vec<crate::mcp::McpServerConfig> {
+        self.plugins
+            .values()
+            .filter(|p| p.enabled && p.manifest.transport == PluginTransport::McpStdio)
+            .filter_map(|p| {
+                let entry = p.manifest.entry.as_deref()?;
+                let parts: Vec<&str> = entry.split_whitespace().collect();
+                let (command, args) = parts.split_first()?;
+
+                // Resolve env vars: literal values pass through, required vars
+                // are read from process env, missing required vars are skipped
+                let mut env = std::collections::HashMap::new();
+                for (key, value) in &p.manifest.env {
+                    match value {
+                        EnvValue::Value(v) => {
+                            env.insert(key.clone(), v.clone());
+                        }
+                        EnvValue::Descriptor { required, default } => {
+                            if let Ok(v) = std::env::var(key) {
+                                env.insert(key.clone(), v);
+                            } else if let Some(d) = default {
+                                env.insert(key.clone(), d.clone());
+                            } else if *required {
+                                tracing::warn!(
+                                    plugin = %p.manifest.id,
+                                    env_var = %key,
+                                    "required env var missing, skipping MCP plugin"
+                                );
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                Some(crate::mcp::McpServerConfig {
+                    name: p.manifest.id.clone(),
+                    command: (*command).to_string(),
+                    args: args.iter().map(|s| (*s).to_string()).collect(),
+                    env,
+                })
+            })
             .collect()
     }
 

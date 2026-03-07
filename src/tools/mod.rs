@@ -1,6 +1,7 @@
 //! Tool management for beacon gateway
 
 mod browser;
+mod browser_tools;
 mod cron;
 pub mod exec;
 pub mod executor;
@@ -13,6 +14,7 @@ mod web;
 pub use browser::{
     BrowserController, BrowserControllerConfig, ElementInfo, PageContent, Screenshot,
 };
+pub use browser_tools::BuiltinBrowserTools;
 pub use cron::{BuiltinCronTools, CronTools, ScheduleInfo, ScheduleParams};
 pub use exec::BuiltinExecTool;
 pub use memory::BuiltinMemoryTools;
