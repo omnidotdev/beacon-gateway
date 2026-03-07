@@ -17,7 +17,9 @@ use crate::config::file::{
 /// Returns error if user input fails or config cannot be written
 #[allow(clippy::too_many_lines)]
 pub fn run_setup() -> anyhow::Result<()> {
-    println!("Beacon Setup\n");
+    println!("\n  Beacon Setup\n");
+    println!("  Welcome! This wizard will help you configure your");
+    println!("  AI assistant. Press Ctrl+C to exit at any time.\n");
 
     // Load existing config if present
     let existing = crate::config::file::load_config_file();
@@ -27,6 +29,8 @@ pub fn run_setup() -> anyhow::Result<()> {
     if config_path.exists() {
         println!("Existing config found at {}\n", config_path.display());
     }
+
+    println!("--- Persona ---\n");
 
     // 1. Persona selection
     let personas = Config::embedded_personas();
@@ -55,6 +59,8 @@ pub fn run_setup() -> anyhow::Result<()> {
     } else {
         persona_labels[persona_idx].to_string()
     };
+
+    println!("\n--- LLM Provider ---\n");
 
     // 2. LLM provider + API key
     let providers = ["Anthropic", "OpenAI", "OpenRouter"];
@@ -131,6 +137,8 @@ pub fn run_setup() -> anyhow::Result<()> {
         .with_prompt("LLM model")
         .default(default_model.to_string())
         .interact_text()?;
+
+    println!("\n--- Voice ---\n");
 
     // 4. Voice (optional)
     let voice_default = existing.voice.enabled.unwrap_or(true);
@@ -220,20 +228,11 @@ pub fn run_setup() -> anyhow::Result<()> {
     write_config(&config_path, &config_file)?;
     println!("\nConfig written to {}", config_path.display());
 
-    // 6. Daemon install (optional)
-    let install_service = Confirm::new()
-        .with_prompt("Install beacon as a system service?")
-        .default(false)
-        .interact()?;
-
-    if install_service {
-        match crate::lifecycle::install_service(&crate::lifecycle::ServiceConfig::default()) {
-            Ok(()) => println!("Service installed"),
-            Err(e) => println!("Failed to install service: {e}"),
-        }
-    }
-
-    println!("\nSetup complete! Run `beacon --foreground -v` to start.");
+    println!("\n  Setup complete!\n");
+    println!("  Start Beacon:");
+    println!("    beacon --foreground -v\n");
+    println!("  Or install as a service:");
+    println!("    beacon install\n");
 
     Ok(())
 }
