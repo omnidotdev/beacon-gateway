@@ -13,7 +13,7 @@ use beacon_gateway::{
     },
     config::{ReactionLevel, StreamingMode, TelegramConfig},
     db::{Memory, MemoryCategory, MemoryRepo, MessageRole, SessionRepo, UserRepo},
-    tools::loop_detection::{LoopDetector, LoopSeverity},
+    tools::{LoopDetector, LoopSeverity},
 };
 use tokio::sync::Mutex;
 

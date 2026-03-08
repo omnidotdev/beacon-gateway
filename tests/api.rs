@@ -91,6 +91,7 @@ fn build_test_router(db: DbPool) -> axum::Router {
         telegram_registry: None,
         condenser: None,
         reranker: None,
+        mcp_manager: None,
     });
 
     Router::new()
