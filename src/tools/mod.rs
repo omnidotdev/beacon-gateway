@@ -5,7 +5,7 @@ mod browser_tools;
 mod cron;
 pub mod exec;
 pub mod executor;
-pub mod loop_detection;
+pub use agent_core::tools::loop_detection::{LoopDetector, LoopSeverity};
 pub mod memory;
 mod policy;
 mod sessions;
