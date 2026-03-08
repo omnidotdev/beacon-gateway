@@ -660,3 +660,121 @@ fn setup_life_json(existing: Option<&str>) -> anyhow::Result<Option<String>> {
         Ok(Some(path))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::file::*;
+
+    #[test]
+    fn serialize_config_includes_persona() {
+        let config = BeaconConfigFile {
+            persona: Some("orin".to_string()),
+            ..Default::default()
+        };
+        let toml = serialize_config(&config);
+        assert!(toml.contains("persona = \"orin\""));
+    }
+
+    #[test]
+    fn serialize_config_includes_channels() {
+        let config = BeaconConfigFile {
+            channels: ChannelsFileConfig {
+                discord: Some(ChannelToggle {
+                    enabled: Some(true),
+                }),
+                telegram: Some(ChannelToggle {
+                    enabled: Some(false),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let toml = serialize_config(&config);
+        assert!(toml.contains("[channels.discord]"));
+        assert!(toml.contains("enabled = true"));
+        assert!(toml.contains("[channels.telegram]"));
+        assert!(toml.contains("enabled = false"));
+    }
+
+    #[test]
+    fn serialize_config_includes_mcp_servers() {
+        let config = BeaconConfigFile {
+            mcp_servers: vec![crate::mcp::McpServerConfig {
+                name: "github".to_string(),
+                command: "npx".to_string(),
+                args: vec!["-y".to_string(), "@modelcontextprotocol/server-github".to_string()],
+                env: std::collections::HashMap::new(),
+            }],
+            ..Default::default()
+        };
+        let toml = serialize_config(&config);
+        assert!(toml.contains("[[mcp_servers]]"));
+        assert!(toml.contains("name = \"github\""));
+        assert!(toml.contains("command = \"npx\""));
+    }
+
+    #[test]
+    fn serialize_config_includes_life_json() {
+        let config = BeaconConfigFile {
+            life_json: Some("/home/user/.life.json".to_string()),
+            ..Default::default()
+        };
+        let toml = serialize_config(&config);
+        assert!(toml.contains("life_json = \"/home/user/.life.json\""));
+    }
+
+    #[test]
+    fn serialize_config_omits_empty_sections() {
+        let config = BeaconConfigFile::default();
+        let toml = serialize_config(&config);
+        assert!(!toml.contains("[channels]"));
+        assert!(!toml.contains("[[mcp_servers]]"));
+        assert!(!toml.contains("life_json"));
+    }
+
+    #[test]
+    fn serialize_config_full_roundtrip() {
+        let config = BeaconConfigFile {
+            persona: Some("orin".to_string()),
+            llm: LlmFileConfig {
+                model: Some("claude-sonnet-4-20250514".to_string()),
+                provider: Some("anthropic".to_string()),
+            },
+            voice: VoiceFileConfig {
+                enabled: Some(true),
+                stt_model: Some("whisper-1".to_string()),
+                tts_model: Some("tts-1".to_string()),
+                tts_voice: Some("nova".to_string()),
+                tts_speed: Some(1.0),
+            },
+            api_keys: ApiKeysFileConfig {
+                anthropic: Some("sk-ant-test".to_string()),
+                ..Default::default()
+            },
+            channels: ChannelsFileConfig {
+                discord: Some(ChannelToggle { enabled: Some(true) }),
+                ..Default::default()
+            },
+            mcp_servers: vec![crate::mcp::McpServerConfig {
+                name: "test".to_string(),
+                command: "echo".to_string(),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+            }],
+            life_json: Some("~/.life.json".to_string()),
+            ..Default::default()
+        };
+
+        let toml = serialize_config(&config);
+
+        // Verify all sections present
+        assert!(toml.contains("persona = \"orin\""));
+        assert!(toml.contains("[llm]"));
+        assert!(toml.contains("[voice]"));
+        assert!(toml.contains("[api_keys]"));
+        assert!(toml.contains("[channels.discord]"));
+        assert!(toml.contains("[[mcp_servers]]"));
+        assert!(toml.contains("life_json"));
+    }
+}
