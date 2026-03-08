@@ -828,10 +828,13 @@ async fn resolve_user_synapse(
         |c| c.base_url().to_string(),
     );
 
-    // Step 1: Use user's preferred provider key (respects Synapse defaultProvider preference)
-    // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
+    // Step 1: Use user's preferred BYOK key (respects Synapse defaultProvider preference)
+    // Priority: explicit defaultProvider → anthropic → openai → openrouter
+    // Skip omni_credits here — it's a managed provider handled by auto-provisioning (step 2)
     match resolver.resolve_preferred(user_id).await {
-        Ok(Some((ref provider_name, ref resolved_key))) if resolved_key.is_user_key => {
+        Ok(Some((ref provider_name, ref resolved_key)))
+            if resolved_key.is_user_key && provider_name != "omni_credits" =>
+        {
             let model = resolved_key
                 .model_override
                 .clone()
