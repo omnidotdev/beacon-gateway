@@ -7,9 +7,7 @@ use serde::{Deserialize, Serialize};
 
 // Re-export agent-core's shared skill types for interop
 pub use agent_core::skills::SkillSource;
-pub use agent_core::skills::{
-    Skill as CoreSkill, SkillLookup, SkillMetadata as CoreSkillMetadata,
-};
+pub use agent_core::skills::{Skill as CoreSkill, SkillLookup, SkillMetadata as CoreSkillMetadata};
 
 /// Serde helper for fields that default to `true`
 const fn default_true() -> bool {

@@ -42,9 +42,9 @@ pub mod extensions;
 pub mod hooks;
 pub mod integrations;
 pub mod knowledge;
-pub mod mcp;
 pub mod lifecycle;
 pub mod links;
+pub mod mcp;
 pub mod media;
 pub mod nodes;
 pub mod persona;
@@ -72,11 +72,11 @@ pub use error::{Error, Result};
 pub use extensions::{Extension, ExtensionInfo, ExtensionRegistry};
 pub use hooks::{HookAction, HookEvent, HookManager, HookResult, HooksConfig};
 pub use integrations::{Schedule, ScheduleRequest, TrellisClient, VortexClient};
-pub use mcp::{McpServerConfig, McpServerManager};
 pub use knowledge::{
     KnowledgePackResolver, ResolverError, cosine_similarity, format_knowledge, hydrate_embeddings,
     select_knowledge, select_knowledge_with_embeddings,
 };
+pub use mcp::{McpServerConfig, McpServerManager};
 pub use persona::{
     KnowledgeChunk, KnowledgeConfig, KnowledgePack, KnowledgePackRef, KnowledgePriority,
     PackEmbeddings, Persona,

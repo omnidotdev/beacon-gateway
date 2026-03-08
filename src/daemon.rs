@@ -1835,8 +1835,7 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                 let filtered: Vec<_> = tools
                     .into_iter()
                     .filter(|t| {
-                        tool_policy
-                            .is_allowed(channel_name, &normalize_tool_name(&t.function.name))
+                        tool_policy.is_allowed(channel_name, &normalize_tool_name(&t.function.name))
                     })
                     .collect();
                 let names: Vec<&str> = filtered.iter().map(|t| t.function.name.as_str()).collect();
@@ -2017,17 +2016,23 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                         }
                                         crate::tools::LoopSeverity::Critical => {
                                             tracing::warn!(tool = %tc.function.name, "critical: possible tool loop");
-                                            llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id, &result,
+                                            ));
                                             llm_messages.push(synapse_client::Message::system(
                                                 "Warning: You appear to be in a loop calling the same tool repeatedly. Please try a different approach or provide a final answer.",
                                             ));
                                         }
                                         crate::tools::LoopSeverity::Warning => {
                                             tracing::info!(tool = %tc.function.name, "warning: repeated tool call pattern");
-                                            llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id, &result,
+                                            ));
                                         }
                                         crate::tools::LoopSeverity::None => {
-                                            llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id, &result,
+                                            ));
                                         }
                                     }
 
@@ -2101,39 +2106,45 @@ async fn handle_channel_messages<C: Channel + Send + 'static>(
                                         &result,
                                     );
                                     match severity {
-                                            crate::tools::LoopSeverity::CircuitBreaker => {
-                                                tracing::warn!(
-                                                    tool = %tc.function.name,
-                                                    "circuit breaker: tool loop detected, breaking"
-                                                );
-                                                llm_messages.push(synapse_client::Message::tool(
+                                        crate::tools::LoopSeverity::CircuitBreaker => {
+                                            tracing::warn!(
+                                                tool = %tc.function.name,
+                                                "circuit breaker: tool loop detected, breaking"
+                                            );
+                                            llm_messages.push(synapse_client::Message::tool(
                                                     &tc.id,
                                                     "Error: Circuit breaker triggered — this tool has been called too many times with the same arguments. Please try a different approach.",
                                                 ));
-                                                should_break = true;
-                                                break;
-                                            }
-                                            crate::tools::LoopSeverity::Critical => {
-                                                tracing::warn!(
-                                                    tool = %tc.function.name,
-                                                    "critical: possible tool loop detected"
-                                                );
-                                                llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
-                                                llm_messages.push(synapse_client::Message::system(
+                                            should_break = true;
+                                            break;
+                                        }
+                                        crate::tools::LoopSeverity::Critical => {
+                                            tracing::warn!(
+                                                tool = %tc.function.name,
+                                                "critical: possible tool loop detected"
+                                            );
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id, &result,
+                                            ));
+                                            llm_messages.push(synapse_client::Message::system(
                                                     "Warning: You appear to be in a loop calling the same tool repeatedly. Please try a different approach or provide a final answer.",
                                                 ));
-                                            }
-                                            crate::tools::LoopSeverity::Warning => {
-                                                tracing::info!(
-                                                    tool = %tc.function.name,
-                                                    "warning: repeated tool call pattern detected"
-                                                );
-                                                llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
-                                            }
-                                            crate::tools::LoopSeverity::None => {
-                                                llm_messages.push(synapse_client::Message::tool(&tc.id, &result));
-                                            }
                                         }
+                                        crate::tools::LoopSeverity::Warning => {
+                                            tracing::info!(
+                                                tool = %tc.function.name,
+                                                "warning: repeated tool call pattern detected"
+                                            );
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id, &result,
+                                            ));
+                                        }
+                                        crate::tools::LoopSeverity::None => {
+                                            llm_messages.push(synapse_client::Message::tool(
+                                                &tc.id, &result,
+                                            ));
+                                        }
+                                    }
 
                                     let tool_success = !result.starts_with("Error: ");
                                     crate::events::publish(

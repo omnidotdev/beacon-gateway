@@ -449,8 +449,10 @@ fn setup_channels(
                 });
             }
             "Telegram" => {
-                let token =
-                    prompt_channel_token("Telegram bot token (from @BotFather)", api_keys.telegram.as_deref())?;
+                let token = prompt_channel_token(
+                    "Telegram bot token (from @BotFather)",
+                    api_keys.telegram.as_deref(),
+                )?;
                 if let Some(t) = token {
                     api_keys.telegram = Some(t);
                 }
@@ -476,10 +478,7 @@ fn setup_channels(
 }
 
 /// Prompt for a channel token with masked existing value
-fn prompt_channel_token(
-    label: &str,
-    existing: Option<&str>,
-) -> anyhow::Result<Option<String>> {
+fn prompt_channel_token(label: &str, existing: Option<&str>) -> anyhow::Result<Option<String>> {
     let masked = existing.map(|k| {
         if k.len() > 8 {
             format!("{}...{}", &k[..4], &k[k.len() - 4..])
@@ -513,13 +512,41 @@ fn setup_mcp_servers(
 
     // Well-known MCP servers with their binary names and typical commands
     let known_servers: &[(&str, &str, &[&str])] = &[
-        ("filesystem", "npx", &["-y", "@modelcontextprotocol/server-filesystem", "."]),
-        ("github", "npx", &["-y", "@modelcontextprotocol/server-github"]),
-        ("postgres", "npx", &["-y", "@modelcontextprotocol/server-postgres"]),
-        ("sqlite", "npx", &["-y", "@modelcontextprotocol/server-sqlite"]),
-        ("brave-search", "npx", &["-y", "@modelcontextprotocol/server-brave-search"]),
-        ("fetch", "npx", &["-y", "@modelcontextprotocol/server-fetch"]),
-        ("memory", "npx", &["-y", "@modelcontextprotocol/server-memory"]),
+        (
+            "filesystem",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-filesystem", "."],
+        ),
+        (
+            "github",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-github"],
+        ),
+        (
+            "postgres",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-postgres"],
+        ),
+        (
+            "sqlite",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-sqlite"],
+        ),
+        (
+            "brave-search",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-brave-search"],
+        ),
+        (
+            "fetch",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-fetch"],
+        ),
+        (
+            "memory",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-memory"],
+        ),
     ];
 
     // Check which are already configured
@@ -596,9 +623,7 @@ fn setup_mcp_servers(
 
 /// Prompt for a custom MCP server definition
 fn prompt_custom_mcp_server() -> anyhow::Result<Option<crate::mcp::McpServerConfig>> {
-    let name: String = Input::new()
-        .with_prompt("Server name")
-        .interact_text()?;
+    let name: String = Input::new().with_prompt("Server name").interact_text()?;
 
     if name.is_empty() {
         return Ok(None);
@@ -642,12 +667,10 @@ fn setup_life_json(existing: Option<&str>) -> anyhow::Result<Option<String>> {
         return Ok(existing.map(str::to_string));
     }
 
-    let default_path = existing
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
-            format!("{home}/.life.json")
-        });
+    let default_path = existing.map(str::to_string).unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+        format!("{home}/.life.json")
+    });
 
     let path: String = Input::new()
         .with_prompt("Path or URL to life.json")
@@ -703,7 +726,10 @@ mod tests {
             mcp_servers: vec![crate::mcp::McpServerConfig {
                 name: "github".to_string(),
                 command: "npx".to_string(),
-                args: vec!["-y".to_string(), "@modelcontextprotocol/server-github".to_string()],
+                args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-github".to_string(),
+                ],
                 env: std::collections::HashMap::new(),
             }],
             ..Default::default()
@@ -753,7 +779,9 @@ mod tests {
                 ..Default::default()
             },
             channels: ChannelsFileConfig {
-                discord: Some(ChannelToggle { enabled: Some(true) }),
+                discord: Some(ChannelToggle {
+                    enabled: Some(true),
+                }),
                 ..Default::default()
             },
             mcp_servers: vec![crate::mcp::McpServerConfig {

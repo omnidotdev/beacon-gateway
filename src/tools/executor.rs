@@ -118,7 +118,10 @@ impl ToolExecutor {
             .list_tools(None)
             .await
         {
-            Ok(tools) => tools.into_iter().map(synapse_client::ToolDefinition::from).collect(),
+            Ok(tools) => tools
+                .into_iter()
+                .map(synapse_client::ToolDefinition::from)
+                .collect(),
             Err(e) => {
                 tracing::debug!(error = %e, "Synapse MCP tool listing unavailable, using built-ins only");
                 Vec::new()

@@ -1015,7 +1015,9 @@ impl Config {
             gatekeeper_service_key,
             mcp_servers: fc.mcp_servers,
             ecosystem: EcosystemConfig {
-                trellis_url: std::env::var("TRELLIS_URL").ok().or(fc.ecosystem.trellis_url),
+                trellis_url: std::env::var("TRELLIS_URL")
+                    .ok()
+                    .or(fc.ecosystem.trellis_url),
                 heartbeat_url: std::env::var("HEARTBEAT_URL")
                     .ok()
                     .or(fc.ecosystem.heartbeat_url),

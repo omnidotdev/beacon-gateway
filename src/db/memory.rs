@@ -583,12 +583,7 @@ impl MemoryRepo {
     /// # Errors
     ///
     /// Returns error if database operation fails
-    pub fn search_keyword(
-        &self,
-        user_id: &str,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<Memory>> {
+    pub fn search_keyword(&self, user_id: &str, query: &str, limit: usize) -> Result<Vec<Memory>> {
         let all = self.list(user_id, None)?;
 
         if all.is_empty() {

@@ -827,13 +827,14 @@ async fn resolve_user_synapse(
     // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
     match resolver.resolve_preferred(user_id).await {
         Ok(Some((ref provider_name, ref resolved))) if resolved.is_user_key => {
-            let model = resolved
-                .model_override
-                .clone()
-                .unwrap_or_else(|| match provider_name.as_str() {
-                    "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
-                    _ => "gpt-4o".to_string(),
-                });
+            let model =
+                resolved
+                    .model_override
+                    .clone()
+                    .unwrap_or_else(|| match provider_name.as_str() {
+                        "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
+                        _ => "gpt-4o".to_string(),
+                    });
 
             tracing::info!(
                 user_id = %user_id,

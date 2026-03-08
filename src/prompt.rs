@@ -123,8 +123,7 @@ pub fn build_system_prompt_with_budget(
     // Fill standard skills within budget
     let mut included_standard = Vec::new();
     for s in &standard {
-        if total_count >= budget.max_skills
-            || total_chars + compact_entry_len(s) > budget.max_chars
+        if total_count >= budget.max_skills || total_chars + compact_entry_len(s) > budget.max_chars
         {
             break;
         }
@@ -136,8 +135,7 @@ pub fn build_system_prompt_with_budget(
     // Fill supplementary skills within remaining budget
     let mut included_supplementary = Vec::new();
     for s in &supplementary {
-        if total_count >= budget.max_skills
-            || total_chars + compact_entry_len(s) > budget.max_chars
+        if total_count >= budget.max_skills || total_chars + compact_entry_len(s) > budget.max_chars
         {
             break;
         }
@@ -299,8 +297,7 @@ pub fn build_system_prompt(
     }
 
     // Add skill selection instructions if any skills were included
-    let has_any_skills =
-        !overrides.is_empty() || !standard.is_empty() || !supplementary.is_empty();
+    let has_any_skills = !overrides.is_empty() || !standard.is_empty() || !supplementary.is_empty();
     if has_any_skills {
         sections.push(SKILL_SELECTION_INSTRUCTIONS.to_string());
     }
@@ -332,16 +329,10 @@ fn format_skill_section(header: &str, skills: &[&InstalledSkill]) -> String {
     let skill_blocks: Vec<String> = skills
         .iter()
         .map(|s| {
-            let location = s
-                .skill
-                .location
-                .as_deref()
-                .unwrap_or("unknown");
+            let location = s.skill.location.as_deref().unwrap_or("unknown");
             format!(
                 "<skill name=\"{}\" description=\"{}\" location=\"{}\" />",
-                s.skill.metadata.name,
-                s.skill.metadata.description,
-                location,
+                s.skill.metadata.name, s.skill.metadata.description, location,
             )
         })
         .collect();
