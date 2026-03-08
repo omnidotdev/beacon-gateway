@@ -22,6 +22,7 @@ dependencies = [
  "mini-moka",
  "parking_lot",
  "pin-project-lite",
+ "readability",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
@@ -30,6 +31,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -788,7 +790,6 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "rand 0.8.5",
- "readability",
  "regex",
  "reqwest 0.12.28",
  "rubato",

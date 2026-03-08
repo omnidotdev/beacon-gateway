@@ -125,8 +125,7 @@ mini-moka = "0.10"
 # Agent core (shared LLM provider abstraction)
 agent-core = { git = "https://github.com/omnidotdev/agent-core.git", features = ["mcp", "tools", "web"] }
 
-# HTML parsing and readability extraction
-readability = "0.3"
+# HTML parsing and URL handling
 url = "2"
 lru = "0.16.3"
 scraper = "0.25.0"
