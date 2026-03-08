@@ -1,6 +1,5 @@
 //! Database module for session, message, and memory persistence
 
-pub mod bm25;
 pub mod embedder;
 pub mod indexer;
 pub mod knowledge;

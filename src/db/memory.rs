@@ -603,7 +603,7 @@ impl MemoryRepo {
             })
             .collect();
 
-        let scorer = super::bm25::Bm25Scorer::new(&documents);
+        let scorer = agent_core::knowledge::Bm25Scorer::new(&documents);
         let ranked = scorer.score(query);
 
         if ranked.is_empty() {
