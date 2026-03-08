@@ -6,10 +6,10 @@ mod types;
 
 pub use manifold::ManifoldClient;
 pub use types::{
-    InstallKind, InstalledSkill, NodeManager, Skill, SkillFilter, SkillInstallPreferences,
-    SkillInstallResult, SkillInstallSpec, SkillMetadata, SkillPriority, SkillSnapshot, SkillSource,
-    SnapshotEntry, deduplicate_command_name, has_binary, merge_nested_metadata,
-    sanitize_command_name,
+    CoreSkill, CoreSkillMetadata, InstallKind, InstalledSkill, NodeManager, Skill, SkillFilter,
+    SkillInstallPreferences, SkillInstallResult, SkillInstallSpec, SkillLookup, SkillMetadata,
+    SkillPriority, SkillSnapshot, SkillSource, SnapshotEntry, deduplicate_command_name, has_binary,
+    merge_nested_metadata, sanitize_command_name,
 };
 
 use std::collections::HashMap;

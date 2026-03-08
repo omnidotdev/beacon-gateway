@@ -1,8 +1,15 @@
 //! Skill type definitions
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+// Re-export agent-core's shared skill types for interop
+pub use agent_core::skills::SkillSource;
+pub use agent_core::skills::{
+    Skill as CoreSkill, SkillLookup, SkillMetadata as CoreSkillMetadata,
+};
 
 /// Serde helper for fields that default to `true`
 const fn default_true() -> bool {
@@ -220,21 +227,34 @@ pub struct Skill {
     pub location: Option<String>,
 }
 
-/// Where the skill was loaded from
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillSource {
-    /// Local filesystem
-    Local,
-    /// Manifold registry
-    Manifold {
-        namespace: String,
-        repository: String,
-    },
-    /// Bundled with Beacon
-    Bundled,
-    /// Loaded from a plugin
-    Plugin,
+// SkillSource is re-exported from agent-core above
+
+impl Skill {
+    /// Convert to agent-core's shared `Skill` type, projecting only the common fields
+    #[must_use]
+    pub fn to_core(&self) -> CoreSkill {
+        CoreSkill {
+            id: self.id.clone(),
+            metadata: CoreSkillMetadata {
+                name: Some(self.metadata.name.clone()),
+                description: Some(self.metadata.description.clone()),
+                version: self.metadata.version.clone(),
+                author: self.metadata.author.clone(),
+                tags: self.metadata.tags.clone(),
+                always: self.metadata.always,
+                user_invocable: self.metadata.user_invocable,
+            },
+            content: self.content.clone(),
+            source: self.source.clone(),
+            location: self.location.as_ref().map(PathBuf::from),
+        }
+    }
+}
+
+impl From<Skill> for CoreSkill {
+    fn from(skill: Skill) -> Self {
+        skill.to_core()
+    }
 }
 
 /// Skill priority determines placement in the system prompt hierarchy
