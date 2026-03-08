@@ -223,7 +223,7 @@ impl ToolExecutor {
             let result = mcp
                 .call_tool(name, args)
                 .await
-                .map_err(|e| Error::Tool(e))?;
+                .map_err(Error::Tool)?;
             if result.is_error {
                 return Err(Error::Tool(result.text));
             }

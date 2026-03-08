@@ -342,8 +342,16 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
         out.push('\n');
     }
 
-    // [channels]
-    let ch = &config.channels;
+    serialize_channels(&config.channels, &mut out);
+    serialize_mcp_servers(&config.mcp_servers, &mut out);
+
+    out
+}
+
+/// Serialize channel config to TOML
+fn serialize_channels(ch: &ChannelsFileConfig, out: &mut String) {
+    use std::fmt::Write;
+
     let has_channels = ch.discord.is_some() || ch.telegram.is_some() || ch.slack.is_some();
     if has_channels {
         out.push_str("[channels]\n\n");
@@ -369,9 +377,13 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
             out.push('\n');
         }
     }
+}
 
-    // [[mcp_servers]]
-    for server in &config.mcp_servers {
+/// Serialize MCP server config to TOML
+fn serialize_mcp_servers(servers: &[crate::mcp::McpServerConfig], out: &mut String) {
+    use std::fmt::Write;
+
+    for server in servers {
         out.push_str("[[mcp_servers]]\n");
         let _ = writeln!(out, "name = \"{}\"", server.name);
         let _ = writeln!(out, "command = \"{}\"", server.command);
@@ -387,8 +399,6 @@ fn serialize_config(config: &BeaconConfigFile) -> String {
         }
         out.push('\n');
     }
-
-    out
 }
 
 /// Prompt user to configure messaging channels
@@ -599,7 +609,7 @@ fn setup_mcp_servers(
         servers.push(crate::mcp::McpServerConfig {
             name: name.to_string(),
             command: command.to_string(),
-            args: args.iter().map(|a| a.to_string()).collect(),
+            args: args.iter().map(ToString::to_string).collect(),
             env: std::collections::HashMap::new(),
         });
         println!("  + Added {name}");
@@ -611,11 +621,11 @@ fn setup_mcp_servers(
         .default(false)
         .interact()?;
 
-    if add_custom {
-        if let Some(custom) = prompt_custom_mcp_server()? {
-            println!("  + Added {}", custom.name);
-            servers.push(custom);
-        }
+    if add_custom
+        && let Some(custom) = prompt_custom_mcp_server()?
+    {
+        println!("  + Added {}", custom.name);
+        servers.push(custom);
     }
 
     Ok(servers)
@@ -667,10 +677,13 @@ fn setup_life_json(existing: Option<&str>) -> anyhow::Result<Option<String>> {
         return Ok(existing.map(str::to_string));
     }
 
-    let default_path = existing.map(str::to_string).unwrap_or_else(|| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
-        format!("{home}/.life.json")
-    });
+    let default_path = existing.map_or_else(
+        || {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+            format!("{home}/.life.json")
+        },
+        str::to_string,
+    );
 
     let path: String = Input::new()
         .with_prompt("Path or URL to life.json")

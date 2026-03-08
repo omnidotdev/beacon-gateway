@@ -10,7 +10,7 @@ use agent_core::tools::shell::ShellTool;
 use crate::{Error, Result};
 
 /// Built-in shell execution tool for LLM command execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BuiltinExecTool {
     inner: ShellTool,
 }
@@ -18,7 +18,7 @@ pub struct BuiltinExecTool {
 impl BuiltinExecTool {
     /// Create a new exec tool with the given working directory and extra PATH entries
     #[must_use]
-    pub fn new(working_dir: PathBuf, extra_path: Vec<PathBuf>) -> Self {
+    pub const fn new(working_dir: PathBuf, extra_path: Vec<PathBuf>) -> Self {
         Self {
             inner: ShellTool::new(working_dir, extra_path),
         }
@@ -59,15 +59,15 @@ impl BuiltinExecTool {
     ///
     /// Returns error if arguments are malformed or execution fails
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
-        if name != "Bash" {
-            return Err(Error::Tool(format!("unknown exec tool: {name}")));
-        }
-
         #[derive(serde::Deserialize)]
         struct ExecArgs {
             command: Option<String>,
             #[serde(default)]
             timeout: Option<u64>,
+        }
+
+        if name != "Bash" {
+            return Err(Error::Tool(format!("unknown exec tool: {name}")));
         }
 
         let args: ExecArgs = serde_json::from_str(arguments)
@@ -91,14 +91,6 @@ impl BuiltinExecTool {
         });
 
         Ok(response.to_string())
-    }
-}
-
-impl Default for BuiltinExecTool {
-    fn default() -> Self {
-        Self {
-            inner: ShellTool::default(),
-        }
     }
 }
 

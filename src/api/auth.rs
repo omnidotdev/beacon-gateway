@@ -19,6 +19,7 @@ use super::ApiState;
 
 /// Authenticated user identity extracted from the request
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AuthIdentity {
     /// User ID (from JWT `sub` claim or "api-key" for API key auth)
     pub user_id: String,
@@ -28,6 +29,7 @@ pub struct AuthIdentity {
 
 /// How the user was authenticated
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum AuthMethod {
     /// Matched the configured `BEACON_API_KEY`
     ApiKey,
@@ -76,6 +78,7 @@ pub async fn require_api_key(
 ///
 /// On success, inserts `AuthIdentity` into request extensions.
 /// In development mode (no auth configured), passes through as anonymous.
+#[allow(dead_code)]
 pub async fn require_auth(
     State(state): State<Arc<ApiState>>,
     mut req: Request,
@@ -84,34 +87,33 @@ pub async fn require_auth(
     let token = extract_bearer(&req);
 
     // Try API key first
-    if let Some(expected_key) = &state.api_key {
-        if let Some(key) = token {
-            if key == expected_key {
-                req.extensions_mut().insert(AuthIdentity {
-                    user_id: "api-key".to_string(),
-                    method: AuthMethod::ApiKey,
-                });
-                return Ok(next.run(req).await);
-            }
-        }
+    if let Some(expected_key) = &state.api_key
+        && let Some(key) = token
+        && key == expected_key
+    {
+        req.extensions_mut().insert(AuthIdentity {
+            user_id: "api-key".to_string(),
+            method: AuthMethod::ApiKey,
+        });
+        return Ok(next.run(req).await);
     }
 
     // Try JWT validation via HIDRA Gatekeeper
-    if let Some(ref jwt_cache) = state.jwt_cache {
-        if let Some(token) = token {
-            match jwt_cache.validate(token).await {
-                Ok(claims) => {
-                    tracing::debug!(user_id = %claims.sub, "authenticated via Gatekeeper JWT");
-                    req.extensions_mut().insert(AuthIdentity {
-                        user_id: claims.sub,
-                        method: AuthMethod::Jwt,
-                    });
-                    return Ok(next.run(req).await);
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "JWT validation failed");
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
+    if let Some(ref jwt_cache) = state.jwt_cache
+        && let Some(token) = token
+    {
+        match jwt_cache.validate(token).await {
+            Ok(claims) => {
+                tracing::debug!(user_id = %claims.sub, "authenticated via Gatekeeper JWT");
+                req.extensions_mut().insert(AuthIdentity {
+                    user_id: claims.sub,
+                    method: AuthMethod::Jwt,
+                });
+                return Ok(next.run(req).await);
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "JWT validation failed");
+                return Err(StatusCode::UNAUTHORIZED);
             }
         }
     }

@@ -716,6 +716,11 @@ async fn handle_chat_message(
     let full_response = match agent_result {
         Ok(text) => text,
         Err(e) => {
+            tracing::error!(
+                session_id = %session_id,
+                error = %e,
+                "agent turn failed"
+            );
             let error = WsOutgoing::Error {
                 code: "agent_error".to_string(),
                 message: e.to_string(),
@@ -826,9 +831,9 @@ async fn resolve_user_synapse(
     // Step 1: Use user's preferred provider key (respects Synapse defaultProvider preference)
     // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
     match resolver.resolve_preferred(user_id).await {
-        Ok(Some((ref provider_name, ref resolved))) if resolved.is_user_key => {
+        Ok(Some((ref provider_name, ref resolved_key))) if resolved_key.is_user_key => {
             let model =
-                resolved
+                resolved_key
                     .model_override
                     .clone()
                     .unwrap_or_else(|| match provider_name.as_str() {
@@ -844,7 +849,7 @@ async fn resolve_user_synapse(
             );
 
             if let Ok(client) = SynapseClient::new(&synapse_base_url) {
-                let client = client.with_api_key(resolved.api_key.clone());
+                let client = client.with_api_key(resolved_key.api_key.clone());
                 return Some((Arc::new(client), model));
             }
             tracing::error!(url = %synapse_base_url, "failed to create SynapseClient for BYOK key");

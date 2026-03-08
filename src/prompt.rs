@@ -318,7 +318,7 @@ fn compact_entry_len(s: &InstalledSkill) -> usize {
     // <skill name="..." description="..." location="..." />
     97 + s.skill.metadata.name.len()
         + s.skill.metadata.description.len()
-        + s.skill.location.as_ref().map_or(7, |l| l.len())
+        + s.skill.location.as_ref().map_or(7, String::len)
 }
 
 /// Format a group of skills with a header into a tagged section

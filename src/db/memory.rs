@@ -604,16 +604,16 @@ impl MemoryRepo {
             .collect();
 
         let scorer = super::bm25::Bm25Scorer::new(&documents);
-        let scored = scorer.score(query);
+        let ranked = scorer.score(query);
 
-        if scored.is_empty() {
+        if ranked.is_empty() {
             // BM25 found nothing; fall back to LIKE for partial matches
             let mut fallback = self.search(user_id, query)?;
             fallback.truncate(limit);
             return Ok(fallback);
         }
 
-        let results: Vec<Memory> = scored
+        let results: Vec<Memory> = ranked
             .into_iter()
             .take(limit)
             .map(|(idx, _score)| all[idx].clone())

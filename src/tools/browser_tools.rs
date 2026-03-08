@@ -16,6 +16,12 @@ pub struct BuiltinBrowserTools {
     controller: Arc<BrowserController>,
 }
 
+impl Default for BuiltinBrowserTools {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuiltinBrowserTools {
     /// Create browser tools with default config
     #[must_use]
@@ -35,6 +41,7 @@ impl BuiltinBrowserTools {
 
     /// Return tool definitions for all browser tools
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn tool_definitions() -> Vec<synapse_client::ToolDefinition> {
         vec![
             synapse_client::ToolDefinition {
