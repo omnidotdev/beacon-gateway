@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 # Clone agent-core at a pinned ref (update SHA when agent-core changes)
 # Pinning to a commit busts Docker layer cache and ensures reproducibility
 ARG GITHUB_TOKEN
-ARG AGENT_CORE_REF=879433a
+ARG AGENT_CORE_REF=1f3c61a
 RUN if [ -n "$GITHUB_TOKEN" ]; then \
       git clone https://x-access-token:${GITHUB_TOKEN}@github.com/omnidotdev/agent-core.git /agent-core; \
     else \
@@ -25,6 +25,9 @@ RUN if [ -n "$GITHUB_TOKEN" ]; then \
 
 # Copy manifests first for layer caching
 COPY Cargo.toml Cargo.lock ./
+
+# Rewrite the [patch] path to point at the Docker-local clone
+RUN sed -i 's|path = "../../../agent-core"|path = "/agent-core"|' Cargo.toml
 
 # Create dummy src to build dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "pub fn dummy() {}" > src/lib.rs
