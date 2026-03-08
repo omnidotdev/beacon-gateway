@@ -15,6 +15,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "chromiumoxide",
  "chrono",
  "directories",
  "futures",

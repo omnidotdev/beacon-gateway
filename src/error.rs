@@ -130,3 +130,9 @@ impl From<agent_core::knowledge::EmbedderError> for Error {
         Self::Embedding(e.to_string())
     }
 }
+
+impl From<agent_core::tools::browser::BrowserError> for Error {
+    fn from(e: agent_core::tools::browser::BrowserError) -> Self {
+        Self::Browser(e.to_string())
+    }
+}

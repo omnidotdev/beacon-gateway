@@ -12,7 +12,7 @@ mod web;
 
 pub use agent_core::tools::policy::{ToolPolicy, ToolPolicyConfig, ToolProfile};
 pub use browser::{
-    BrowserController, BrowserControllerConfig, ElementInfo, PageContent, Screenshot,
+    BrowserController, BrowserControllerConfig, BrowserError, ElementInfo, PageContent, Screenshot,
 };
 pub use browser_tools::BuiltinBrowserTools;
 pub use cron::{BuiltinCronTools, CronTools, ScheduleInfo, ScheduleParams};
