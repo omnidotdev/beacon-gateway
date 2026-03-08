@@ -7,7 +7,8 @@ use synapse_client::ChatEvent;
 
 use crate::api::ApiState;
 use crate::db::MessageRole;
-use crate::tools::executor::ToolKind;
+use crate::tools::ToolKind;
+use crate::tools::executor::classify;
 
 /// Configuration for a single agentic turn
 #[derive(Debug, Clone)]
@@ -248,7 +249,7 @@ pub async fn run_agent_turn(state: &ApiState, config: AgentRunConfig) -> crate::
             // Partition remaining by read/mutate to run concurrently where safe
             let (reads, mutates): (Vec<_>, Vec<_>) = rest
                 .into_iter()
-                .partition(|tc| ToolKind::classify(&tc.name) == ToolKind::Read);
+                .partition(|tc| classify(&tc.name) == ToolKind::Read);
 
             let read_futs = reads.into_iter().map(|tc| {
                 let executor = Arc::clone(&executor);

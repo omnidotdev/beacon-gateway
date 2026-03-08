@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use agent_core::tools::{ToolKind, ToolProvider};
+
 use crate::db::{Embedder, Memory, MemoryCategory, MemoryRepo};
 use crate::{Error, Result};
 
@@ -30,72 +32,65 @@ impl BuiltinMemoryTools {
     /// Return tool definitions for all built-in memory tools
     #[must_use]
     pub fn tool_definitions() -> Vec<synapse_client::ToolDefinition> {
+        Self::core_definitions()
+            .iter()
+            .map(crate::tools::to_synapse_definition)
+            .collect()
+    }
+
+    /// Return agent-core tool definitions (shared by trait and legacy path)
+    fn core_definitions() -> Vec<agent_core::types::Tool> {
         vec![
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "memory_store".to_string(),
-                    description: Some(
-                        "Save important information to long-term memory. Use for user preferences, facts, decisions, and corrections.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "content": {
-                                "type": "string",
-                                "description": "The information to remember"
-                            },
-                            "category": {
-                                "type": "string",
-                                "enum": ["preference", "fact", "correction", "general"],
-                                "description": "Memory category (default: general)"
-                            }
+            agent_core::types::Tool {
+                name: "memory_store".to_string(),
+                description: "Save important information to long-term memory. Use for user preferences, facts, decisions, and corrections.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The information to remember"
                         },
-                        "required": ["content"]
-                    })),
-                },
+                        "category": {
+                            "type": "string",
+                            "enum": ["preference", "fact", "correction", "general"],
+                            "description": "Memory category (default: general)"
+                        }
+                    },
+                    "required": ["content"]
+                }),
             },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "memory_search".to_string(),
-                    description: Some(
-                        "Search long-term memory for relevant information. Use to recall past preferences, decisions, or context.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Max results to return (default: 5)"
-                            }
+            agent_core::types::Tool {
+                name: "memory_search".to_string(),
+                description: "Search long-term memory for relevant information. Use to recall past preferences, decisions, or context.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
                         },
-                        "required": ["query"]
-                    })),
-                },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max results to return (default: 5)"
+                        }
+                    },
+                    "required": ["query"]
+                }),
             },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "memory_forget".to_string(),
-                    description: Some(
-                        "Delete a specific memory by ID. Use when correcting or removing outdated information.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "description": "Memory ID to delete (from memory_store or memory_search results)"
-                            }
-                        },
-                        "required": ["id"]
-                    })),
-                },
+            agent_core::types::Tool {
+                name: "memory_forget".to_string(),
+                description: "Delete a specific memory by ID. Use when correcting or removing outdated information.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Memory ID to delete (from memory_store or memory_search results)"
+                        }
+                    },
+                    "required": ["id"]
+                }),
             },
         ]
     }
@@ -106,6 +101,11 @@ impl BuiltinMemoryTools {
     ///
     /// Returns error if arguments are malformed or database operation fails
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
+        self.dispatch(name, arguments).await
+    }
+
+    /// Internal dispatch for memory tool execution
+    async fn dispatch(&self, name: &str, arguments: &str) -> Result<String> {
         match name {
             "memory_store" => self.store(arguments).await,
             "memory_search" => self.search(arguments).await,
@@ -222,6 +222,26 @@ impl BuiltinMemoryTools {
         };
 
         Ok(response.to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolProvider for BuiltinMemoryTools {
+    fn definitions(&self) -> Vec<agent_core::types::Tool> {
+        Self::core_definitions()
+    }
+
+    async fn execute(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
+        self.dispatch(name, arguments)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn kind(&self, name: &str) -> ToolKind {
+        match name {
+            "memory_search" => ToolKind::Read,
+            _ => ToolKind::Mutate,
+        }
     }
 }
 

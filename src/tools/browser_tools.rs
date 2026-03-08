@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use base64::Engine;
 
+use agent_core::tools::{ToolKind, ToolProvider};
+
 use crate::tools::browser::{BrowserController, BrowserControllerConfig};
 use crate::{Error, Result};
 
@@ -41,109 +43,95 @@ impl BuiltinBrowserTools {
 
     /// Return tool definitions for all browser tools
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn tool_definitions() -> Vec<synapse_client::ToolDefinition> {
+        Self::core_definitions()
+            .iter()
+            .map(crate::tools::to_synapse_definition)
+            .collect()
+    }
+
+    /// Return agent-core tool definitions (shared by trait and legacy path)
+    #[allow(clippy::too_many_lines)]
+    fn core_definitions() -> Vec<agent_core::types::Tool> {
         vec![
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "browser_navigate".to_string(),
-                    description: Some(
-                        "Navigate to a URL and return the page title and text content."
-                            .to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "url": {
-                                "type": "string",
-                                "description": "URL to navigate to"
-                            }
-                        },
-                        "required": ["url"]
-                    })),
-                },
-            },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "browser_click".to_string(),
-                    description: Some(
-                        "Click an element on the current page by CSS selector.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "selector": {
-                                "type": "string",
-                                "description": "CSS selector for the element to click"
-                            }
-                        },
-                        "required": ["selector"]
-                    })),
-                },
-            },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "browser_type".to_string(),
-                    description: Some(
-                        "Type text into an input element identified by CSS selector.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "selector": {
-                                "type": "string",
-                                "description": "CSS selector for the input element"
-                            },
-                            "text": {
-                                "type": "string",
-                                "description": "Text to type into the element"
-                            }
-                        },
-                        "required": ["selector", "text"]
-                    })),
-                },
-            },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "browser_screenshot".to_string(),
-                    description: Some(
-                        "Take a screenshot of the current page or a specific URL. Returns base64-encoded PNG."
-                            .to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "url": {
-                                "type": "string",
-                                "description": "Optional URL to navigate to before taking screenshot"
-                            }
+            agent_core::types::Tool {
+                name: "browser_navigate".to_string(),
+                description: "Navigate to a URL and return the page title and text content."
+                    .to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL to navigate to"
                         }
-                    })),
-                },
+                    },
+                    "required": ["url"]
+                }),
             },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "browser_extract".to_string(),
-                    description: Some(
-                        "Extract elements from the current page matching a CSS selector. Returns tag, text, and attributes for each match."
-                            .to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "selector": {
-                                "type": "string",
-                                "description": "CSS selector to query"
-                            }
+            agent_core::types::Tool {
+                name: "browser_click".to_string(),
+                description: "Click an element on the current page by CSS selector.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector for the element to click"
+                        }
+                    },
+                    "required": ["selector"]
+                }),
+            },
+            agent_core::types::Tool {
+                name: "browser_type".to_string(),
+                description: "Type text into an input element identified by CSS selector."
+                    .to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector for the input element"
                         },
-                        "required": ["selector"]
-                    })),
-                },
+                        "text": {
+                            "type": "string",
+                            "description": "Text to type into the element"
+                        }
+                    },
+                    "required": ["selector", "text"]
+                }),
+            },
+            agent_core::types::Tool {
+                name: "browser_screenshot".to_string(),
+                description:
+                    "Take a screenshot of the current page or a specific URL. Returns base64-encoded PNG."
+                        .to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Optional URL to navigate to before taking screenshot"
+                        }
+                    }
+                }),
+            },
+            agent_core::types::Tool {
+                name: "browser_extract".to_string(),
+                description:
+                    "Extract elements from the current page matching a CSS selector. Returns tag, text, and attributes for each match."
+                        .to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector to query"
+                        }
+                    },
+                    "required": ["selector"]
+                }),
             },
         ]
     }
@@ -162,6 +150,11 @@ impl BuiltinBrowserTools {
     ///
     /// Returns error if the tool name is unknown or execution fails
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
+        self.dispatch(name, arguments).await
+    }
+
+    /// Internal dispatch for browser tool execution
+    async fn dispatch(&self, name: &str, arguments: &str) -> Result<String> {
         let args: serde_json::Value = serde_json::from_str(arguments)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::default()));
 
@@ -254,6 +247,26 @@ impl BuiltinBrowserTools {
                 Ok(serde_json::json!({ "elements": results }).to_string())
             }
             _ => Err(Error::Tool(format!("unknown browser tool: {name}"))),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolProvider for BuiltinBrowserTools {
+    fn definitions(&self) -> Vec<agent_core::types::Tool> {
+        Self::core_definitions()
+    }
+
+    async fn execute(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
+        self.dispatch(name, arguments)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn kind(&self, name: &str) -> ToolKind {
+        match name {
+            "browser_screenshot" | "browser_extract" => ToolKind::Read,
+            _ => ToolKind::Mutate,
         }
     }
 }

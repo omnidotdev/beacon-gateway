@@ -965,12 +965,12 @@ mod tests {
 
     #[test]
     fn partitions_tool_batch_correctly() {
-        use crate::tools::executor::ToolKind;
+        use crate::tools::ToolKind;
+        use crate::tools::executor::classify;
 
         let names = vec!["Read", "Bash", "Glob", "Write", "WebSearch"];
-        let (reads, mutates): (Vec<&&str>, Vec<&&str>) = names
-            .iter()
-            .partition(|n| ToolKind::classify(*n) == ToolKind::Read);
+        let (reads, mutates): (Vec<&&str>, Vec<&&str>) =
+            names.iter().partition(|n| classify(*n) == ToolKind::Read);
 
         assert_eq!(reads, vec![&"Read", &"Glob", &"WebSearch"]);
         assert_eq!(mutates, vec![&"Bash", &"Write"]);

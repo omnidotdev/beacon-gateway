@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use agent_core::tools::shell::ShellTool;
+use agent_core::tools::{ToolKind, ToolProvider};
 
 use crate::{Error, Result};
 
@@ -27,30 +28,12 @@ impl BuiltinExecTool {
     /// Return the tool definition for the `Bash` tool
     #[must_use]
     pub fn tool_definitions() -> Vec<synapse_client::ToolDefinition> {
-        vec![synapse_client::ToolDefinition {
-            tool_type: "function".to_owned(),
-            function: synapse_client::FunctionDefinition {
-                name: "Bash".to_string(),
-                description: Some(
-                    "Execute a shell command and return its output. Commands run via /bin/sh -c."
-                        .to_string(),
-                ),
-                parameters: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The shell command to execute"
-                        },
-                        "timeout": {
-                            "type": "integer",
-                            "description": "Timeout in seconds (default: 120, max: 600)"
-                        }
-                    },
-                    "required": ["command"]
-                })),
-            },
-        }]
+        let provider = Self::default();
+        provider
+            .definitions()
+            .iter()
+            .map(crate::tools::to_synapse_definition)
+            .collect()
     }
 
     /// Execute the `Bash` tool from LLM JSON arguments
@@ -59,6 +42,38 @@ impl BuiltinExecTool {
     ///
     /// Returns error if arguments are malformed or execution fails
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String> {
+        ToolProvider::execute(self, name, arguments)
+            .await
+            .map_err(|e| Error::Tool(e.to_string()))
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolProvider for BuiltinExecTool {
+    fn definitions(&self) -> Vec<agent_core::types::Tool> {
+        vec![agent_core::types::Tool {
+            name: "Bash".to_string(),
+            description:
+                "Execute a shell command and return its output. Commands run via /bin/sh -c."
+                    .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (default: 120, max: 600)"
+                    }
+                },
+                "required": ["command"]
+            }),
+        }]
+    }
+
+    async fn execute(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
         #[derive(serde::Deserialize)]
         struct ExecArgs {
             command: Option<String>,
@@ -67,22 +82,22 @@ impl BuiltinExecTool {
         }
 
         if name != "Bash" {
-            return Err(Error::Tool(format!("unknown exec tool: {name}")));
+            anyhow::bail!("unknown exec tool: {name}");
         }
 
         let args: ExecArgs = serde_json::from_str(arguments)
-            .map_err(|e| Error::Tool(format!("Bash: invalid arguments: {e}")))?;
+            .map_err(|e| anyhow::anyhow!("Bash: invalid arguments: {e}"))?;
 
         let command = args
             .command
             .filter(|c| !c.trim().is_empty())
-            .ok_or_else(|| Error::Tool("Bash: `command` parameter is required".to_string()))?;
+            .ok_or_else(|| anyhow::anyhow!("Bash: `command` parameter is required"))?;
 
         let output = self
             .inner
             .execute(&command, args.timeout)
             .await
-            .map_err(|e| Error::Tool(format!("Bash: {e}")))?;
+            .map_err(|e| anyhow::anyhow!("Bash: {e}"))?;
 
         let response = serde_json::json!({
             "exit_code": output.exit_code,
@@ -91,6 +106,10 @@ impl BuiltinExecTool {
         });
 
         Ok(response.to_string())
+    }
+
+    fn kind(&self, _name: &str) -> ToolKind {
+        ToolKind::Mutate
     }
 }
 

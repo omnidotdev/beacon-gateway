@@ -6,6 +6,7 @@ mod cron;
 pub mod exec;
 pub mod executor;
 pub use agent_core::tools::loop_detection::{LoopDetector, LoopSeverity};
+pub use agent_core::tools::{ToolKind, ToolProvider};
 pub mod memory;
 mod sessions;
 mod web;
@@ -23,6 +24,19 @@ pub use web::{
     Article, SearchProvider, SearchResult, WebFetchTool, WebResponse, WebSearchTool,
     extract_article,
 };
+
+/// Convert an agent-core `Tool` to a synapse `ToolDefinition`
+#[must_use]
+pub fn to_synapse_definition(tool: &agent_core::types::Tool) -> synapse_client::ToolDefinition {
+    synapse_client::ToolDefinition {
+        tool_type: "function".to_owned(),
+        function: synapse_client::FunctionDefinition {
+            name: tool.name.clone(),
+            description: Some(tool.description.clone()),
+            parameters: Some(tool.input_schema.clone()),
+        },
+    }
+}
 
 /// Format a short display summary for a tool invocation.
 ///

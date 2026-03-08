@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_core::tools::ToolKind;
 use synapse_client::SynapseClient;
 use tokio::sync::Mutex;
 
@@ -13,36 +14,23 @@ use crate::{Error, Result};
 /// Shared plugin manager type
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
-/// Classification used to determine execution strategy within a tool batch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolKind {
-    /// Read-only; safe to run fully in parallel.
-    Read,
-    /// Mutating; serialized among other mutating tools but parallel with reads.
-    Mutate,
-    /// Requires user response before any tool in the batch runs.
-    Interactive,
-}
-
-impl ToolKind {
-    /// Classify a tool by name.
-    ///
-    /// Unknown tools default to `Mutate` — the safe conservative choice.
-    #[must_use]
-    pub fn classify(name: &str) -> Self {
-        match name {
-            // Read-only tools
-            "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch" | "ListDir" | "NotebookRead"
-            | "TaskList" | "TaskGet" | "memory_search" | "cron_list" | "cron_get"
-            | "browser_screenshot" | "browser_extract" => Self::Read,
-            // Interactive tools
-            "ask_user" | "permission" | "AskUserQuestion" | "location_request" => Self::Interactive,
-            // MCP server tools default to Mutate (safe conservative choice)
-            _ if name.starts_with("mcp_") => Self::Mutate,
-            // Everything else defaults to Mutate (safe), including:
-            // memory_store, memory_forget, cron_schedule, cron_cancel
-            _ => Self::Mutate,
-        }
+/// Classify a tool by name for execution strategy
+///
+/// Unknown tools default to `Mutate` — the safe conservative choice.
+#[must_use]
+pub fn classify(name: &str) -> ToolKind {
+    match name {
+        // Read-only tools
+        "Read" | "Glob" | "Grep" | "WebSearch" | "WebFetch" | "ListDir" | "NotebookRead"
+        | "TaskList" | "TaskGet" | "memory_search" | "cron_list" | "cron_get"
+        | "browser_screenshot" | "browser_extract" => ToolKind::Read,
+        // Interactive tools
+        "ask_user" | "permission" | "AskUserQuestion" | "location_request" => ToolKind::Interactive,
+        // MCP server tools default to Mutate (safe conservative choice)
+        _ if name.starts_with("mcp_") => ToolKind::Mutate,
+        // Everything else defaults to Mutate (safe), including:
+        // memory_store, memory_forget, cron_schedule, cron_cancel
+        _ => ToolKind::Mutate,
     }
 }
 
@@ -143,24 +131,39 @@ impl ToolExecutor {
             }
         }
 
-        // Include built-in memory tools if attached
-        if self.memory_tools.is_some() {
-            definitions.extend(crate::tools::BuiltinMemoryTools::tool_definitions());
+        // Include built-in tool provider definitions
+        use agent_core::tools::ToolProvider;
+
+        if let Some(ref mt) = self.memory_tools {
+            definitions.extend(
+                mt.definitions()
+                    .iter()
+                    .map(crate::tools::to_synapse_definition),
+            );
         }
 
-        // Include built-in cron tools if attached
-        if self.cron_tools.is_some() {
-            definitions.extend(crate::tools::BuiltinCronTools::tool_definitions());
+        if let Some(ref ct) = self.cron_tools {
+            definitions.extend(
+                ct.definitions()
+                    .iter()
+                    .map(crate::tools::to_synapse_definition),
+            );
         }
 
-        // Include built-in exec tool if attached
-        if self.exec_tool.is_some() {
-            definitions.extend(crate::tools::BuiltinExecTool::tool_definitions());
+        if let Some(ref et) = self.exec_tool {
+            definitions.extend(
+                et.definitions()
+                    .iter()
+                    .map(crate::tools::to_synapse_definition),
+            );
         }
 
-        // Include built-in browser tools if attached
-        if self.browser_tools.is_some() {
-            definitions.extend(crate::tools::BuiltinBrowserTools::tool_definitions());
+        if let Some(ref bt) = self.browser_tools {
+            definitions.extend(
+                bt.definitions()
+                    .iter()
+                    .map(crate::tools::to_synapse_definition),
+            );
         }
 
         // Include tools from direct MCP servers
@@ -349,41 +352,38 @@ mod tests {
 
     #[test]
     fn classifies_known_tools() {
-        assert_eq!(ToolKind::classify("Read"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("Glob"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("Grep"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("WebSearch"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("WebFetch"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("Write"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("Edit"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("Bash"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("ListDir"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("NotebookRead"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("TaskList"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("TaskGet"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("ask_user"), ToolKind::Interactive);
-        assert_eq!(ToolKind::classify("permission"), ToolKind::Interactive);
-        assert_eq!(ToolKind::classify("AskUserQuestion"), ToolKind::Interactive);
-        assert_eq!(
-            ToolKind::classify("location_request"),
-            ToolKind::Interactive
-        );
+        assert_eq!(classify("Read"), ToolKind::Read);
+        assert_eq!(classify("Glob"), ToolKind::Read);
+        assert_eq!(classify("Grep"), ToolKind::Read);
+        assert_eq!(classify("WebSearch"), ToolKind::Read);
+        assert_eq!(classify("WebFetch"), ToolKind::Read);
+        assert_eq!(classify("Write"), ToolKind::Mutate);
+        assert_eq!(classify("Edit"), ToolKind::Mutate);
+        assert_eq!(classify("Bash"), ToolKind::Mutate);
+        assert_eq!(classify("ListDir"), ToolKind::Read);
+        assert_eq!(classify("NotebookRead"), ToolKind::Read);
+        assert_eq!(classify("TaskList"), ToolKind::Read);
+        assert_eq!(classify("TaskGet"), ToolKind::Read);
+        assert_eq!(classify("ask_user"), ToolKind::Interactive);
+        assert_eq!(classify("permission"), ToolKind::Interactive);
+        assert_eq!(classify("AskUserQuestion"), ToolKind::Interactive);
+        assert_eq!(classify("location_request"), ToolKind::Interactive);
         // Memory tools
-        assert_eq!(ToolKind::classify("memory_search"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("memory_store"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("memory_forget"), ToolKind::Mutate);
+        assert_eq!(classify("memory_search"), ToolKind::Read);
+        assert_eq!(classify("memory_store"), ToolKind::Mutate);
+        assert_eq!(classify("memory_forget"), ToolKind::Mutate);
         // Cron tools
-        assert_eq!(ToolKind::classify("cron_list"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("cron_get"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("cron_schedule"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("cron_cancel"), ToolKind::Mutate);
+        assert_eq!(classify("cron_list"), ToolKind::Read);
+        assert_eq!(classify("cron_get"), ToolKind::Read);
+        assert_eq!(classify("cron_schedule"), ToolKind::Mutate);
+        assert_eq!(classify("cron_cancel"), ToolKind::Mutate);
         // Browser tools
-        assert_eq!(ToolKind::classify("browser_screenshot"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("browser_extract"), ToolKind::Read);
-        assert_eq!(ToolKind::classify("browser_navigate"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("browser_click"), ToolKind::Mutate);
-        assert_eq!(ToolKind::classify("browser_type"), ToolKind::Mutate);
+        assert_eq!(classify("browser_screenshot"), ToolKind::Read);
+        assert_eq!(classify("browser_extract"), ToolKind::Read);
+        assert_eq!(classify("browser_navigate"), ToolKind::Mutate);
+        assert_eq!(classify("browser_click"), ToolKind::Mutate);
+        assert_eq!(classify("browser_type"), ToolKind::Mutate);
         // Unknown tools default to Mutate (safe default)
-        assert_eq!(ToolKind::classify("unknown_tool"), ToolKind::Mutate);
+        assert_eq!(classify("unknown_tool"), ToolKind::Mutate);
     }
 }

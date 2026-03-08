@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use agent_core::tools::{ToolKind, ToolProvider};
+
 use crate::Result;
 use crate::integrations::{ScheduleRequest, VortexClient};
 
@@ -217,92 +219,80 @@ impl BuiltinCronTools {
     /// Return tool definitions for all cron tools
     #[must_use]
     pub fn tool_definitions() -> Vec<synapse_client::ToolDefinition> {
+        Self::core_definitions()
+            .iter()
+            .map(crate::tools::to_synapse_definition)
+            .collect()
+    }
+
+    /// Return agent-core tool definitions (shared by trait and legacy path)
+    fn core_definitions() -> Vec<agent_core::types::Tool> {
         vec![
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "cron_schedule".to_string(),
-                    description: Some(
-                        "Schedule a recurring task. Provide a cron expression, action type, and payload.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "cron": {
-                                "type": "string",
-                                "description": "Cron expression (e.g., '0 9 * * MON' for 9 AM every Monday)"
-                            },
-                            "action": {
-                                "type": "string",
-                                "description": "Action type to trigger (e.g., 'remind', 'check_in')"
-                            },
-                            "payload": {
-                                "type": "object",
-                                "description": "Arbitrary data to include in the callback"
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": "Human-readable description of the schedule"
-                            },
-                            "timezone": {
-                                "type": "string",
-                                "description": "IANA timezone (e.g., 'America/New_York'). Defaults to UTC"
-                            }
+            agent_core::types::Tool {
+                name: "cron_schedule".to_string(),
+                description: "Schedule a recurring task. Provide a cron expression, action type, and payload.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "cron": {
+                            "type": "string",
+                            "description": "Cron expression (e.g., '0 9 * * MON' for 9 AM every Monday)"
                         },
-                        "required": ["cron", "action", "payload"]
-                    })),
-                },
-            },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "cron_list".to_string(),
-                    description: Some(
-                        "List all scheduled tasks with their cron expressions and next run times.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {}
-                    })),
-                },
-            },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "cron_cancel".to_string(),
-                    description: Some(
-                        "Cancel a scheduled task by its ID.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "schedule_id": {
-                                "type": "string",
-                                "description": "ID of the schedule to cancel"
-                            }
+                        "action": {
+                            "type": "string",
+                            "description": "Action type to trigger (e.g., 'remind', 'check_in')"
                         },
-                        "required": ["schedule_id"]
-                    })),
-                },
-            },
-            synapse_client::ToolDefinition {
-                tool_type: "function".to_owned(),
-                function: synapse_client::FunctionDefinition {
-                    name: "cron_get".to_string(),
-                    description: Some(
-                        "Get details of a specific scheduled task by its ID.".to_string(),
-                    ),
-                    parameters: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "schedule_id": {
-                                "type": "string",
-                                "description": "ID of the schedule to retrieve"
-                            }
+                        "payload": {
+                            "type": "object",
+                            "description": "Arbitrary data to include in the callback"
                         },
-                        "required": ["schedule_id"]
-                    })),
-                },
+                        "description": {
+                            "type": "string",
+                            "description": "Human-readable description of the schedule"
+                        },
+                        "timezone": {
+                            "type": "string",
+                            "description": "IANA timezone (e.g., 'America/New_York'). Defaults to UTC"
+                        }
+                    },
+                    "required": ["cron", "action", "payload"]
+                }),
+            },
+            agent_core::types::Tool {
+                name: "cron_list".to_string(),
+                description: "List all scheduled tasks with their cron expressions and next run times.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            agent_core::types::Tool {
+                name: "cron_cancel".to_string(),
+                description: "Cancel a scheduled task by its ID.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schedule_id": {
+                            "type": "string",
+                            "description": "ID of the schedule to cancel"
+                        }
+                    },
+                    "required": ["schedule_id"]
+                }),
+            },
+            agent_core::types::Tool {
+                name: "cron_get".to_string(),
+                description: "Get details of a specific scheduled task by its ID.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schedule_id": {
+                            "type": "string",
+                            "description": "ID of the schedule to retrieve"
+                        }
+                    },
+                    "required": ["schedule_id"]
+                }),
             },
         ]
     }
@@ -313,6 +303,11 @@ impl BuiltinCronTools {
     ///
     /// Returns error if arguments are malformed or the Vortex API call fails
     pub async fn execute(&self, name: &str, arguments: &str) -> crate::Result<String> {
+        self.dispatch(name, arguments).await
+    }
+
+    /// Internal dispatch for cron tool execution
+    async fn dispatch(&self, name: &str, arguments: &str) -> crate::Result<String> {
         match name {
             "cron_schedule" => {
                 let params: ScheduleParams = serde_json::from_str(arguments).map_err(|e| {
@@ -350,6 +345,26 @@ impl BuiltinCronTools {
                 Ok(serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
             }
             _ => Err(crate::Error::Tool(format!("unknown cron tool: {name}"))),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolProvider for BuiltinCronTools {
+    fn definitions(&self) -> Vec<agent_core::types::Tool> {
+        Self::core_definitions()
+    }
+
+    async fn execute(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
+        self.dispatch(name, arguments)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn kind(&self, name: &str) -> ToolKind {
+        match name {
+            "cron_list" | "cron_get" => ToolKind::Read,
+            _ => ToolKind::Mutate,
         }
     }
 }
