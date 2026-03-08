@@ -279,7 +279,15 @@ impl Daemon {
                 .config
                 .auth_base_url
                 .clone()
-                .or_else(|| self.config.gatekeeper_url.clone())
+                .or_else(|| self.config.gatekeeper_url.clone());
+            if auth_url.is_none() {
+                tracing::warn!(
+                    "AUTH_BASE_URL / GATEKEEPER_URL not set — JWT validation will use \
+                     SYNAPSE_API_URL as fallback, which likely cannot serve JWKS. \
+                     Set AUTH_BASE_URL to the Gatekeeper OIDC base URL."
+                );
+            }
+            let auth_url = auth_url
                 .or_else(|| self.config.synapse_api_url.clone())
                 .unwrap_or_default();
             let jwks = Arc::new(crate::api::jwt::JwksCache::new(auth_url));

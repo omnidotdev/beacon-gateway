@@ -168,15 +168,22 @@ async fn handle_socket(
                 }
             }
         } else {
+            tracing::debug!(session_id = %session_id, "no JWT token provided in WebSocket query");
             None
         }
     } else {
+        tracing::debug!(session_id = %session_id, "no jwt_cache configured, skipping JWT validation");
         None
     };
 
     // Cloud mode: require valid JWT
     if state.cloud_mode && gatekeeper_user_id.is_none() {
-        tracing::warn!(session_id = %session_id, "cloud mode: rejecting unauthenticated WebSocket");
+        tracing::warn!(
+            session_id = %session_id,
+            token_provided = token.is_some(),
+            jwt_cache_configured = state.jwt_cache.is_some(),
+            "cloud mode: rejecting unauthenticated WebSocket"
+        );
         let error = WsOutgoing::Error {
             code: "auth_required".to_string(),
             message: "Authentication required. Please sign in.".to_string(),
@@ -502,6 +509,11 @@ async fn handle_chat_message(
     let (synapse_to_use, model_override) = if let (Some(gk_user_id), Some(resolver)) =
         (&gatekeeper_user_id, &state.key_resolver)
     {
+        tracing::debug!(
+            user_id = %gk_user_id,
+            cloud_mode = state.cloud_mode,
+            "resolving synapse client for authenticated user"
+        );
         match resolve_user_synapse(resolver, gk_user_id, state).await {
             Some((client, model)) => (Some(client), Some(model)),
             None if state.cloud_mode => {
@@ -518,7 +530,11 @@ async fn handle_chat_message(
             None => (state.synapse.clone(), None),
         }
     } else if state.cloud_mode {
-        tracing::warn!("cloud mode: no key resolver configured, cannot resolve user keys");
+        tracing::warn!(
+            gatekeeper_user_id = ?gatekeeper_user_id.is_some(),
+            key_resolver = ?state.key_resolver.is_some(),
+            "cloud mode: missing resolver or identity — check AUTH_BASE_URL and SYNAPSE_API_URL env vars"
+        );
         let error = WsOutgoing::Error {
             code: "config_error".to_string(),
             message: "Service misconfigured. Please contact support.".to_string(),
@@ -528,6 +544,11 @@ async fn handle_chat_message(
             .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
         return Ok(());
     } else {
+        tracing::debug!(
+            gatekeeper_user_id = ?gatekeeper_user_id.is_some(),
+            key_resolver = ?state.key_resolver.is_some(),
+            "self-hosted mode: trying local key resolution"
+        );
         // Self-hosted: try locally stored keys before falling back to shared client
         if let Some((client, model)) = resolve_local_key(state) {
             (Some(client), Some(model))
@@ -804,55 +825,83 @@ async fn resolve_user_synapse(
 
     // Step 1: Use user's preferred provider key (respects Synapse defaultProvider preference)
     // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
-    if let Ok(Some((provider_name, resolved))) = resolver.resolve_preferred(user_id).await
-        && resolved.is_user_key
-    {
-        let model = resolved
-            .model_override
-            .unwrap_or_else(|| match provider_name.as_str() {
-                "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
-                _ => "gpt-4o".to_string(),
-            });
+    match resolver.resolve_preferred(user_id).await {
+        Ok(Some((ref provider_name, ref resolved))) if resolved.is_user_key => {
+            let model = resolved
+                .model_override
+                .clone()
+                .unwrap_or_else(|| match provider_name.as_str() {
+                    "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
+                    _ => "gpt-4o".to_string(),
+                });
 
-        if let Ok(client) = SynapseClient::new(&synapse_base_url) {
-            let client = client.with_api_key(resolved.api_key);
-            return Some((Arc::new(client), model));
+            tracing::info!(
+                user_id = %user_id,
+                provider = %provider_name,
+                model = %model,
+                "resolved BYOK key"
+            );
+
+            if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+                let client = client.with_api_key(resolved.api_key.clone());
+                return Some((Arc::new(client), model));
+            }
+            tracing::error!(url = %synapse_base_url, "failed to create SynapseClient for BYOK key");
+        }
+        Ok(Some(_)) => {
+            tracing::debug!(user_id = %user_id, "resolver returned env fallback key (not user key), skipping");
+        }
+        Ok(None) => {
+            tracing::debug!(user_id = %user_id, "no provider keys found for user");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, user_id = %user_id, "resolve_preferred failed");
         }
     }
 
     // Step 2: Auto-provision via Synapse API (cloud mode only)
-    if state.cloud_mode
-        && let Some(provisioner) = &state.key_provisioner
-    {
-        match provisioner.provision(user_id, None, None).await {
-            Ok(provisioned) => {
-                tracing::info!(
-                    user_id = %user_id,
-                    plan = %provisioned.plan,
-                    "auto-provisioned managed key"
-                );
+    if state.cloud_mode {
+        if let Some(provisioner) = &state.key_provisioner {
+            match provisioner.provision(user_id, None, None).await {
+                Ok(provisioned) => {
+                    tracing::info!(
+                        user_id = %user_id,
+                        plan = %provisioned.plan,
+                        "auto-provisioned managed key"
+                    );
 
-                // Invalidate resolver cache so next resolve fetches the new key from Synapse
-                resolver.invalidate(user_id).await;
+                    // Invalidate resolver cache so next resolve fetches the new key from Synapse
+                    resolver.invalidate(user_id).await;
 
-                let model = crate::daemon::DEFAULT_MODEL.to_string();
+                    let model = crate::daemon::DEFAULT_MODEL.to_string();
 
-                if let Ok(client) = SynapseClient::new(&synapse_base_url) {
-                    let client = client.with_api_key(provisioned.api_key);
-                    return Some((Arc::new(client), model));
+                    if let Ok(client) = SynapseClient::new(&synapse_base_url) {
+                        let client = client.with_api_key(provisioned.api_key);
+                        return Some((Arc::new(client), model));
+                    }
+                    tracing::error!(url = %synapse_base_url, "failed to create SynapseClient for provisioned key");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        user_id = %user_id,
+                        "auto-provision failed"
+                    );
                 }
             }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    user_id = %user_id,
-                    "auto-provision failed"
-                );
-            }
+        } else {
+            tracing::warn!(user_id = %user_id, "cloud mode but no key provisioner configured");
         }
+    } else {
+        tracing::debug!(user_id = %user_id, "non-cloud mode, skipping auto-provision");
     }
 
     // Step 3: No personal key available, caller falls back to state.synapse
+    tracing::warn!(
+        user_id = %user_id,
+        cloud_mode = state.cloud_mode,
+        "no synapse key resolved — falling back to shared client (may lack auth)"
+    );
     None
 }
 
