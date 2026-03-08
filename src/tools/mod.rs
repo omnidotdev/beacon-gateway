@@ -7,7 +7,6 @@ pub mod exec;
 pub mod executor;
 pub use agent_core::tools::loop_detection::{LoopDetector, LoopSeverity};
 pub mod memory;
-mod policy;
 mod sessions;
 mod web;
 
@@ -18,7 +17,7 @@ pub use browser_tools::BuiltinBrowserTools;
 pub use cron::{BuiltinCronTools, CronTools, ScheduleInfo, ScheduleParams};
 pub use exec::BuiltinExecTool;
 pub use memory::BuiltinMemoryTools;
-pub use policy::{ToolPolicy, ToolPolicyConfig, ToolProfile};
+pub use agent_core::tools::policy::{ToolPolicy, ToolPolicyConfig, ToolProfile};
 pub use sessions::{MessageInfo, SessionInfo, SessionTools};
 pub use web::{
     Article, SearchProvider, SearchResult, WebFetchTool, WebResponse, WebSearchTool,
