@@ -25,38 +25,7 @@ pub fn temporal_decay_factor(accessed_at: &DateTime<Utc>, now: &DateTime<Utc>) -
     (-elapsed_days / DECAY_HALF_LIFE_DAYS).exp2()
 }
 
-/// Compute cosine similarity between two vectors.
-///
-/// Returns a value in `[-1.0, 1.0]` where 1.0 is identical direction.
-/// Returns 0.0 if either vector has zero magnitude.
-#[must_use]
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-
-    let mut dot = 0.0_f64;
-    let mut norm_a = 0.0_f64;
-    let mut norm_b = 0.0_f64;
-
-    for (ai, bi) in a.iter().zip(b.iter()) {
-        let ai = f64::from(*ai);
-        let bi = f64::from(*bi);
-        dot += ai * bi;
-        norm_a += ai * ai;
-        norm_b += bi * bi;
-    }
-
-    let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom < f64::EPSILON {
-        return 0.0;
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        (dot / denom) as f32
-    }
-}
+use agent_core::knowledge::cosine_similarity;
 
 /// Candidate for MMR re-ranking
 struct MmrCandidate {
