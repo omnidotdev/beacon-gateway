@@ -220,10 +220,7 @@ impl ToolExecutor {
         {
             let args: serde_json::Value = serde_json::from_str(arguments)
                 .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::default()));
-            let result = mcp
-                .call_tool(name, args)
-                .await
-                .map_err(Error::Tool)?;
+            let result = mcp.call_tool(name, args).await.map_err(Error::Tool)?;
             if result.is_error {
                 return Err(Error::Tool(result.text));
             }

@@ -509,7 +509,7 @@ async fn handle_chat_message(
     let (synapse_to_use, model_override) = if let (Some(gk_user_id), Some(resolver)) =
         (&gatekeeper_user_id, &state.key_resolver)
     {
-        tracing::debug!(
+        tracing::info!(
             user_id = %gk_user_id,
             cloud_mode = state.cloud_mode,
             "resolving synapse client for authenticated user"
@@ -544,7 +544,7 @@ async fn handle_chat_message(
             .map_err(|_| crate::Error::Config("channel closed".to_string()))?;
         return Ok(());
     } else {
-        tracing::debug!(
+        tracing::info!(
             gatekeeper_user_id = ?gatekeeper_user_id.is_some(),
             key_resolver = ?state.key_resolver.is_some(),
             "self-hosted mode: trying local key resolution"
@@ -832,14 +832,13 @@ async fn resolve_user_synapse(
     // Priority: explicit defaultProvider → anthropic → openai → openrouter → omni_credits
     match resolver.resolve_preferred(user_id).await {
         Ok(Some((ref provider_name, ref resolved_key))) if resolved_key.is_user_key => {
-            let model =
-                resolved_key
-                    .model_override
-                    .clone()
-                    .unwrap_or_else(|| match provider_name.as_str() {
-                        "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
-                        _ => "gpt-4o".to_string(),
-                    });
+            let model = resolved_key
+                .model_override
+                .clone()
+                .unwrap_or_else(|| match provider_name.as_str() {
+                    "anthropic" | "omni_credits" => crate::daemon::DEFAULT_MODEL.to_string(),
+                    _ => "gpt-4o".to_string(),
+                });
 
             tracing::info!(
                 user_id = %user_id,
@@ -855,10 +854,10 @@ async fn resolve_user_synapse(
             tracing::error!(url = %synapse_base_url, "failed to create SynapseClient for BYOK key");
         }
         Ok(Some(_)) => {
-            tracing::debug!(user_id = %user_id, "resolver returned env fallback key (not user key), skipping");
+            tracing::info!(user_id = %user_id, "resolver returned env fallback key (not user key), skipping");
         }
         Ok(None) => {
-            tracing::debug!(user_id = %user_id, "no provider keys found for user");
+            tracing::info!(user_id = %user_id, "no provider keys found for user");
         }
         Err(e) => {
             tracing::warn!(error = %e, user_id = %user_id, "resolve_preferred failed");

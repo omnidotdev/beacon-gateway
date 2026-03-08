@@ -621,9 +621,7 @@ fn setup_mcp_servers(
         .default(false)
         .interact()?;
 
-    if add_custom
-        && let Some(custom) = prompt_custom_mcp_server()?
-    {
+    if add_custom && let Some(custom) = prompt_custom_mcp_server()? {
         println!("  + Added {}", custom.name);
         servers.push(custom);
     }
