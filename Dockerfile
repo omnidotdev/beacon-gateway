@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 # Clone agent-core at a pinned ref (update SHA when agent-core changes)
 # Pinning to a commit busts Docker layer cache and ensures reproducibility
 ARG GITHUB_TOKEN
-ARG AGENT_CORE_REF=522bd5c
+ARG AGENT_CORE_REF=0589102
 RUN if [ -n "$GITHUB_TOKEN" ]; then \
       git clone https://x-access-token:${GITHUB_TOKEN}@github.com/omnidotdev/agent-core.git /agent-core; \
     else \
