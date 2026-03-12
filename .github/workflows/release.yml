@@ -161,7 +161,7 @@ jobs:
             desc "Voice and messaging gateway for AI assistants"
             homepage "https://beacon.omni.dev"
             version "${VERSION}"
-            license "MIT"
+            license "Apache-2.0"
 
             on_macos do
               on_arm do
