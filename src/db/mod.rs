@@ -1,4 +1,5 @@
-//! Database module for session, message, and memory persistence
+// TODO: evaluate migrating from rusqlite to embedded Postgres (e.g. pglite-rs
+// or embedded-postgres) for schema parity with server-side Postgres services
 
 pub mod embedder;
 pub mod indexer;
