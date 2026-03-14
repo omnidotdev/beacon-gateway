@@ -193,7 +193,11 @@ pub async fn run_agent_turn(state: &ApiState, config: AgentRunConfig) -> crate::
 
         full_response.push_str(&turn_text);
 
-        if finish_reason.as_deref() == Some("tool_calls") && !pending_tool_calls.is_empty() {
+        // Check for tool calls: either explicit finish_reason or pending calls
+        // (embedded Synapse streaming may not set finish_reason to "tool_calls")
+        if !pending_tool_calls.is_empty()
+            && (finish_reason.as_deref() == Some("tool_calls") || finish_reason.is_none())
+        {
             // Build assistant message with tool calls
             let tool_calls: Vec<synapse_client::ToolCall> = pending_tool_calls
                 .iter()
